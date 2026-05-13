@@ -1,10 +1,10 @@
 export const FACTORY_CONFIG = {
-  id: 'sol_conakry',
-  name: 'SOL Chips',
+  id: 'orny_main',
+  name: 'Orny',
   currency: 'GNF',
   weeklyProductionTarget: 1000,
   products: [
-    { id: 'SOL_80g', label: 'SOL 80g', weightG: 80, defaultPrice: 15000 },
+    { id: 'chips_nature', label: 'Chips Nature 80g', weightG: 80, defaultPrice: 15000 },
   ],
   stockAlerts: {
     pommes_de_terre: { unit: 'kg', threshold: 50 },

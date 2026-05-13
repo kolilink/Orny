@@ -144,7 +144,7 @@ export default function FlavorsScreen() {
                 <Text style={styles.fieldLabel}>Nom de la saveur *</Text>
                 <TextInput
                   style={styles.input}
-                  placeholder="Ex: SOL 80g, SOL Piment, SOL Normal…"
+                  placeholder="Ex: Nature, Piment, Barbecue…"
                   value={form.label}
                   onChangeText={(v) => setForm((f) => ({ ...f, label: v }))}
                   autoFocus

@@ -114,6 +114,9 @@ export type RootStackParamList = {
   Reports: undefined;
   Flavors: undefined;
   Bulks: undefined;
+  FactorySettings: undefined;
+  Coach: undefined;
+  Profile: undefined;
 };
 
 export type TabParamList = {

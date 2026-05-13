@@ -62,7 +62,8 @@ export default function DashboardScreen() {
     (sum, b) => sum + b.potatoesUsedKg * 1500 + b.gasUsedKg * 8000,
     0
   );
-  const realMargin = weekRevenue - variableCosts - 200000;
+  const fixedCosts = weekBatches.length > 0 ? 200000 : 0;
+  const realMargin = weekRevenue - variableCosts - fixedCosts;
 
   const weeklyKg = weekBatches.reduce((sum, b) => sum + b.potatoesUsedKg, 0);
   const target = FACTORY_CONFIG.weeklyProductionTarget;

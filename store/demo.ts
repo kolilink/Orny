@@ -19,7 +19,7 @@ export const seedFlavors = async (): Promise<void> => {
   if (seeded) return;
   const fid = FACTORY_CONFIG.id;
   const flavors: ProductFlavor[] = [
-    { id: 'SOL_80g', factory_id: fid, label: 'SOL 80g', weightG: 80, defaultPrice: 15000 },
+    { id: 'chips_nature', factory_id: fid, label: 'Chips Nature 80g', weightG: 80, defaultPrice: 15000 },
   ];
   await setFlavors(flavors);
   await AsyncStorage.setItem(FLAVORS_SEED_KEY, 'true');
@@ -32,26 +32,27 @@ export const loadDemoData = async (): Promise<void> => {
   const fid = FACTORY_CONFIG.id;
 
   const flavors: ProductFlavor[] = [
-    { id: 'SOL_80g', factory_id: fid, label: 'SOL 80g', weightG: 80, defaultPrice: 15000 },
+    { id: 'chips_nature', factory_id: fid, label: 'Chips Nature 80g', weightG: 80, defaultPrice: 15000 },
+    { id: 'chips_piment', factory_id: fid, label: 'Chips Piment 80g', weightG: 80, defaultPrice: 16000 },
   ];
 
   const clients: Client[] = [
-    { id: 'c1', factory_id: fid, name: 'Mamadou Diallo', phone: '620 00 00 01', location: 'Kaloum', type: 'boutique' },
-    { id: 'c2', factory_id: fid, name: 'Fatoumata Bah', phone: '621 00 00 02', location: 'Matam', type: 'revendeuse marché' },
-    { id: 'c3', factory_id: fid, name: 'Ibrahim Sow', phone: '622 00 00 03', location: 'Ratoma', type: 'superette' },
+    { id: 'c1', factory_id: fid, name: 'Aliou Traoré', phone: '620 00 00 01', location: 'Centre-ville', type: 'boutique' },
+    { id: 'c2', factory_id: fid, name: 'Kadiatou Barry', phone: '621 00 00 02', location: 'Marché central', type: 'revendeuse marché' },
+    { id: 'c3', factory_id: fid, name: 'Mamadou Kouyaté', phone: '622 00 00 03', location: 'Quartier nord', type: 'superette' },
   ];
 
   const sales: Sale[] = [
-    { id: 's1', factory_id: fid, date: daysAgo(0), clientName: 'Mamadou Diallo', product: 'SOL_80g', productType: 'flavor', quantity: 30, unitPrice: 15000, totalAmount: 450000, amountPaid: 450000, paymentMethod: 'cash' },
-    { id: 's2', factory_id: fid, date: daysAgo(1), clientName: 'Fatoumata Bah', product: 'SOL_80g', productType: 'flavor', quantity: 20, unitPrice: 15000, totalAmount: 300000, amountPaid: 300000, paymentMethod: 'orange_money' },
-    { id: 's3', factory_id: fid, date: daysAgo(2), clientName: 'Ibrahim Sow', product: 'SOL_80g', productType: 'flavor', quantity: 50, unitPrice: 15000, totalAmount: 750000, amountPaid: 750000, paymentMethod: 'orange_money' },
-    { id: 's4', factory_id: fid, date: daysAgo(4), clientName: 'Mamadou Diallo', product: 'SOL_80g', productType: 'flavor', quantity: 15, unitPrice: 15000, totalAmount: 225000, amountPaid: 0, paymentMethod: 'credit' },
-    { id: 's5', factory_id: fid, date: daysAgo(5), clientName: 'Fatoumata Bah', product: 'SOL_80g', productType: 'flavor', quantity: 40, unitPrice: 15000, totalAmount: 600000, amountPaid: 600000, paymentMethod: 'cash' },
-    { id: 's6', factory_id: fid, date: daysAgo(6), clientName: 'Ibrahim Sow', product: 'SOL_80g', productType: 'flavor', quantity: 25, unitPrice: 15000, totalAmount: 375000, amountPaid: 375000, paymentMethod: 'orange_money' },
-    { id: 's7', factory_id: fid, date: daysAgo(8), clientName: 'Mamadou Diallo', product: 'SOL_80g', productType: 'flavor', quantity: 60, unitPrice: 15000, totalAmount: 900000, amountPaid: 900000, paymentMethod: 'cash' },
-    { id: 's8', factory_id: fid, date: daysAgo(10), clientName: 'Fatoumata Bah', product: 'SOL_80g', productType: 'flavor', quantity: 10, unitPrice: 15000, totalAmount: 150000, amountPaid: 150000, paymentMethod: 'cash' },
-    { id: 's9', factory_id: fid, date: daysAgo(12), clientName: 'Ibrahim Sow', product: 'SOL_80g', productType: 'flavor', quantity: 80, unitPrice: 15000, totalAmount: 1200000, amountPaid: 0, paymentMethod: 'credit' },
-    { id: 's10', factory_id: fid, date: daysAgo(14), clientName: 'Mamadou Diallo', product: 'SOL_80g', productType: 'flavor', quantity: 35, unitPrice: 15000, totalAmount: 525000, amountPaid: 525000, paymentMethod: 'cash' },
+    { id: 's1', factory_id: fid, date: daysAgo(0), clientName: 'Aliou Traoré', product: 'chips_nature', productType: 'flavor', quantity: 30, unitPrice: 15000, totalAmount: 450000, amountPaid: 450000, paymentMethod: 'cash' },
+    { id: 's2', factory_id: fid, date: daysAgo(1), clientName: 'Kadiatou Barry', product: 'chips_nature', productType: 'flavor', quantity: 20, unitPrice: 15000, totalAmount: 300000, amountPaid: 300000, paymentMethod: 'orange_money' },
+    { id: 's3', factory_id: fid, date: daysAgo(2), clientName: 'Mamadou Kouyaté', product: 'chips_piment', productType: 'flavor', quantity: 50, unitPrice: 16000, totalAmount: 800000, amountPaid: 800000, paymentMethod: 'orange_money' },
+    { id: 's4', factory_id: fid, date: daysAgo(4), clientName: 'Aliou Traoré', product: 'chips_nature', productType: 'flavor', quantity: 15, unitPrice: 15000, totalAmount: 225000, amountPaid: 0, paymentMethod: 'credit' },
+    { id: 's5', factory_id: fid, date: daysAgo(5), clientName: 'Kadiatou Barry', product: 'chips_piment', productType: 'flavor', quantity: 40, unitPrice: 16000, totalAmount: 640000, amountPaid: 640000, paymentMethod: 'cash' },
+    { id: 's6', factory_id: fid, date: daysAgo(6), clientName: 'Mamadou Kouyaté', product: 'chips_nature', productType: 'flavor', quantity: 25, unitPrice: 15000, totalAmount: 375000, amountPaid: 375000, paymentMethod: 'orange_money' },
+    { id: 's7', factory_id: fid, date: daysAgo(8), clientName: 'Aliou Traoré', product: 'chips_nature', productType: 'flavor', quantity: 60, unitPrice: 15000, totalAmount: 900000, amountPaid: 900000, paymentMethod: 'cash' },
+    { id: 's8', factory_id: fid, date: daysAgo(10), clientName: 'Kadiatou Barry', product: 'chips_piment', productType: 'flavor', quantity: 10, unitPrice: 16000, totalAmount: 160000, amountPaid: 160000, paymentMethod: 'cash' },
+    { id: 's9', factory_id: fid, date: daysAgo(12), clientName: 'Mamadou Kouyaté', product: 'chips_nature', productType: 'flavor', quantity: 80, unitPrice: 15000, totalAmount: 1200000, amountPaid: 0, paymentMethod: 'credit' },
+    { id: 's10', factory_id: fid, date: daysAgo(14), clientName: 'Aliou Traoré', product: 'chips_piment', productType: 'flavor', quantity: 35, unitPrice: 16000, totalAmount: 560000, amountPaid: 560000, paymentMethod: 'cash' },
   ];
 
   const batches: ProductionBatch[] = [
@@ -88,19 +89,19 @@ export const loadDemoData = async (): Promise<void> => {
   const documents: BusinessDocument[] = [
     {
       id: 'd1', factory_id: fid,
-      title: 'Contrat fournisseur — emballages Chine',
+      title: 'Contrat fournisseur — emballages',
       category: 'import_export', fileUri: 'placeholder:#4A90D9', fileType: 'image',
-      notes: 'Accord annuel avec fournisseur basé à Guangzhou. Renouvellement en janvier.',
+      notes: 'Accord annuel avec le fournisseur d\'emballages. Renouvellement en janvier.',
       dateAdded: new Date(Date.now() - 30 * 86400000).toISOString(),
-      tags: ['chine', 'emballages'],
+      tags: ['emballages', 'fournisseur'],
     },
     {
       id: 'd2', factory_id: fid,
-      title: 'Licence de production — Ministère du Commerce',
+      title: 'Licence de production',
       category: 'licence', fileUri: 'placeholder:#27AE60', fileType: 'pdf',
-      notes: 'Licence officielle délivrée par le Ministère du Commerce de Guinée.',
+      notes: 'Licence officielle de production alimentaire.',
       dateAdded: new Date(Date.now() - 60 * 86400000).toISOString(),
-      tags: ['guinée', 'officiel'],
+      tags: ['licence', 'officiel'],
     },
     {
       id: 'd3', factory_id: fid,
