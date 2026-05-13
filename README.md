@@ -1,4 +1,4 @@
-# Corning — SOL Chips Factory Manager
+# Orny — SOL Chips Factory Manager
 
 A React Native (Expo) mobile app for managing **SOL Chips**, a small chip factory in Conakry, Guinea. The app is fully offline, running entirely on-device with no backend. The UI and all data labels are in French. Currency is GNF (Guinean Franc).
 

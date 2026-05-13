@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-**Corning** is a React Native (Expo) mobile app for managing a small chip factory — SOL Chips in Conakry, Guinea. The UI and all data labels are in French. Currency is GNF (Guinean Franc).
+**Orny** is a React Native (Expo) mobile app for managing a small chip factory — SOL Chips in Conakry, Guinea. The UI and all data labels are in French. Currency is GNF (Guinean Franc).
 
 ## Commands
 
