@@ -82,18 +82,18 @@ function AppNavigator() {
       <Stack.Screen name="Documents" component={DocumentsScreen} options={{ title: 'Documents', headerTintColor: '#1D9E75' }} />
       <Stack.Screen name="AddDocument" component={AddDocumentScreen} options={{ title: 'Nouveau document', headerTintColor: '#1D9E75' }} />
       <Stack.Screen name="DocumentDetail" component={DocumentDetailScreen} options={{ title: 'Détail du document', headerTintColor: '#1D9E75' }} />
-      <Stack.Screen name="Clients" component={ClientsScreen} options={{ headerShown: false }} />
-      <Stack.Screen name="Investors" component={InvestorsScreen} options={{ headerShown: false }} />
+      <Stack.Screen name="Clients" component={ClientsScreen} options={{ title: 'Clients', headerTintColor: '#1D9E75' }} />
+      <Stack.Screen name="Investors" component={InvestorsScreen} options={{ title: 'Investisseurs', headerTintColor: '#1D9E75' }} />
       <Stack.Screen name="Reports" component={ReportsScreen} options={{ title: 'Rapports', headerTintColor: '#1D9E75' }} />
-      <Stack.Screen name="Flavors" component={FlavorsScreen} options={{ headerShown: false }} />
-      <Stack.Screen name="Bulks" component={BulksScreen} options={{ headerShown: false }} />
+      <Stack.Screen name="Flavors" component={FlavorsScreen} options={{ title: 'Produits', headerTintColor: '#1D9E75' }} />
+      <Stack.Screen name="Bulks" component={BulksScreen} options={{ title: 'Lots', headerTintColor: '#1D9E75' }} />
       <Stack.Screen name="FactorySettings" component={FactorySettingsScreen} options={{ headerShown: false }} />
-      <Stack.Screen name="Coach" component={CoachScreen} options={{ headerShown: false }} />
+      <Stack.Screen name="Coach" component={CoachScreen} options={{ title: 'Coach IA', headerTintColor: '#1D9E75' }} />
       <Stack.Screen name="Profile" component={ProfileScreen} options={{ headerShown: false }} />
-      <Stack.Screen name="Expenses" component={ExpensesScreen} options={{ headerShown: false }} />
-      <Stack.Screen name="Suppliers" component={SuppliersScreen} options={{ headerShown: false }} />
-      <Stack.Screen name="CustomerOrders" component={CustomerOrdersScreen} options={{ headerShown: false }} />
-      <Stack.Screen name="Creances" component={CreancesScreen} options={{ headerShown: false }} />
+      <Stack.Screen name="Expenses" component={ExpensesScreen} options={{ title: 'Dépenses', headerTintColor: '#1D9E75' }} />
+      <Stack.Screen name="Suppliers" component={SuppliersScreen} options={{ title: 'Fournisseurs & Achats', headerTintColor: '#1D9E75' }} />
+      <Stack.Screen name="CustomerOrders" component={CustomerOrdersScreen} options={{ title: 'Commandes clients', headerTintColor: '#1D9E75' }} />
+      <Stack.Screen name="Creances" component={CreancesScreen} options={{ title: 'Créances', headerTintColor: '#1D9E75' }} />
     </Stack.Navigator>
   );
 }
