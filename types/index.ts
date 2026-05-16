@@ -104,14 +104,13 @@ export const saleDebt = (sale: Sale): number => {
   return Math.max(0, sale.totalAmount - paid);
 };
 
-export type ExpenseCategory =
-  | 'loyer'
-  | 'salaire'
-  | 'matiere_premiere'
-  | 'energie'
-  | 'transport'
-  | 'maintenance'
-  | 'autre';
+export type ExpenseCategory = string;
+
+export interface CustomCategory {
+  key: string;
+  label: string;
+  icon: string;
+}
 
 export interface Expense {
   id: string;

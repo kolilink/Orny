@@ -111,44 +111,49 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [allMemberships, setAllMemberships] = useState<FactoryMembership[]>([]);
   const [pendingRequest, setPendingRequest] = useState<PendingRequest | null>(null);
   const [loading, setLoading] = useState(true);
-  const [membershipLoading, setMembershipLoading] = useState(false);
+  const [membershipLoading, setMembershipLoading] = useState(true);
 
   async function applySession(s: Session | null) {
     setMembershipLoading(true);
     setSession(s);
     setUser(s?.user ?? null);
-    if (s?.user) {
-      // Load cached memberships first as fallback — prevents false "no factory" on slow networks
-      const cached = await loadCachedMemberships(s.user.id);
-      const fresh = await Promise.race([
-        loadAllMemberships(s.user.id),
-        new Promise<FactoryMembership[]>((resolve) => setTimeout(() => resolve(cached), 8000)),
-      ]);
-      // Never fall back to empty if cache has data — protects against accidental factory creation
-      const all = fresh.length > 0 ? fresh : cached;
-      setAllMemberships(all);
-      if (all.length > 0) {
-        const savedId = await AsyncStorage.getItem(ACTIVE_FACTORY_KEY);
-        const active = all.find((m) => m.factoryId === savedId) ?? all[0];
-        setMembership(active);
-        setCurrentFactory(active.factoryId);
-        setPendingRequest(null);
+    try {
+      if (s?.user) {
+        // Load cached memberships first as fallback — prevents false "no factory" on slow networks
+        const cached = await loadCachedMemberships(s.user.id);
+        const fresh = await Promise.race([
+          loadAllMemberships(s.user.id),
+          new Promise<FactoryMembership[]>((resolve) => setTimeout(() => resolve(cached), 8000)),
+        ]);
+        // Never fall back to empty if cache has data — protects against accidental factory creation
+        const all = fresh.length > 0 ? fresh : cached;
+        setAllMemberships(all);
+        if (all.length > 0) {
+          const savedId = await AsyncStorage.getItem(ACTIVE_FACTORY_KEY);
+          const active = all.find((m) => m.factoryId === savedId) ?? all[0];
+          setMembership(active);
+          setCurrentFactory(active.factoryId);
+          setPendingRequest(null);
+        } else {
+          setMembership(null);
+          clearCurrentFactory();
+          const pr = await Promise.race([
+            loadPendingRequest(s.user.id),
+            new Promise<null>((resolve) => setTimeout(() => resolve(null), 6000)),
+          ]);
+          setPendingRequest(pr);
+        }
       } else {
         setMembership(null);
+        setAllMemberships([]);
+        setPendingRequest(null);
         clearCurrentFactory();
-        const pr = await Promise.race([
-          loadPendingRequest(s.user.id),
-          new Promise<null>((resolve) => setTimeout(() => resolve(null), 6000)),
-        ]);
-        setPendingRequest(pr);
       }
-    } else {
-      setMembership(null);
-      setAllMemberships([]);
-      setPendingRequest(null);
-      clearCurrentFactory();
+    } catch {
+      // On unexpected error keep existing membership to avoid false FactorySetupScreen
+    } finally {
+      setMembershipLoading(false);
     }
-    setMembershipLoading(false);
   }
 
   async function switchFactory(factoryId: string) {
