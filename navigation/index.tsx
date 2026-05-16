@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { View, ActivityIndicator, StyleSheet } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
@@ -102,7 +102,16 @@ function AuthGate() {
   const { session, membership, loading, membershipLoading } = useAuth();
   const [showRegister, setShowRegister] = useState(false);
 
-  if (loading || membershipLoading) {
+  // Once a membership is confirmed, never flash FactorySetupScreen during transitions.
+  // React can batch setMembershipLoading(true/false) and skip the intermediate true state,
+  // leaving a window where session≠null && membership=null. This ref plugs that gap.
+  const hadMembership = useRef(false);
+  if (membership) hadMembership.current = true;
+  if (!session && !loading && !membershipLoading) hadMembership.current = false;
+
+  const isTransitioning = session && hadMembership.current && !membership;
+
+  if (loading || membershipLoading || isTransitioning) {
     return <View style={styles.splash}><ActivityIndicator size="large" color="#1D9E75" /></View>;
   }
 

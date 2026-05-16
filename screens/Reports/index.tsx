@@ -71,6 +71,18 @@ export default function ReportsScreen() {
     .sort((a, b) => b[1] - a[1])
     .slice(0, 5);
 
+  // Monthly history — all months that have sales or expenses
+  const monthKeys = new Set<string>();
+  sales.forEach((s) => monthKeys.add(s.date.slice(0, 7)));
+  expenses.forEach((e) => monthKeys.add(e.date.slice(0, 7)));
+  const monthlyHistory = Array.from(monthKeys)
+    .sort((a, b) => b.localeCompare(a))
+    .map((ym) => {
+      const rev = sales.filter((s) => s.date.startsWith(ym)).reduce((sum, s) => sum + s.totalAmount, 0);
+      const exp = expenses.filter((e) => e.date.startsWith(ym)).reduce((sum, e) => sum + e.amount, 0);
+      return { ym, rev, exp, profit: rev - exp };
+    });
+
   const now = new Date();
   const thisMonthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
   const lastMonthDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
@@ -170,8 +182,40 @@ export default function ReportsScreen() {
           <Text style={styles.empty}>Aucune vente enregistrée</Text>
         )}
       </View>
+
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>Historique mensuel complet</Text>
+        {monthlyHistory.length === 0 && (
+          <Text style={styles.empty}>Aucune donnée enregistrée</Text>
+        )}
+        {/* column headers */}
+        {monthlyHistory.length > 0 && (
+          <View style={styles.histRow}>
+            <Text style={[styles.histCell, styles.histMonth, { color: C.muted, fontSize: 11 }]}>MOIS</Text>
+            <Text style={[styles.histCell, { color: C.muted, fontSize: 11 }]}>VENTES</Text>
+            <Text style={[styles.histCell, { color: C.muted, fontSize: 11 }]}>DÉPENSES</Text>
+            <Text style={[styles.histCell, { color: C.muted, fontSize: 11 }]}>PROFIT</Text>
+          </View>
+        )}
+        {monthlyHistory.map(({ ym, rev, exp, profit }) => (
+          <View key={ym} style={[styles.histRow, ym === thisMonthStr && styles.histRowActive]}>
+            <Text style={[styles.histCell, styles.histMonth]}>{monthLabel(ym)}</Text>
+            <Text style={styles.histCell}>{formatGNF(rev)}</Text>
+            <Text style={[styles.histCell, { color: exp > 0 ? C.red : C.muted }]}>{exp > 0 ? formatGNF(exp) : '—'}</Text>
+            <Text style={[styles.histCell, { color: profit >= 0 ? C.primary : C.red, fontWeight: '700' }]}>
+              {exp > 0 ? formatGNF(profit) : '—'}
+            </Text>
+          </View>
+        ))}
+      </View>
     </ScrollView>
   );
+}
+
+function monthLabel(ym: string) {
+  const [y, m] = ym.split('-');
+  const months = ['Jan','Fév','Mar','Avr','Mai','Juin','Juil','Août','Sep','Oct','Nov','Déc'];
+  return `${months[parseInt(m, 10) - 1]} ${y}`;
 }
 
 function StatRow({ label, value, valueColor }: { label: string; value: string; valueColor?: string }) {
@@ -221,4 +265,11 @@ const styles = StyleSheet.create({
   clientName: { flex: 1, fontSize: 14, color: C.text, fontWeight: '500' },
   clientAmount: { fontSize: 14, fontWeight: '600', color: C.text },
   empty: { fontSize: 14, color: C.muted, textAlign: 'center', paddingVertical: 12 },
+  histRow: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingVertical: 9, borderBottomWidth: 1, borderColor: C.border,
+  },
+  histRowActive: { backgroundColor: '#F0FBF7', marginHorizontal: -16, paddingHorizontal: 16 },
+  histCell: { flex: 1, fontSize: 12, color: C.text, textAlign: 'right' },
+  histMonth: { flex: 1.2, textAlign: 'left', fontWeight: '600', color: C.text },
 });
