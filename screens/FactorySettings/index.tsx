@@ -48,6 +48,8 @@ export default function FactorySettingsScreen() {
   const [weeklyTarget, setWeeklyTargetState] = useState(1000);
   const [targetModal, setTargetModal] = useState(false);
   const [targetInput, setTargetInput] = useState('');
+  const [approveModal, setApproveModal] = useState(false);
+  const [selectedRequest, setSelectedRequest] = useState<JoinRequestDisplay | null>(null);
 
   const isAdmin = membership?.role === 'admin';
 
@@ -163,30 +165,17 @@ export default function FactorySettingsScreen() {
   }
 
   function handleApproveRequest(req: JoinRequestDisplay) {
-    Alert.alert(`Approuver ${req.userEmail}`, 'Choisissez un rôle pour ce membre :', [
-      {
-        text: 'Employé', onPress: async () => {
-          const { error } = await approveJoinRequest(req.id, req.userId, 'employee');
-          if (error) Alert.alert('Erreur', error);
-          else await load();
-        },
-      },
-      {
-        text: 'Investisseur', onPress: async () => {
-          const { error } = await approveJoinRequest(req.id, req.userId, 'investor');
-          if (error) Alert.alert('Erreur', error);
-          else await load();
-        },
-      },
-      {
-        text: 'Administrateur', onPress: async () => {
-          const { error } = await approveJoinRequest(req.id, req.userId, 'admin');
-          if (error) Alert.alert('Erreur', error);
-          else await load();
-        },
-      },
-      { text: 'Annuler', style: 'cancel' },
-    ]);
+    setSelectedRequest(req);
+    setApproveModal(true);
+  }
+
+  async function confirmApprove(role: UserRole) {
+    if (!selectedRequest) return;
+    setApproveModal(false);
+    const { error } = await approveJoinRequest(selectedRequest.id, selectedRequest.userId, role);
+    if (error) Alert.alert('Erreur', error);
+    else await load();
+    setSelectedRequest(null);
   }
 
   function handleRejectRequest(req: JoinRequestDisplay) {
@@ -316,6 +305,25 @@ export default function FactorySettingsScreen() {
         </>
       )}
 
+      {/* Approve role picker modal — works on web too */}
+      <Modal visible={approveModal} transparent animationType="fade" onRequestClose={() => setApproveModal(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalBox}>
+            <Text style={styles.modalTitle}>Approuver le membre</Text>
+            <Text style={styles.modalSub}>{selectedRequest?.userEmail}</Text>
+            <Text style={[styles.modalSub, { marginBottom: 16 }]}>Choisissez un rôle :</Text>
+            {(['employee', 'investor', 'admin'] as UserRole[]).map((role) => (
+              <TouchableOpacity key={role} style={[styles.roleBtn, { borderColor: ROLE_COLORS[role] }]} onPress={() => confirmApprove(role)}>
+                <Text style={[styles.roleBtnText, { color: ROLE_COLORS[role] }]}>{ROLE_LABELS[role]}</Text>
+              </TouchableOpacity>
+            ))}
+            <TouchableOpacity style={styles.modalCancel} onPress={() => setApproveModal(false)}>
+              <Text style={styles.modalCancelText}>Annuler</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
       <Modal visible={targetModal} transparent animationType="fade" onRequestClose={() => setTargetModal(false)}>
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.modalOverlay}>
           <View style={styles.modalBox}>
@@ -422,4 +430,6 @@ const styles = StyleSheet.create({
   modalCancelText: { color: C.muted, fontWeight: '600' },
   modalSave: { flex: 1, padding: 14, borderRadius: 10, backgroundColor: C.primary, alignItems: 'center' },
   modalSaveText: { color: '#fff', fontWeight: '700' },
+  roleBtn: { borderWidth: 1.5, borderRadius: 10, padding: 14, alignItems: 'center', marginBottom: 10 },
+  roleBtnText: { fontWeight: '700', fontSize: 15 },
 });

@@ -66,16 +66,30 @@ interface AuthContextValue {
 const AuthContext = createContext<AuthContextValue | null>(null);
 const ACTIVE_FACTORY_KEY = 'active_factory_id';
 
+const MEMBERSHIP_CACHE_PREFIX = 'membership_cache_';
+
 async function loadAllMemberships(userId: string): Promise<FactoryMembership[]> {
   const { data } = await supabase
     .from('factory_members')
     .select('factory_id, role, factories(id, name)')
     .eq('user_id', userId);
   if (!data) return [];
-  return data.map((r) => {
+  const memberships = data.map((r) => {
     const factory = (r as any).factories;
     return { factoryId: factory.id, factoryName: factory.name, role: r.role as UserRole };
   });
+  // Cache so we can fall back if network is slow next time
+  await AsyncStorage.setItem(MEMBERSHIP_CACHE_PREFIX + userId, JSON.stringify(memberships));
+  return memberships;
+}
+
+async function loadCachedMemberships(userId: string): Promise<FactoryMembership[]> {
+  try {
+    const raw = await AsyncStorage.getItem(MEMBERSHIP_CACHE_PREFIX + userId);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
 }
 
 async function loadPendingRequest(userId: string): Promise<PendingRequest | null> {
@@ -101,10 +115,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setSession(s);
     setUser(s?.user ?? null);
     if (s?.user) {
-      const all = await Promise.race([
+      // Load cached memberships first as fallback — prevents false "no factory" on slow networks
+      const cached = await loadCachedMemberships(s.user.id);
+      const fresh = await Promise.race([
         loadAllMemberships(s.user.id),
-        new Promise<FactoryMembership[]>((resolve) => setTimeout(() => resolve([]), 6000)),
+        new Promise<FactoryMembership[]>((resolve) => setTimeout(() => resolve(cached), 8000)),
       ]);
+      // Never fall back to empty if cache has data — protects against accidental factory creation
+      const all = fresh.length > 0 ? fresh : cached;
       setAllMemberships(all);
       if (all.length > 0) {
         const savedId = await AsyncStorage.getItem(ACTIVE_FACTORY_KEY);
