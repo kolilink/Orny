@@ -33,9 +33,6 @@
     "react-native-web": "^0.21.0",
     "typescript": "~5.9.2"
   },
-  "overrides": {
-    "yaml": "2.8.0"
-  },
   "private": true,
   "devDependencies": {
     "@types/react": "~19.1.10",
