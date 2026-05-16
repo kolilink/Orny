@@ -99,10 +99,10 @@ function AppNavigator() {
 }
 
 function AuthGate() {
-  const { session, membership, loading } = useAuth();
+  const { session, membership, loading, membershipLoading } = useAuth();
   const [showRegister, setShowRegister] = useState(false);
 
-  if (loading) {
+  if (loading || membershipLoading) {
     return <View style={styles.splash}><ActivityIndicator size="large" color="#1D9E75" /></View>;
   }
 

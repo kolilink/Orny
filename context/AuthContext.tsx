@@ -44,6 +44,7 @@ interface AuthContextValue {
   allMemberships: FactoryMembership[];
   pendingRequest: PendingRequest | null;
   loading: boolean;
+  membershipLoading: boolean;
   switchFactory: (factoryId: string) => Promise<void>;
   signUp: (email: string, password: string) => Promise<{ error: string | null }>;
   signIn: (email: string, password: string) => Promise<{ error: string | null }>;
@@ -110,8 +111,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [allMemberships, setAllMemberships] = useState<FactoryMembership[]>([]);
   const [pendingRequest, setPendingRequest] = useState<PendingRequest | null>(null);
   const [loading, setLoading] = useState(true);
+  const [membershipLoading, setMembershipLoading] = useState(false);
 
   async function applySession(s: Session | null) {
+    setMembershipLoading(true);
     setSession(s);
     setUser(s?.user ?? null);
     if (s?.user) {
@@ -145,6 +148,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setPendingRequest(null);
       clearCurrentFactory();
     }
+    setMembershipLoading(false);
   }
 
   async function switchFactory(factoryId: string) {
@@ -391,7 +395,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <AuthContext.Provider value={{
-      session, user, membership, allMemberships, pendingRequest, loading,
+      session, user, membership, allMemberships, pendingRequest, loading, membershipLoading,
       switchFactory,
       signUp, signIn, signInWithGoogle, signOut,
       createFactory, regenerateInviteCode, getInviteCode, requestToJoin, cancelJoinRequest, refreshMembership,
