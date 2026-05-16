@@ -3,6 +3,11 @@
   "compilerOptions": {
     "strict": true,
     "allowJs": true,
-    "baseUrl": "."
+    "baseUrl": ".",
+    "paths": {
+      "@expo/vector-icons": ["node_modules/expo/node_modules/@expo/vector-icons"],
+      "@expo/vector-icons/*": ["node_modules/expo/node_modules/@expo/vector-icons/*"],
+      "expo-file-system/legacy": ["node_modules/expo-file-system/build/legacy/FileSystem"]
+    }
   }
 }

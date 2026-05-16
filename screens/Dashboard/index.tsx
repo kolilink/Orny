@@ -8,10 +8,14 @@ import { getSales } from '../../store/sales';
 import { getBatches } from '../../store/production';
 import { getStock } from '../../store/stock';
 import { getClients } from '../../store/clients';
+import { getExpenses } from '../../store/expenses';
+import { getCustomerOrders } from '../../store/customerOrders';
+import { checkStockAlerts, checkOverdueOrders } from '../../utils/notifications';
 import { formatGNF } from '../../utils/format';
 import { isToday, isThisWeek, getLast7Days, getDayLabel } from '../../utils/dates';
-import { Sale, StockItem, ProductionBatch } from '../../types';
+import { Sale, StockItem, ProductionBatch, Expense, CustomerOrder } from '../../types';
 import { FACTORY_CONFIG } from '../../config/factory';
+import { useAuth } from '../../context/AuthContext';
 
 const C = {
   primary: '#1D9E75',
@@ -26,18 +30,25 @@ const C = {
 
 export default function DashboardScreen() {
   const insets = useSafeAreaInsets();
+  const { membership } = useAuth();
   const [sales, setSalesState] = useState<Sale[]>([]);
   const [batches, setBatchesState] = useState<ProductionBatch[]>([]);
   const [stock, setStockState] = useState<StockItem[]>([]);
+  const [expenses, setExpensesState] = useState<Expense[]>([]);
   const [clientCount, setClientCount] = useState(0);
+  const [orders, setOrdersState] = useState<CustomerOrder[]>([]);
   const [refreshing, setRefreshing] = useState(false);
 
   const load = useCallback(async () => {
-    const [s, b, st, clients] = await Promise.all([getSales(), getBatches(), getStock(), getClients()]);
+    const [s, b, st, clients, exp, ord] = await Promise.all([getSales(), getBatches(), getStock(), getClients(), getExpenses(), getCustomerOrders()]);
     setSalesState(s);
     setBatchesState(b);
     setStockState(st);
     setClientCount(clients.length);
+    setExpensesState(exp);
+    setOrdersState(ord);
+    checkStockAlerts(st);
+    checkOverdueOrders(ord);
   }, []);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
@@ -58,12 +69,10 @@ export default function DashboardScreen() {
     .reduce((sum, s) => sum + s.totalAmount, 0);
 
   const weekBatches = batches.filter((b) => isThisWeek(b.date));
-  const variableCosts = weekBatches.reduce(
-    (sum, b) => sum + b.potatoesUsedKg * 1500 + b.gasUsedKg * 8000,
-    0
-  );
-  const fixedCosts = weekBatches.length > 0 ? 200000 : 0;
-  const realMargin = weekRevenue - variableCosts - fixedCosts;
+
+  // Use real expenses recorded this week; fall back to 0 if none yet entered
+  const weekExpenses = expenses.filter((e) => isThisWeek(e.date)).reduce((sum, e) => sum + e.amount, 0);
+  const realMargin = weekRevenue - weekExpenses;
 
   const weeklyKg = weekBatches.reduce((sum, b) => sum + b.potatoesUsedKg, 0);
   const target = FACTORY_CONFIG.weeklyProductionTarget;
@@ -89,7 +98,7 @@ export default function DashboardScreen() {
       }
     >
       <View style={styles.header}>
-        <Text style={styles.factoryName}>{FACTORY_CONFIG.name}</Text>
+        <Text style={styles.factoryName}>{membership?.factoryName ?? FACTORY_CONFIG.name}</Text>
         <Text style={styles.headerDate}>
           {new Date().toLocaleDateString('fr-FR', {
             weekday: 'long', day: 'numeric', month: 'long',
@@ -122,7 +131,7 @@ export default function DashboardScreen() {
         <MetricCard label="Ventes aujourd'hui" value={formatGNF(todayRevenue)} />
         <MetricCard label="Ventes cette semaine" value={formatGNF(weekRevenue)} />
         <MetricCard
-          label="Marge réelle (semaine)"
+          label={weekExpenses > 0 ? 'Profit net (semaine)' : 'Marge estimée (sem.)'}
           value={formatGNF(realMargin)}
           valueColor={realMargin < 0 ? C.red : C.primary}
         />

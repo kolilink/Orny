@@ -71,14 +71,14 @@ export const updateClient = async (
 ): Promise<void> => {
   const clients = await getClients();
   await setCache(clients.map((c) => (c.id === id ? { ...c, ...updates } : c)));
-  supabase.from('clients').update(updates).eq('id', id)
+  supabase.from('clients').update(updates).eq('id', id).eq('factory_id', getFactoryId())
     .then(({ error }) => { if (error) console.warn('clients update sync error', error.message); });
 };
 
 export const deleteClient = async (id: string): Promise<void> => {
   const clients = await getClients();
   await setCache(clients.filter((c) => c.id !== id));
-  supabase.from('clients').delete().eq('id', id)
+  supabase.from('clients').delete().eq('id', id).eq('factory_id', getFactoryId())
     .then(({ error }) => { if (error) console.warn('clients delete sync error', error.message); });
 };
 

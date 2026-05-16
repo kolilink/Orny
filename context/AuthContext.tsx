@@ -2,6 +2,7 @@ import React, { createContext, useContext, useEffect, useState } from 'react';
 import { Session, User } from '@supabase/supabase-js';
 import * as WebBrowser from 'expo-web-browser';
 import { makeRedirectUri } from 'expo-auth-session';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from '../lib/supabase';
 import { setCurrentFactory, clearCurrentFactory } from '../store/context';
 
@@ -13,7 +14,6 @@ export interface FactoryMembership {
   factoryId: string;
   factoryName: string;
   role: UserRole;
-  inviteCode: string;
 }
 
 export interface MemberDisplay {
@@ -41,14 +41,17 @@ interface AuthContextValue {
   session: Session | null;
   user: User | null;
   membership: FactoryMembership | null;
+  allMemberships: FactoryMembership[];
   pendingRequest: PendingRequest | null;
   loading: boolean;
+  switchFactory: (factoryId: string) => Promise<void>;
   signUp: (email: string, password: string) => Promise<{ error: string | null }>;
   signIn: (email: string, password: string) => Promise<{ error: string | null }>;
   signInWithGoogle: () => Promise<{ error: string | null }>;
   signOut: () => Promise<void>;
   createFactory: (name: string) => Promise<{ error: string | null }>;
   regenerateInviteCode: () => Promise<{ error: string | null }>;
+  getInviteCode: () => Promise<string | null>;
   requestToJoin: (inviteCode: string) => Promise<{ error: string | null }>;
   cancelJoinRequest: () => Promise<{ error: string | null }>;
   refreshMembership: () => Promise<void>;
@@ -61,23 +64,18 @@ interface AuthContextValue {
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
+const ACTIVE_FACTORY_KEY = 'active_factory_id';
 
-async function loadMembership(userId: string): Promise<FactoryMembership | null> {
+async function loadAllMemberships(userId: string): Promise<FactoryMembership[]> {
   const { data } = await supabase
     .from('factory_members')
-    .select('factory_id, role, factories(id, name, invite_code)')
-    .eq('user_id', userId)
-    .limit(1)
-    .maybeSingle();
-
-  if (!data) return null;
-  const factory = (data as any).factories;
-  return {
-    factoryId: factory.id,
-    factoryName: factory.name,
-    role: data.role as UserRole,
-    inviteCode: factory.invite_code,
-  };
+    .select('factory_id, role, factories(id, name)')
+    .eq('user_id', userId);
+  if (!data) return [];
+  return data.map((r) => {
+    const factory = (r as any).factories;
+    return { factoryId: factory.id, factoryName: factory.name, role: r.role as UserRole };
+  });
 }
 
 async function loadPendingRequest(userId: string): Promise<PendingRequest | null> {
@@ -95,6 +93,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [user, setUser] = useState<User | null>(null);
   const [membership, setMembership] = useState<FactoryMembership | null>(null);
+  const [allMemberships, setAllMemberships] = useState<FactoryMembership[]>([]);
   const [pendingRequest, setPendingRequest] = useState<PendingRequest | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -102,31 +101,54 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setSession(s);
     setUser(s?.user ?? null);
     if (s?.user) {
-      const m = await loadMembership(s.user.id);
-      setMembership(m);
-      if (m) {
-        setCurrentFactory(m.factoryId);
+      const all = await Promise.race([
+        loadAllMemberships(s.user.id),
+        new Promise<FactoryMembership[]>((resolve) => setTimeout(() => resolve([]), 6000)),
+      ]);
+      setAllMemberships(all);
+      if (all.length > 0) {
+        const savedId = await AsyncStorage.getItem(ACTIVE_FACTORY_KEY);
+        const active = all.find((m) => m.factoryId === savedId) ?? all[0];
+        setMembership(active);
+        setCurrentFactory(active.factoryId);
         setPendingRequest(null);
       } else {
+        setMembership(null);
         clearCurrentFactory();
-        const pr = await loadPendingRequest(s.user.id);
+        const pr = await Promise.race([
+          loadPendingRequest(s.user.id),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), 6000)),
+        ]);
         setPendingRequest(pr);
       }
     } else {
       setMembership(null);
+      setAllMemberships([]);
       setPendingRequest(null);
       clearCurrentFactory();
     }
   }
 
+  async function switchFactory(factoryId: string) {
+    const m = allMemberships.find((x) => x.factoryId === factoryId);
+    if (!m) return;
+    setMembership(m);
+    setCurrentFactory(factoryId);
+    await AsyncStorage.setItem(ACTIVE_FACTORY_KEY, factoryId);
+  }
+
   async function refreshMembership() {
     if (!user) return;
-    const m = await loadMembership(user.id);
-    setMembership(m);
-    if (m) {
-      setCurrentFactory(m.factoryId);
+    const all = await loadAllMemberships(user.id);
+    setAllMemberships(all);
+    if (all.length > 0) {
+      const savedId = await AsyncStorage.getItem(ACTIVE_FACTORY_KEY);
+      const active = all.find((m) => m.factoryId === savedId) ?? all[0];
+      setMembership(active);
+      setCurrentFactory(active.factoryId);
       setPendingRequest(null);
     } else {
+      setMembership(null);
       clearCurrentFactory();
       const pr = await loadPendingRequest(user.id);
       setPendingRequest(pr);
@@ -134,16 +156,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   useEffect(() => {
-    supabase.auth.getSession().then(async ({ data: { session: s } }) => {
-      await applySession(s);
-      setLoading(false);
-    });
+    let settled = false;
+    const finish = () => { if (!settled) { settled = true; setLoading(false); } };
+    const timer = setTimeout(finish, 8000);
+
+    supabase.auth.getSession()
+      .then(async ({ data: { session: s } }) => { await applySession(s); })
+      .catch(() => {})
+      .finally(() => { clearTimeout(timer); finish(); });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, s) => {
       await applySession(s);
     });
 
-    return () => subscription.unsubscribe();
+    return () => { settled = true; clearTimeout(timer); subscription.unsubscribe(); };
   }, []);
 
   // ─── AUTH ─────────────────────────────────────────────────────
@@ -200,14 +226,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   async function regenerateInviteCode() {
     if (!membership) return { error: 'Non connecté.' };
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-    const newCode = Array.from({ length: 8 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+    const bytes = new Uint8Array(8);
+    crypto.getRandomValues(bytes);
+    const newCode = Array.from(bytes, b => chars[b % chars.length]).join('');
     const { error } = await supabase
       .from('factories')
       .update({ invite_code: newCode })
       .eq('id', membership.factoryId);
     if (error) return { error: error.message };
-    setMembership((prev) => prev ? { ...prev, inviteCode: newCode } : prev);
     return { error: null };
+  }
+
+  async function getInviteCode(): Promise<string | null> {
+    if (!membership) return null;
+    const { data } = await supabase.rpc('get_my_invite_code', { fid: membership.factoryId });
+    return data ?? null;
   }
 
   async function requestToJoin(inviteCode: string) {
@@ -319,18 +352,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }));
   }
 
-  async function approveJoinRequest(requestId: string, userId: string, role: UserRole) {
+  async function approveJoinRequest(requestId: string, _userId: string, role: UserRole) {
     if (!membership) return { error: 'Non connecté.' };
-    const { error: memberError } = await supabase.from('factory_members').insert({
-      factory_id: membership.factoryId,
-      user_id: userId,
-      role,
+    const { error } = await supabase.rpc('approve_join_request', {
+      req_id: requestId,
+      target_role: role,
     });
-    if (memberError) return { error: memberError.message };
-    await supabase
-      .from('join_requests')
-      .update({ status: 'approved', assigned_role: role })
-      .eq('id', requestId);
+    if (error) return { error: error.message };
     return { error: null };
   }
 
@@ -345,9 +373,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <AuthContext.Provider value={{
-      session, user, membership, pendingRequest, loading,
+      session, user, membership, allMemberships, pendingRequest, loading,
+      switchFactory,
       signUp, signIn, signInWithGoogle, signOut,
-      createFactory, regenerateInviteCode, requestToJoin, cancelJoinRequest, refreshMembership,
+      createFactory, regenerateInviteCode, getInviteCode, requestToJoin, cancelJoinRequest, refreshMembership,
       getMembers, updateMemberRole, removeMember,
       getPendingRequests, approveJoinRequest, rejectJoinRequest,
     }}>

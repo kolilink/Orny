@@ -2,7 +2,9 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   Alert, ActivityIndicator, Clipboard, RefreshControl,
+  Modal, TextInput, KeyboardAvoidingView, Platform,
 } from 'react-native';
+import { getWeeklyTarget, setWeeklyTarget } from '../../store/weeklyTarget';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -32,29 +34,56 @@ export default function FactorySettingsScreen() {
   const insets = useSafeAreaInsets();
   const {
     membership,
-    getMembers, updateMemberRole, removeMember, regenerateInviteCode,
+    getMembers, updateMemberRole, removeMember, regenerateInviteCode, getInviteCode,
     getPendingRequests, approveJoinRequest, rejectJoinRequest,
   } = useAuth();
 
   const [members, setMembers] = useState<MemberDisplay[]>([]);
   const [pendingRequests, setPendingRequests] = useState<JoinRequestDisplay[]>([]);
+  const [inviteCode, setInviteCode] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [countdown, setCountdown] = useState(CODE_TTL);
   const [regenLoading, setRegenLoading] = useState(false);
-
-  const regenRef = useRef(regenerateInviteCode);
-  regenRef.current = regenerateInviteCode;
+  const [weeklyTarget, setWeeklyTargetState] = useState(1000);
+  const [targetModal, setTargetModal] = useState(false);
+  const [targetInput, setTargetInput] = useState('');
 
   const isAdmin = membership?.role === 'admin';
 
+  async function doRegen(): Promise<{ error: string | null }> {
+    setRegenLoading(true);
+    const { error } = await regenerateInviteCode();
+    if (!error) {
+      const code = await getInviteCode();
+      setInviteCode(code);
+    }
+    setRegenLoading(false);
+    return { error: error ?? null };
+  }
+
+  const regenRef = useRef(doRegen);
+  regenRef.current = doRegen;
+
   async function load() {
-    const [mems, reqs] = await Promise.all([
+    const [mems, reqs, code, target] = await Promise.all([
       getMembers(),
       isAdmin ? getPendingRequests() : Promise.resolve([]),
+      isAdmin ? getInviteCode() : Promise.resolve(null),
+      getWeeklyTarget(),
     ]);
     setMembers(mems);
     setPendingRequests(reqs);
+    if (isAdmin) setInviteCode(code);
+    setWeeklyTargetState(target);
+  }
+
+  async function saveWeeklyTarget() {
+    const n = parseInt(targetInput, 10);
+    if (!n || n < 1) { Alert.alert('Valeur invalide', 'Entrez un nombre de sachets supérieur à 0.'); return; }
+    await setWeeklyTarget(n);
+    setWeeklyTargetState(n);
+    setTargetModal(false);
   }
 
   useFocusEffect(useCallback(() => {
@@ -69,22 +98,22 @@ export default function FactorySettingsScreen() {
   }
 
   useEffect(() => {
+    if (!isAdmin) return;
     const interval = setInterval(() => {
       setCountdown((c) => {
         if (c <= 1) {
-          setRegenLoading(true);
-          regenRef.current().then(() => setRegenLoading(false)).catch(console.error);
+          regenRef.current().catch(console.error);
           return CODE_TTL;
         }
         return c - 1;
       });
     }, 1000);
     return () => clearInterval(interval);
-  }, []);
+  }, [isAdmin]);
 
   useEffect(() => {
     setCountdown(CODE_TTL);
-  }, [membership?.inviteCode]);
+  }, [inviteCode]);
 
   async function handleManualRegen() {
     Alert.alert(
@@ -94,9 +123,7 @@ export default function FactorySettingsScreen() {
         { text: 'Annuler', style: 'cancel' },
         {
           text: 'Régénérer', onPress: async () => {
-            setRegenLoading(true);
-            const { error } = await regenerateInviteCode();
-            setRegenLoading(false);
+            const { error } = await doRegen();
             if (error) Alert.alert('Erreur', error);
           },
         },
@@ -105,9 +132,9 @@ export default function FactorySettingsScreen() {
   }
 
   function copyInviteCode() {
-    if (!membership) return;
-    Clipboard.setString(membership.inviteCode);
-    Alert.alert('Copié !', `Code d'invitation : ${membership.inviteCode}`);
+    if (!inviteCode) return;
+    Clipboard.setString(inviteCode);
+    Alert.alert('Copié !', `Code d'invitation : ${inviteCode}`);
   }
 
   function handleMemberOptions(member: MemberDisplay) {
@@ -199,38 +226,42 @@ export default function FactorySettingsScreen() {
       <Text style={styles.title}>Paramètres usine</Text>
       <Text style={styles.factoryName}>{membership?.factoryName}</Text>
 
-      {/* Invite Code */}
-      <Text style={styles.sectionTitle}>Code d'invitation</Text>
-      <View style={styles.codeCard}>
-        <Text style={styles.codeLabel}>Partagez ce code pour inviter des membres</Text>
+      {/* Invite Code — admin only */}
+      {isAdmin && (
+        <>
+          <Text style={styles.sectionTitle}>Code d'invitation</Text>
+          <View style={styles.codeCard}>
+            <Text style={styles.codeLabel}>Partagez ce code pour inviter des membres</Text>
 
-        <View style={styles.codeRow}>
-          {regenLoading
-            ? <ActivityIndicator color={C.primary} style={{ flex: 1 }} />
-            : <Text style={styles.codeText}>{membership?.inviteCode}</Text>}
-          <TouchableOpacity style={styles.copyBtn} onPress={copyInviteCode} disabled={regenLoading}>
-            <Ionicons name="copy-outline" size={18} color={C.primary} />
-            <Text style={styles.copyText}>Copier</Text>
-          </TouchableOpacity>
-        </View>
+            <View style={styles.codeRow}>
+              {regenLoading
+                ? <ActivityIndicator color={C.primary} style={{ flex: 1 }} />
+                : <Text style={styles.codeText}>{inviteCode ?? '—'}</Text>}
+              <TouchableOpacity style={styles.copyBtn} onPress={copyInviteCode} disabled={regenLoading || !inviteCode}>
+                <Ionicons name="copy-outline" size={18} color={C.primary} />
+                <Text style={styles.copyText}>Copier</Text>
+              </TouchableOpacity>
+            </View>
 
-        <View style={styles.barTrack}>
-          <View style={[styles.barFill, { width: `${pct * 100}%` as any, backgroundColor: barColor }]} />
-        </View>
-        <View style={styles.timerRow}>
-          <Text style={[styles.timerText, { color: barColor }]}>
-            Nouveau code dans {countdown}s
-          </Text>
-          <TouchableOpacity style={styles.regenBtn} onPress={handleManualRegen} disabled={regenLoading}>
-            <Ionicons name="refresh" size={14} color={C.muted} />
-            <Text style={styles.regenText}>Régénérer</Text>
-          </TouchableOpacity>
-        </View>
+            <View style={styles.barTrack}>
+              <View style={[styles.barFill, { width: `${pct * 100}%` as any, backgroundColor: barColor }]} />
+            </View>
+            <View style={styles.timerRow}>
+              <Text style={[styles.timerText, { color: barColor }]}>
+                Nouveau code dans {countdown}s
+              </Text>
+              <TouchableOpacity style={styles.regenBtn} onPress={handleManualRegen} disabled={regenLoading}>
+                <Ionicons name="refresh" size={14} color={C.muted} />
+                <Text style={styles.regenText}>Régénérer</Text>
+              </TouchableOpacity>
+            </View>
 
-        <Text style={styles.codeNote}>
-          Les nouvelles demandes nécessitent votre approbation. Vous définissez le rôle.
-        </Text>
-      </View>
+            <Text style={styles.codeNote}>
+              Les nouvelles demandes nécessitent votre approbation. Vous définissez le rôle.
+            </Text>
+          </View>
+        </>
+      )}
 
       {/* Pending Requests (admin only) */}
       {isAdmin && pendingRequests.length > 0 && (
@@ -268,6 +299,47 @@ export default function FactorySettingsScreen() {
           </View>
         </>
       )}
+
+      {/* Weekly Target — admin only */}
+      {isAdmin && (
+        <>
+          <Text style={[styles.sectionTitle, { marginTop: 20 }]}>Objectif de production</Text>
+          <View style={styles.targetCard}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.targetLabel}>Objectif hebdomadaire</Text>
+              <Text style={styles.targetValue}>{weeklyTarget} sachets / semaine</Text>
+            </View>
+            <TouchableOpacity style={styles.editBtn} onPress={() => { setTargetInput(String(weeklyTarget)); setTargetModal(true); }}>
+              <Text style={styles.editBtnText}>Modifier</Text>
+            </TouchableOpacity>
+          </View>
+        </>
+      )}
+
+      <Modal visible={targetModal} transparent animationType="fade" onRequestClose={() => setTargetModal(false)}>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.modalOverlay}>
+          <View style={styles.modalBox}>
+            <Text style={styles.modalTitle}>Objectif hebdomadaire</Text>
+            <Text style={styles.modalSub}>Nombre de sachets à produire par semaine</Text>
+            <TextInput
+              style={styles.modalInput}
+              value={targetInput}
+              onChangeText={setTargetInput}
+              keyboardType="number-pad"
+              placeholder="ex: 1000"
+              autoFocus
+            />
+            <View style={styles.modalBtns}>
+              <TouchableOpacity style={styles.modalCancel} onPress={() => setTargetModal(false)}>
+                <Text style={styles.modalCancelText}>Annuler</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.modalSave} onPress={saveWeeklyTarget}>
+                <Text style={styles.modalSaveText}>Enregistrer</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
 
       {/* Members */}
       <Text style={[styles.sectionTitle, { marginTop: 20 }]}>Membres ({members.length})</Text>
@@ -335,4 +407,19 @@ const styles = StyleSheet.create({
   approveBtn: { backgroundColor: C.primary, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6 },
   approveBtnText: { color: '#fff', fontSize: 13, fontWeight: '700' },
   rejectBtn: { width: 32, height: 32, borderRadius: 16, backgroundColor: '#FFE8E8', alignItems: 'center', justifyContent: 'center' },
+  targetCard: { backgroundColor: C.card, borderRadius: 12, padding: 16, borderWidth: 1, borderColor: C.border, flexDirection: 'row', alignItems: 'center' },
+  targetLabel: { fontSize: 12, color: C.muted, marginBottom: 4 },
+  targetValue: { fontSize: 16, fontWeight: '700', color: '#1A1A18' },
+  editBtn: { backgroundColor: '#E8F6F0', borderRadius: 8, paddingHorizontal: 14, paddingVertical: 8 },
+  editBtnText: { color: C.primary, fontWeight: '700', fontSize: 14 },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', alignItems: 'center', padding: 24 },
+  modalBox: { backgroundColor: '#fff', borderRadius: 16, padding: 24, width: '100%' },
+  modalTitle: { fontSize: 17, fontWeight: '700', color: '#1A1A18', marginBottom: 4 },
+  modalSub: { fontSize: 13, color: C.muted, marginBottom: 16 },
+  modalInput: { borderWidth: 1, borderColor: C.border, borderRadius: 10, padding: 12, fontSize: 20, fontWeight: '700', textAlign: 'center', marginBottom: 20 },
+  modalBtns: { flexDirection: 'row', gap: 10 },
+  modalCancel: { flex: 1, padding: 14, borderRadius: 10, borderWidth: 1, borderColor: C.border, alignItems: 'center' },
+  modalCancelText: { color: C.muted, fontWeight: '600' },
+  modalSave: { flex: 1, padding: 14, borderRadius: 10, backgroundColor: C.primary, alignItems: 'center' },
+  modalSaveText: { color: '#fff', fontWeight: '700' },
 });

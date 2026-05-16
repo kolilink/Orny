@@ -5,7 +5,7 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { RootStackParamList } from '../../types';
-import { useAuth, UserRole } from '../../context/AuthContext';
+import { useAuth, UserRole, FactoryMembership } from '../../context/AuthContext';
 import { getProfile, UserProfile } from '../../store/profile';
 
 type PlusNav = NativeStackNavigationProp<RootStackParamList>;
@@ -27,10 +27,19 @@ type Section = { title: string; items: MenuItem[] };
 
 const ALL_SECTIONS: Section[] = [
   {
+    title: 'Finance',
+    items: [
+      { label: 'Dépenses', icon: 'receipt-outline', route: 'Expenses', hint: 'Loyer, salaires, charges...', roles: ['admin', 'employee'] },
+      { label: 'Créances', icon: 'alarm-outline', route: 'Creances', hint: 'Clients à relancer', roles: ['admin', 'employee'] },
+      { label: 'Investisseurs', icon: 'trending-up', route: 'Investors', hint: 'Capital & versements', roles: ['admin', 'investor'] },
+    ],
+  },
+  {
     title: 'Gestion',
     items: [
-      { label: 'Clients', icon: 'people', route: 'Clients', hint: 'Annuaire & créances', roles: ['admin', 'employee'] },
-      { label: 'Investisseurs', icon: 'trending-up', route: 'Investors', hint: 'Capital & versements', roles: ['admin', 'investor'] },
+      { label: 'Commandes clients', icon: 'clipboard-outline', route: 'CustomerOrders', hint: 'Suivre les commandes en cours', roles: ['admin', 'employee'] },
+      { label: 'Fournisseurs & Achats', icon: 'cube-outline', route: 'Suppliers', hint: 'Fournisseurs & historique achats', roles: ['admin', 'employee'] },
+      { label: 'Clients', icon: 'people', route: 'Clients', hint: 'Annuaire clients', roles: ['admin', 'employee'] },
       { label: 'Documents', icon: 'document-text', route: 'Documents', hint: 'Contrats & licences', roles: ['admin'] },
     ],
   },
@@ -71,7 +80,7 @@ const ROLE_COLORS: Record<UserRole, string> = {
 export default function PlusScreen() {
   const navigation = useNavigation<PlusNav>();
   const insets = useSafeAreaInsets();
-  const { membership, signOut, user } = useAuth();
+  const { membership, allMemberships, switchFactory, signOut, user } = useAuth();
   const role = membership?.role ?? 'employee';
   const [profile, setProfile] = useState<UserProfile>({ displayName: '', avatarUri: null });
 
@@ -156,6 +165,31 @@ export default function PlusScreen() {
           </View>
         </View>
       ))}
+
+      {/* Factory switcher — shown only when user belongs to multiple factories */}
+      {allMemberships.length > 1 && (
+        <View style={{ marginTop: 16 }}>
+          <Text style={styles.sectionTitle}>Changer d'usine</Text>
+          <View style={styles.list}>
+            {allMemberships.map((m: FactoryMembership, idx: number) => (
+              <TouchableOpacity
+                key={m.factoryId}
+                style={[styles.row, idx === allMemberships.length - 1 && { borderBottomWidth: 0 }]}
+                onPress={() => switchFactory(m.factoryId)}
+              >
+                <View style={[styles.iconWrap, membership?.factoryId === m.factoryId && { backgroundColor: '#E8F6F0' }]}>
+                  <Ionicons name="business" size={20} color={membership?.factoryId === m.factoryId ? C.primary : C.muted} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.rowLabel}>{m.factoryName}</Text>
+                  <Text style={styles.rowHint}>{ROLE_LABELS[m.role]}</Text>
+                </View>
+                {membership?.factoryId === m.factoryId && <Ionicons name="checkmark-circle" size={20} color={C.primary} />}
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+      )}
 
       {/* Logout */}
       <View style={styles.dangerSection}>

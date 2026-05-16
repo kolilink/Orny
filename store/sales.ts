@@ -83,14 +83,14 @@ export const updateSale = async (id: string, updates: Partial<Omit<Sale, 'id' | 
   if (updates.paymentMethod !== undefined) row.payment_method = updates.paymentMethod;
   row.updated_at = new Date().toISOString();
 
-  supabase.from('sales').update(row).eq('id', id)
+  supabase.from('sales').update(row).eq('id', id).eq('factory_id', getFactoryId())
     .then(({ error }) => { if (error) console.warn('sales update sync error', error.message); });
 };
 
 export const deleteSale = async (id: string): Promise<void> => {
   const sales = await getSales();
   await setCache(sales.filter((s) => s.id !== id));
-  supabase.from('sales').delete().eq('id', id)
+  supabase.from('sales').delete().eq('id', id).eq('factory_id', getFactoryId())
     .then(({ error }) => { if (error) console.warn('sales delete sync error', error.message); });
 };
 

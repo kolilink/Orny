@@ -15,7 +15,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as SecureStore from 'expo-secure-store';
 import { useAuth } from '../../context/AuthContext';
 import { getBusinessSnapshot, BusinessSnapshot } from '../../utils/businessData';
 import { buildSystemPrompt, buildBriefPrompt, buildDataContext } from '../../utils/coachPrompt';
@@ -101,7 +101,7 @@ export default function CoachScreen() {
   const initialized = useRef(false);
 
   useEffect(() => {
-    AsyncStorage.getItem(API_KEY_STORAGE).then(key => {
+    SecureStore.getItemAsync(API_KEY_STORAGE).then(key => {
       if (key) setApiKey(key);
     });
   }, []);
@@ -209,7 +209,7 @@ export default function CoachScreen() {
         text: 'Confirmer',
         style: 'destructive',
         onPress: () => {
-          AsyncStorage.removeItem(API_KEY_STORAGE);
+          SecureStore.deleteItemAsync(API_KEY_STORAGE);
           setApiKey(null);
           setMessages([]);
           setSnap(null);
@@ -223,7 +223,11 @@ export default function CoachScreen() {
   function saveApiKey() {
     const key = apiKeyInput.trim();
     if (!key) return;
-    AsyncStorage.setItem(API_KEY_STORAGE, key);
+    if (!key.startsWith('sk-ant-')) {
+      Alert.alert('Clé invalide', 'La clé Anthropic doit commencer par "sk-ant-".');
+      return;
+    }
+    SecureStore.setItemAsync(API_KEY_STORAGE, key);
     setApiKey(key);
     setApiKeyInput('');
   }
@@ -291,6 +295,12 @@ export default function CoachScreen() {
             <TouchableOpacity onPress={() => setShowKey(v => !v)} style={styles.eyeBtn}>
               <Ionicons name={showKey ? 'eye-off-outline' : 'eye-outline'} size={20} color={C.muted} />
             </TouchableOpacity>
+          </View>
+          <View style={styles.disclosureBox}>
+            <Ionicons name="information-circle-outline" size={14} color={C.muted} style={{ marginTop: 1 }} />
+            <Text style={styles.disclosureText}>
+              En activant le coach, les données financières de votre usine (ventes, clients, production) sont transmises à l'API Anthropic pour analyse. Ces données quittent cet appareil.
+            </Text>
           </View>
           <TouchableOpacity
             style={[styles.activateBtn, !apiKeyInput.trim() && { opacity: 0.45 }]}
@@ -419,6 +429,12 @@ const styles = StyleSheet.create({
   },
   apiInput: { flex: 1, paddingVertical: 14, fontSize: 14, color: C.text },
   eyeBtn: { padding: 4 },
+  disclosureBox: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: 6,
+    backgroundColor: '#FFF8E8', borderRadius: 8, padding: 10, marginBottom: 14,
+    borderWidth: 1, borderColor: '#F0E0A0',
+  },
+  disclosureText: { flex: 1, fontSize: 11, color: C.muted, lineHeight: 16 },
   activateBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
     backgroundColor: C.primary, borderRadius: 14, paddingVertical: 16,

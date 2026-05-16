@@ -27,6 +27,10 @@ import BulksScreen from '../screens/Bulks';
 import FactorySettingsScreen from '../screens/FactorySettings';
 import CoachScreen from '../screens/Coach';
 import ProfileScreen from '../screens/Profile';
+import ExpensesScreen from '../screens/Expenses';
+import SuppliersScreen from '../screens/Suppliers';
+import CustomerOrdersScreen from '../screens/CustomerOrders';
+import CreancesScreen from '../screens/Creances';
 
 import { RootStackParamList, TabParamList } from '../types';
 
@@ -86,6 +90,10 @@ function AppNavigator() {
       <Stack.Screen name="FactorySettings" component={FactorySettingsScreen} options={{ headerShown: false }} />
       <Stack.Screen name="Coach" component={CoachScreen} options={{ headerShown: false }} />
       <Stack.Screen name="Profile" component={ProfileScreen} options={{ headerShown: false }} />
+      <Stack.Screen name="Expenses" component={ExpensesScreen} options={{ headerShown: false }} />
+      <Stack.Screen name="Suppliers" component={SuppliersScreen} options={{ headerShown: false }} />
+      <Stack.Screen name="CustomerOrders" component={CustomerOrdersScreen} options={{ headerShown: false }} />
+      <Stack.Screen name="Creances" component={CreancesScreen} options={{ headerShown: false }} />
     </Stack.Navigator>
   );
 }

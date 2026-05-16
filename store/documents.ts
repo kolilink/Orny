@@ -1,5 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import { BusinessDocument } from '../types';
 import { getFactoryId, generateId } from './context';
 import { supabase } from '../lib/supabase';

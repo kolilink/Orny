@@ -61,7 +61,7 @@ export const addInvestmentEntry = async (
 export const deleteInvestmentEntry = async (id: string): Promise<void> => {
   const entries = await getInvestmentEntries();
   await setCache(entries.filter((e) => e.id !== id));
-  supabase.from('investment_entries').delete().eq('id', id)
+  supabase.from('investment_entries').delete().eq('id', id).eq('factory_id', getFactoryId())
     .then(({ error }) => { if (error) console.warn('investment_entries delete sync error', error.message); });
 };
 

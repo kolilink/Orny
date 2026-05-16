@@ -5,8 +5,10 @@
 
 -- ─── HELPER: generate a random 8-char invite code ───────────
 create or replace function generate_invite_code()
-returns text language sql as $$
-  select upper(substring(md5(random()::text) from 1 for 8));
+returns text language sql
+set search_path = public
+as $$
+  select upper(substring(replace(gen_random_uuid()::text, '-', '') from 1 for 8));
 $$;
 
 -- ─── FACTORIES ───────────────────────────────────────────────
@@ -166,12 +168,16 @@ alter table business_documents enable row level security;
 -- ─── HELPER VIEW: which factories does the current user belong to? ───
 -- Used inside policies to avoid N+1 subqueries
 create or replace function my_factory_ids()
-returns setof uuid language sql security definer as $$
+returns setof uuid language sql security definer
+set search_path = public
+as $$
   select factory_id from factory_members where user_id = auth.uid();
 $$;
 
 create or replace function my_role_in(fid uuid)
-returns text language sql security definer as $$
+returns text language sql security definer
+set search_path = public
+as $$
   select role from factory_members
   where user_id = auth.uid() and factory_id = fid
   limit 1;
@@ -193,7 +199,9 @@ create policy "authenticated users can create a factory"
 
 -- ─── AUTO-ADD CREATOR AS ADMIN ───────────────────────────────
 create or replace function handle_factory_created()
-returns trigger language plpgsql security definer as $$
+returns trigger language plpgsql security definer
+set search_path = public
+as $$
 begin
   insert into factory_members (factory_id, user_id, role)
   values (new.id, auth.uid(), 'admin');
@@ -221,11 +229,6 @@ create policy "admins can update member roles"
 create policy "admins can remove members"
   on factory_members for delete
   using (my_role_in(factory_id) = 'admin');
-
--- joining via invite code: any authenticated user can insert themselves
-create policy "users can join via invite code"
-  on factory_members for insert
-  with check (user_id = auth.uid());
 
 -- ─── DATA TABLE POLICIES (sales, production, stock, etc.) ────
 -- Pattern: members can read; admins+employees can write; investors read-only

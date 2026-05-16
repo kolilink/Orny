@@ -62,14 +62,14 @@ export const updateFlavor = async (
   if (updates.weightG !== undefined) row.weight_g = updates.weightG;
   if (updates.defaultPrice !== undefined) row.default_price = updates.defaultPrice;
 
-  supabase.from('product_flavors').update(row).eq('id', id)
+  supabase.from('product_flavors').update(row).eq('id', id).eq('factory_id', getFactoryId())
     .then(({ error }) => { if (error) console.warn('flavors update sync error', error.message); });
 };
 
 export const deleteFlavor = async (id: string): Promise<void> => {
   const flavors = await getFlavors();
   await setCache(flavors.filter((f) => f.id !== id));
-  supabase.from('product_flavors').delete().eq('id', id)
+  supabase.from('product_flavors').delete().eq('id', id).eq('factory_id', getFactoryId())
     .then(({ error }) => { if (error) console.warn('flavors delete sync error', error.message); });
 };
 

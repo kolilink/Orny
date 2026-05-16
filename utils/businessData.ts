@@ -2,6 +2,7 @@ import { getSales } from '../store/sales';
 import { getBatches } from '../store/production';
 import { getStock } from '../store/stock';
 import { getInvestors } from '../store/investors';
+import { getExpenses } from '../store/expenses';
 import { getWeeklyTarget } from '../store/weeklyTarget';
 import { saleDebt } from '../types';
 import { isThisWeek, daysAgo, toDateString } from './dates';
@@ -64,16 +65,19 @@ export interface BusinessSnapshot {
     outstandingDebt: number;
     collectionRate30d: number;
     revenuePerBatch: number;
+    expensesThisMonth: number;
+    netProfitThisMonth: number;
   };
 }
 
 export async function getBusinessSnapshot(): Promise<BusinessSnapshot> {
-  const [sales, batches, stock, investors, weeklyTarget] = await Promise.all([
+  const [sales, batches, stock, investors, weeklyTarget, expenses] = await Promise.all([
     getSales(),
     getBatches(),
     getStock(),
     getInvestors(),
     getWeeklyTarget(),
+    getExpenses(),
   ]);
 
   const today = toDateString();
@@ -170,6 +174,10 @@ export async function getBusinessSnapshot(): Promise<BusinessSnapshot> {
   const rev30 = sumRevenue(last30Sales);
   const cash30 = sumCollected(last30Sales);
 
+  const monthExpenses = expenses.filter(e => isThisMonth(e.date)).reduce((a, e) => a + e.amount, 0);
+  const monthRevenue = sumRevenue(monthSales);
+  const netProfitThisMonth = monthRevenue - monthExpenses;
+
   return {
     generatedAt: new Date().toISOString(),
 
@@ -246,6 +254,8 @@ export async function getBusinessSnapshot(): Promise<BusinessSnapshot> {
       outstandingDebt: allTimeDebt,
       collectionRate30d: safePct(cash30, rev30),
       revenuePerBatch: weekBatchCount > 0 ? Math.round(weekRevenue / weekBatchCount) : 0,
+      expensesThisMonth: monthExpenses,
+      netProfitThisMonth,
     },
   };
 }

@@ -72,14 +72,14 @@ export const updateInvestor = async (
   if (updates.sharePercentage !== undefined) row.share_percentage = updates.sharePercentage;
   if (updates.notes !== undefined) row.notes = updates.notes;
 
-  supabase.from('investors').update(row).eq('id', id)
+  supabase.from('investors').update(row).eq('id', id).eq('factory_id', getFactoryId())
     .then(({ error }) => { if (error) console.warn('investors update sync error', error.message); });
 };
 
 export const deleteInvestor = async (id: string): Promise<void> => {
   const investors = await getInvestors();
   await setCache(investors.filter((inv) => inv.id !== id));
-  supabase.from('investors').delete().eq('id', id)
+  supabase.from('investors').delete().eq('id', id).eq('factory_id', getFactoryId())
     .then(({ error }) => { if (error) console.warn('investors delete sync error', error.message); });
 };
 

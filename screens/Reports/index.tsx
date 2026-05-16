@@ -4,7 +4,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { getSales } from '../../store/sales';
 import { getClients } from '../../store/clients';
-import { Sale } from '../../types';
+import { getExpenses } from '../../store/expenses';
+import { Sale, Expense } from '../../types';
 import { formatGNF } from '../../utils/format';
 
 const C = {
@@ -34,13 +35,15 @@ const PAYMENT_COLORS: Record<string, string> = {
 export default function ReportsScreen() {
   const insets = useSafeAreaInsets();
   const [sales, setSalesState] = useState<Sale[]>([]);
+  const [expenses, setExpensesState] = useState<Expense[]>([]);
   const [clientCount, setClientCount] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
 
   const load = useCallback(async () => {
-    const [s, clients] = await Promise.all([getSales(), getClients()]);
+    const [s, clients, exp] = await Promise.all([getSales(), getClients(), getExpenses()]);
     setSalesState(s);
     setClientCount(clients.length);
+    setExpensesState(exp);
   }, []);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
@@ -69,19 +72,22 @@ export default function ReportsScreen() {
     .slice(0, 5);
 
   const now = new Date();
-  const thisMonth = sales.filter((s) => {
-    const d = new Date(s.date);
-    return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
-  });
-  const lastMonth = sales.filter((s) => {
-    const d = new Date(s.date);
-    const m = now.getMonth() === 0 ? 11 : now.getMonth() - 1;
-    const y = now.getMonth() === 0 ? now.getFullYear() - 1 : now.getFullYear();
-    return d.getMonth() === m && d.getFullYear() === y;
-  });
+  const thisMonthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const lastMonthDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const lastMonthStr = `${lastMonthDate.getFullYear()}-${String(lastMonthDate.getMonth() + 1).padStart(2, '0')}`;
+
+  const thisMonth = sales.filter((s) => s.date.startsWith(thisMonthStr));
+  const lastMonth = sales.filter((s) => s.date.startsWith(lastMonthStr));
   const thisMonthRev = thisMonth.reduce((sum, s) => sum + s.totalAmount, 0);
   const lastMonthRev = lastMonth.reduce((sum, s) => sum + s.totalAmount, 0);
   const monthDiff = lastMonthRev > 0 ? ((thisMonthRev - lastMonthRev) / lastMonthRev) * 100 : 0;
+
+  const thisMonthExpenses = expenses.filter((e) => e.date.startsWith(thisMonthStr));
+  const lastMonthExpenses = expenses.filter((e) => e.date.startsWith(lastMonthStr));
+  const thisMonthExpTotal = thisMonthExpenses.reduce((sum, e) => sum + e.amount, 0);
+  const lastMonthExpTotal = lastMonthExpenses.reduce((sum, e) => sum + e.amount, 0);
+  const netProfit = thisMonthRev - thisMonthExpTotal;
+  const lastNetProfit = lastMonthRev - lastMonthExpTotal;
 
   return (
     <ScrollView
@@ -106,11 +112,29 @@ export default function ReportsScreen() {
         <StatRow label="Mois dernier" value={formatGNF(lastMonthRev)} />
         {lastMonthRev > 0 && (
           <View style={styles.diffRow}>
-            <Text style={styles.diffLabel}>Évolution</Text>
+            <Text style={styles.diffLabel}>Évolution CA</Text>
             <Text style={[styles.diffValue, { color: monthDiff >= 0 ? C.primary : C.red }]}>
               {monthDiff >= 0 ? '+' : ''}{monthDiff.toFixed(1)} %
             </Text>
           </View>
+        )}
+      </View>
+
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>Compte de résultat — ce mois</Text>
+        <StatRow label="Chiffre d'affaires" value={formatGNF(thisMonthRev)} />
+        <StatRow label="Dépenses enregistrées" value={formatGNF(thisMonthExpTotal)} valueColor={thisMonthExpTotal > 0 ? C.red : undefined} />
+        <View style={[styles.diffRow, { borderTopWidth: 1, borderColor: C.border }]}>
+          <Text style={[styles.diffLabel, { fontWeight: '700' }]}>Profit net</Text>
+          <Text style={[styles.diffValue, { color: netProfit >= 0 ? C.primary : C.red }]}>
+            {formatGNF(netProfit)}
+          </Text>
+        </View>
+        {lastMonthExpTotal > 0 && (
+          <StatRow label="Profit net mois dernier" value={formatGNF(lastNetProfit)} valueColor={lastNetProfit < 0 ? C.red : C.muted} />
+        )}
+        {thisMonthExpTotal === 0 && (
+          <Text style={styles.empty}>Ajoutez vos dépenses pour voir le profit réel</Text>
         )}
       </View>
 

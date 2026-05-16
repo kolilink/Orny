@@ -65,14 +65,14 @@ export const updateBulk = async (
   if (updates.bagCount !== undefined) row.bag_count = updates.bagCount;
   if (updates.unitPrice !== undefined) row.unit_price = updates.unitPrice;
 
-  supabase.from('bulk_products').update(row).eq('id', id)
+  supabase.from('bulk_products').update(row).eq('id', id).eq('factory_id', getFactoryId())
     .then(({ error }) => { if (error) console.warn('bulks update sync error', error.message); });
 };
 
 export const deleteBulk = async (id: string): Promise<void> => {
   const bulks = await getBulks();
   await setCache(bulks.filter((b) => b.id !== id));
-  supabase.from('bulk_products').delete().eq('id', id)
+  supabase.from('bulk_products').delete().eq('id', id).eq('factory_id', getFactoryId())
     .then(({ error }) => { if (error) console.warn('bulks delete sync error', error.message); });
 };
 

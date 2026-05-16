@@ -104,6 +104,63 @@ export const saleDebt = (sale: Sale): number => {
   return Math.max(0, sale.totalAmount - paid);
 };
 
+export type ExpenseCategory =
+  | 'loyer'
+  | 'salaire'
+  | 'matiere_premiere'
+  | 'energie'
+  | 'transport'
+  | 'maintenance'
+  | 'autre';
+
+export interface Expense {
+  id: string;
+  factory_id: string;
+  date: string;
+  category: ExpenseCategory;
+  description: string;
+  amount: number;
+  paymentMethod: 'cash' | 'orange_money';
+}
+
+export interface Supplier {
+  id: string;
+  factory_id: string;
+  name: string;
+  phone?: string;
+  product: string;
+  notes?: string;
+}
+
+export interface Purchase {
+  id: string;
+  factory_id: string;
+  supplierId?: string;
+  supplierName: string;
+  date: string;
+  product: string;
+  quantity: number;
+  unit: string;
+  unitPrice: number;
+  totalAmount: number;
+  paymentMethod: 'cash' | 'orange_money' | 'credit';
+  notes?: string;
+}
+
+export interface CustomerOrder {
+  id: string;
+  factory_id: string;
+  clientName: string;
+  product: string;
+  quantity: number;
+  unitPrice: number;
+  totalAmount: number;
+  deliveryDate: string;
+  status: 'pending' | 'ready' | 'delivered' | 'cancelled';
+  notes?: string;
+  createdAt: string;
+}
+
 export type RootStackParamList = {
   Tabs: undefined;
   Documents: undefined;
@@ -117,6 +174,10 @@ export type RootStackParamList = {
   FactorySettings: undefined;
   Coach: undefined;
   Profile: undefined;
+  Expenses: undefined;
+  Suppliers: undefined;
+  CustomerOrders: undefined;
+  Creances: undefined;
 };
 
 export type TabParamList = {

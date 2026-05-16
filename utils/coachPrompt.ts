@@ -8,8 +8,18 @@ function pct(n: number): string {
   return `${n}%`;
 }
 
+// Strip characters that could break prompt structure or attempt LLM injection via
+// user-supplied names (clients, debtors, factory name). Keeps printable non-control chars.
+function s(raw: string): string {
+  return raw
+    .replace(/[\r\n\t\v\f]/g, ' ')
+    .replace(/[`*#\[\]<>{};\\]/g, '')
+    .slice(0, 80)
+    .trim();
+}
+
 export function buildSystemPrompt(factoryName: string): string {
-  return `Tu es le Coach IA de ${factoryName}, un conseiller d'entreprise d'élite pour cette usine de production. Tu as accès aux données temps réel de l'usine.
+  return `Tu es le Coach IA de ${s(factoryName)}, un conseiller d'entreprise d'élite pour cette usine de production. Tu as accès aux données temps réel de l'usine.
 
 Tu appliques deux cadres complémentaires :
 
@@ -56,12 +66,12 @@ export function buildDataContext(snap: BusinessSnapshot): string {
 
   const debtorLines =
     sales.topDebtors.length > 0
-      ? sales.topDebtors.map(d => `  - ${d.name}: ${fmt(d.debt)}`).join('\n')
+      ? sales.topDebtors.map(d => `  - ${s(d.name)}: ${fmt(d.debt)}`).join('\n')
       : '  - Aucune créance en cours';
 
   const clientLines =
     sales.topClients.length > 0
-      ? sales.topClients.map(c => `  - ${c.name}: ${fmt(c.revenue)}`).join('\n')
+      ? sales.topClients.map(c => `  - ${s(c.name)}: ${fmt(c.revenue)}`).join('\n')
       : '  - Aucune vente cette semaine';
 
   const date = new Date(snap.generatedAt).toLocaleDateString('fr-FR', {
@@ -80,7 +90,7 @@ export function buildDataContext(snap: BusinessSnapshot): string {
   Mix paiement (historique) : Cash ${pct(sales.paymentMix.cash)} | Orange Money ${pct(sales.paymentMix.orangeMoney)} | Crédit ${pct(sales.paymentMix.credit)}
   Valeur moy. transaction (semaine) : ${fmt(sales.avgTransactionValue)}
   Taux de recouvrement global : ${pct(sales.allTime.collectionRate)}
-  Client principal cette semaine : ${sales.week.topClient}
+  Client principal cette semaine : ${s(sales.week.topClient)}
 
 Top clients (semaine) :
 ${clientLines}
@@ -106,13 +116,15 @@ ${stockLines}
   Taux recouvrement 30j : ${pct(financial.collectionRate30d)}
   Créances totales en suspens : ${fmt(financial.outstandingDebt)}
   Revenu par batch (semaine) : ${fmt(financial.revenuePerBatch)}
+  Dépenses ce mois : ${fmt(financial.expensesThisMonth)}
+  Profit net ce mois : ${fmt(financial.netProfitThisMonth)}${financial.netProfitThisMonth < 0 ? ' ⚠️ PERTE' : ''}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
 }
 
 export function buildBriefPrompt(snap: BusinessSnapshot, factoryName: string): string {
   return `${buildDataContext(snap)}
 
-Génère le BILAN DU JOUR pour ${factoryName}.
+Génère le BILAN DU JOUR pour ${s(factoryName)}.
 
 Structure exacte :
 1. Une phrase d'accroche directe sur l'état du business (honnête, sans ménagement)

@@ -28,7 +28,9 @@ create policy "users can update own profile"
 
 -- Auto-create profile on every new signup
 create or replace function handle_new_user()
-returns trigger language plpgsql security definer as $$
+returns trigger language plpgsql security definer
+set search_path = public
+as $$
 begin
   insert into profiles (id, email)
   values (new.id, new.email)
@@ -97,13 +99,17 @@ drop policy if exists "users can join via invite code" on factory_members;
 
 -- ─── RPC: lookup factory by invite code (bypasses RLS) ────────
 create or replace function lookup_factory_by_code(code text)
-returns table(id uuid, name text) language sql security definer as $$
+returns table(id uuid, name text) language sql security definer
+set search_path = public
+as $$
   select id, name from factories where invite_code = upper(trim(code));
 $$;
 
 -- ─── RPC: upsert current user's profile ───────────────────────
 create or replace function upsert_my_profile(user_email text)
-returns void language sql security definer as $$
+returns void language sql security definer
+set search_path = public
+as $$
   insert into profiles (id, email)
   values (auth.uid(), user_email)
   on conflict (id) do update set email = excluded.email;
