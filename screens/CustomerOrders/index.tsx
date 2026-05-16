@@ -7,6 +7,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { CustomerOrder } from '../../types';
+import DatePickerField from '../../components/DatePickerField';
 import {
   getCustomerOrders, addCustomerOrder, updateCustomerOrderStatus,
   deleteCustomerOrder, syncCustomerOrdersFromSupabase,
@@ -65,7 +66,7 @@ export default function CustomerOrdersScreen() {
     if (!product.trim()) return Alert.alert('Erreur', 'Produit requis.');
     if (!q || q <= 0) return Alert.alert('Erreur', 'Quantité invalide.');
     if (!up || up <= 0) return Alert.alert('Erreur', 'Prix unitaire invalide.');
-    if (!deliveryDate.match(/^\d{4}-\d{2}-\d{2}$/)) return Alert.alert('Erreur', 'Date de livraison requise (format AAAA-MM-JJ).');
+    if (!deliveryDate) return Alert.alert('Erreur', 'Date de livraison requise.');
 
     await addCustomerOrder({
       clientName: clientName.trim(),
@@ -221,8 +222,7 @@ export default function CustomerOrdersScreen() {
             {qty && unitPrice ? (
               <Text style={styles.totalPreview}>Total : {formatGNF(parseInt(qty) * parseInt(unitPrice.replace(/\s/g, ''), 10) || 0)}</Text>
             ) : null}
-            <Text style={styles.fieldLabel}>Date de livraison *</Text>
-            <TextInput style={styles.input} value={deliveryDate} onChangeText={setDeliveryDate} placeholder="AAAA-MM-JJ" placeholderTextColor={C.muted} />
+            <DatePickerField label="Date de livraison *" value={deliveryDate} onChange={setDeliveryDate} />
             <Text style={styles.fieldLabel}>Notes</Text>
             <TextInput style={styles.input} value={notes} onChangeText={setNotes} placeholder="Optionnel" placeholderTextColor={C.muted} />
             <TouchableOpacity style={styles.confirmBtn} onPress={handleAdd}>

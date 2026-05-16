@@ -7,6 +7,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { Supplier, Purchase } from '../../types';
+import DatePickerField from '../../components/DatePickerField';
 import { getSuppliers, addSupplier, deleteSupplier, syncSuppliersFromSupabase } from '../../store/suppliers';
 import { getPurchases, addPurchase, deletePurchase, syncPurchasesFromSupabase } from '../../store/purchases';
 import { formatGNF } from '../../utils/format';
@@ -248,8 +249,7 @@ export default function SuppliersScreen() {
             {pQty && pUnitPrice ? (
               <Text style={styles.totalPreview}>Total : {formatGNF(parseFloat(pQty) * parseInt(pUnitPrice.replace(/\s/g, ''), 10) || 0)}</Text>
             ) : null}
-            <Text style={styles.fieldLabel}>Date</Text>
-            <TextInput style={styles.input} value={pDate} onChangeText={setPDate} placeholder="AAAA-MM-JJ" placeholderTextColor={C.muted} />
+            <DatePickerField label="Date" value={pDate} onChange={setPDate} />
             <Text style={styles.fieldLabel}>Mode de paiement</Text>
             <View style={{ flexDirection: 'row', gap: 8 }}>
               {(['cash', 'orange_money', 'credit'] as const).map((m) => (

@@ -8,6 +8,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { addBatch, getBatches } from '../../store/production';
+import DatePickerField from '../../components/DatePickerField';
 import { deductStock, getStock } from '../../store/stock';
 import { getWeeklyTarget, setWeeklyTarget } from '../../store/weeklyTarget';
 import { ProductionBatch, StockItem } from '../../types';
@@ -162,7 +163,7 @@ export default function ProductionScreen() {
         <Text style={styles.title}>Enregistrer un lot</Text>
 
         <View style={styles.card}>
-          <NumField label="Date (AAAA-MM-JJ)" value={date} onChangeText={setDate} keyboard="default" />
+          <DatePickerField label="Date" value={date} onChange={setDate} />
           <NumField label="Pommes de terre utilisées (kg)" value={potatoes} onChangeText={setPotatoes} />
           <NumField label="Sachets 80g produits" value={sachets} onChangeText={setSachets} />
           <NumField label="Gaz utilisé (kg)" value={gas} onChangeText={setGas} />

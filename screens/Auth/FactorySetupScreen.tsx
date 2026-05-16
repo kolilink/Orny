@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
-  ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView, Alert,
+  ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView, Alert, Modal,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../context/AuthContext';
@@ -19,6 +19,7 @@ export default function FactorySetupScreen() {
   const [factoryName, setFactoryName] = useState('');
   const [inviteCode, setInviteCode] = useState('');
   const [loading, setLoading] = useState(false);
+  const [cancelModal, setCancelModal] = useState(false);
 
   async function handleCreate() {
     if (!factoryName.trim()) { Alert.alert('Nom requis', "Entrez le nom de votre usine."); return; }
@@ -36,25 +37,29 @@ export default function FactorySetupScreen() {
     if (error) Alert.alert('Erreur', error);
   }
 
-  async function handleCancel() {
-    Alert.alert(
-      'Annuler la demande ?',
-      "Vous pourrez envoyer une nouvelle demande à tout moment.",
-      [
-        { text: 'Non', style: 'cancel' },
-        {
-          text: 'Oui, annuler', style: 'destructive', onPress: async () => {
-            const { error } = await cancelJoinRequest();
-            if (error) Alert.alert('Erreur', error);
-          },
-        },
-      ]
-    );
+  async function confirmCancel() {
+    setCancelModal(false);
+    const { error } = await cancelJoinRequest();
+    if (error) Alert.alert('Erreur', error);
   }
 
   if (pendingRequest) {
     return (
       <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <Modal visible={cancelModal} transparent animationType="fade" onRequestClose={() => setCancelModal(false)}>
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalBox}>
+              <Text style={styles.modalTitle}>Annuler la demande ?</Text>
+              <Text style={styles.modalSub}>Vous pourrez envoyer une nouvelle demande à tout moment.</Text>
+              <TouchableOpacity style={styles.modalDestructive} onPress={confirmCancel}>
+                <Text style={styles.modalDestructiveText}>Oui, annuler</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.modalCancel} onPress={() => setCancelModal(false)}>
+                <Text style={styles.modalCancelText}>Non</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </Modal>
         <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
           <View style={styles.header}>
             <Text style={styles.logo}>Orny</Text>
@@ -70,7 +75,7 @@ export default function FactorySetupScreen() {
               Votre demande a été envoyée à l'administrateur de l'usine.
               Vous serez ajouté dès qu'il l'aura approuvée.
             </Text>
-            <TouchableOpacity style={styles.cancelBtn} onPress={handleCancel}>
+            <TouchableOpacity style={styles.cancelBtn} onPress={() => setCancelModal(true)}>
               <Text style={styles.cancelBtnText}>Annuler ma demande</Text>
             </TouchableOpacity>
           </View>
@@ -163,4 +168,12 @@ const styles = StyleSheet.create({
   waitDesc: { fontSize: 14, color: C.muted, textAlign: 'center', lineHeight: 20, marginBottom: 24 },
   cancelBtn: { borderWidth: 1, borderColor: C.red, borderRadius: 12, padding: 14, alignItems: 'center' },
   cancelBtnText: { color: C.red, fontSize: 15, fontWeight: '600' },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', alignItems: 'center', padding: 24 },
+  modalBox: { backgroundColor: '#fff', borderRadius: 16, padding: 24, width: '100%' },
+  modalTitle: { fontSize: 17, fontWeight: '700', color: '#1A1A18', marginBottom: 6 },
+  modalSub: { fontSize: 14, color: C.muted, marginBottom: 20 },
+  modalDestructive: { backgroundColor: C.red, borderRadius: 10, padding: 14, alignItems: 'center', marginBottom: 10 },
+  modalDestructiveText: { color: '#fff', fontWeight: '700', fontSize: 15 },
+  modalCancel: { borderWidth: 1, borderColor: C.border, borderRadius: 10, padding: 14, alignItems: 'center' },
+  modalCancelText: { color: C.muted, fontWeight: '600', fontSize: 15 },
 });

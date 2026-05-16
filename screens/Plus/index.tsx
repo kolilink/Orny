@@ -38,7 +38,7 @@ const ALL_SECTIONS: Section[] = [
     title: 'Gestion',
     items: [
       { label: 'Commandes clients', icon: 'clipboard-outline', route: 'CustomerOrders', hint: 'Suivre les commandes en cours', roles: ['admin', 'employee'] },
-      { label: 'Fournisseurs & Achats', icon: 'cube-outline', route: 'Suppliers', hint: 'Fournisseurs & historique achats', roles: ['admin', 'employee'] },
+      { label: 'Fournisseurs & Achats', icon: 'cube-outline', route: 'Suppliers', hint: 'Fournisseurs & historique achats', roles: ['admin'] },
       { label: 'Clients', icon: 'people', route: 'Clients', hint: 'Annuaire clients', roles: ['admin', 'employee'] },
       { label: 'Documents', icon: 'document-text', route: 'Documents', hint: 'Contrats & licences', roles: ['admin'] },
     ],

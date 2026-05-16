@@ -7,6 +7,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { Expense, ExpenseCategory } from '../../types';
+import DatePickerField from '../../components/DatePickerField';
 import { getExpenses, addExpense, deleteExpense, syncExpensesFromSupabase } from '../../store/expenses';
 import { formatGNF } from '../../utils/format';
 
@@ -138,14 +139,7 @@ export default function ExpensesScreen() {
             onChangeText={setAmount}
           />
 
-          <Text style={styles.label}>Date</Text>
-          <TextInput
-            style={styles.input}
-            value={date}
-            onChangeText={setDate}
-            placeholder="AAAA-MM-JJ"
-            placeholderTextColor={C.muted}
-          />
+          <DatePickerField label="Date" value={date} onChange={setDate} />
 
           <Text style={styles.label}>Mode de paiement</Text>
           <View style={styles.row}>

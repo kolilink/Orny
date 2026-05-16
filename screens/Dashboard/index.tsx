@@ -130,12 +130,16 @@ export default function DashboardScreen() {
       <View style={styles.grid}>
         <MetricCard label="Ventes aujourd'hui" value={formatGNF(todayRevenue)} />
         <MetricCard label="Ventes cette semaine" value={formatGNF(weekRevenue)} />
-        <MetricCard
-          label={weekExpenses > 0 ? 'Profit net (semaine)' : 'Marge estimée (sem.)'}
-          value={formatGNF(realMargin)}
-          valueColor={realMargin < 0 ? C.red : C.primary}
-        />
-        <MetricCard label="Trésorerie" value={formatGNF(tresorerie)} />
+        {membership?.role !== 'employee' && (
+          <MetricCard
+            label={weekExpenses > 0 ? 'Profit net (semaine)' : 'Marge estimée (sem.)'}
+            value={formatGNF(realMargin)}
+            valueColor={realMargin < 0 ? C.red : C.primary}
+          />
+        )}
+        {membership?.role !== 'employee' && (
+          <MetricCard label="Trésorerie" value={formatGNF(tresorerie)} />
+        )}
         <MetricCard label="Nombre de clients" value={String(clientCount)} />
       </View>
 
