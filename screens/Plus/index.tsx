@@ -1,5 +1,5 @@
 import React, { useState, useCallback } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert, Image } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert, Image, Modal } from 'react-native';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -29,8 +29,8 @@ const ALL_SECTIONS: Section[] = [
   {
     title: 'Finance',
     items: [
-      { label: 'Dépenses', icon: 'receipt-outline', route: 'Expenses', hint: 'Loyer, salaires, charges...', roles: ['admin', 'employee'] },
-      { label: 'Créances', icon: 'alarm-outline', route: 'Creances', hint: 'Clients à relancer', roles: ['admin', 'employee'] },
+      { label: 'Dépenses', icon: 'receipt-outline', route: 'Expenses', hint: 'Loyer, salaires, charges...', roles: ['admin'] },
+      { label: 'Créances', icon: 'alarm-outline', route: 'Creances', hint: 'Clients à relancer', roles: ['admin'] },
       { label: 'Investisseurs', icon: 'trending-up', route: 'Investors', hint: 'Capital & versements', roles: ['admin', 'investor'] },
     ],
   },
@@ -53,7 +53,7 @@ const ALL_SECTIONS: Section[] = [
   {
     title: 'Analyses',
     items: [
-      { label: 'Sol Coach IA', icon: 'bulb', route: 'Coach', hint: 'Bilan · Goulot · Action prioritaire', roles: ['admin', 'employee', 'investor'] },
+      { label: 'Sol Coach IA', icon: 'bulb', route: 'Coach', hint: 'Bilan · Goulot · Action prioritaire', roles: ['admin', 'investor'] },
       { label: 'Rapports', icon: 'bar-chart', route: 'Reports', hint: 'Statistiques & tendances', roles: ['admin', 'investor'] },
     ],
   },
@@ -83,6 +83,7 @@ export default function PlusScreen() {
   const { membership, allMemberships, switchFactory, signOut, user } = useAuth();
   const role = membership?.role ?? 'employee';
   const [profile, setProfile] = useState<UserProfile>({ displayName: '', avatarUri: null });
+  const [logoutModal, setLogoutModal] = useState(false);
 
   useFocusEffect(
     useCallback(() => {
@@ -99,10 +100,7 @@ export default function PlusScreen() {
     .filter((section) => section.items.length > 0);
 
   function handleSignOut() {
-    Alert.alert('Se déconnecter ?', 'Vous devrez vous reconnecter pour accéder à l\'application.', [
-      { text: 'Annuler', style: 'cancel' },
-      { text: 'Se déconnecter', style: 'destructive', onPress: signOut },
-    ]);
+    setLogoutModal(true);
   }
 
   return (
@@ -191,6 +189,21 @@ export default function PlusScreen() {
         </View>
       )}
 
+      <Modal visible={logoutModal} transparent animationType="fade" onRequestClose={() => setLogoutModal(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalBox}>
+            <Text style={styles.modalTitle}>Se déconnecter ?</Text>
+            <Text style={styles.modalSub}>Vous devrez vous reconnecter pour accéder à l'application.</Text>
+            <TouchableOpacity style={styles.modalLogout} onPress={signOut}>
+              <Text style={styles.modalLogoutText}>Se déconnecter</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.modalCancel} onPress={() => setLogoutModal(false)}>
+              <Text style={styles.modalCancelText}>Annuler</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
       {/* Logout */}
       <View style={styles.dangerSection}>
         <Text style={styles.dangerTitle}>Compte</Text>
@@ -239,4 +252,12 @@ const styles = StyleSheet.create({
   dangerSection: { marginTop: 28 },
   dangerTitle: { fontSize: 12, fontWeight: '700', color: C.muted, marginBottom: 10, textTransform: 'uppercase', letterSpacing: 0.6 },
   logoutRow: { flexDirection: 'row', alignItems: 'center', padding: 16, backgroundColor: C.card, borderRadius: 16, borderWidth: 1, borderColor: '#FDECEA' },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', alignItems: 'center', padding: 24 },
+  modalBox: { backgroundColor: '#fff', borderRadius: 16, padding: 24, width: '100%' },
+  modalTitle: { fontSize: 17, fontWeight: '700', color: C.text, marginBottom: 6 },
+  modalSub: { fontSize: 14, color: C.muted, marginBottom: 20 },
+  modalLogout: { backgroundColor: C.red, borderRadius: 10, padding: 14, alignItems: 'center', marginBottom: 10 },
+  modalLogoutText: { color: '#fff', fontWeight: '700', fontSize: 15 },
+  modalCancel: { borderWidth: 1, borderColor: C.border, borderRadius: 10, padding: 14, alignItems: 'center' },
+  modalCancelText: { color: C.muted, fontWeight: '600', fontSize: 15 },
 });
