@@ -53,6 +53,19 @@ export const addExpense = async (expense: Omit<Expense, 'id' | 'factory_id'>): P
   return item;
 };
 
+export const updateExpense = async (id: string, updates: Partial<Omit<Expense, 'id' | 'factory_id'>>): Promise<void> => {
+  const all = await getExpenses();
+  await setCache(all.map((e) => (e.id === id ? { ...e, ...updates } : e)));
+  const row: Record<string, unknown> = {};
+  if (updates.date !== undefined) row.date = updates.date;
+  if (updates.category !== undefined) row.category = updates.category;
+  if (updates.description !== undefined) row.description = updates.description;
+  if (updates.amount !== undefined) row.amount = updates.amount;
+  if (updates.paymentMethod !== undefined) row.payment_method = updates.paymentMethod;
+  if (updates.lineItems !== undefined) row.line_items = updates.lineItems ?? null;
+  supabase.from('expenses').update(row).eq('id', id).eq('factory_id', getFactoryId()).then();
+};
+
 export const deleteExpense = async (id: string): Promise<void> => {
   const factoryId = getFactoryId();
   const all = await getExpenses();

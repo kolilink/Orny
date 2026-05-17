@@ -9,7 +9,7 @@ import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Expense, CustomCategory, ExpenseLineItem } from '../../types';
 import DatePickerField from '../../components/DatePickerField';
-import { getExpenses, addExpense, deleteExpense, syncExpensesFromSupabase } from '../../store/expenses';
+import { getExpenses, addExpense, updateExpense, deleteExpense, syncExpensesFromSupabase } from '../../store/expenses';
 import { getCustomCategories, addCustomCategory, deleteCustomCategory } from '../../store/customCategories';
 import { getFactoryId } from '../../store/context';
 import { formatGNF } from '../../utils/format';
@@ -47,10 +47,15 @@ function monthLabel(ym: string) {
   const months = ['Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre'];
   return `${months[parseInt(m, 10) - 1]} ${y}`;
 }
+function parseNum(s: string) { return parseInt(s.replace(/\s/g, ''), 10) || 0; }
 
-interface LineItemRow { id: string; name: string; amount: string; }
-
-function makeLine(): LineItemRow { return { id: Math.random().toString(36).slice(2), name: '', amount: '' }; }
+interface LineItemRow { id: string; name: string; qty: string; amount: string; }
+function makeLine(): LineItemRow { return { id: Math.random().toString(36).slice(2), name: '', qty: '', amount: '' }; }
+function lineTotal(line: LineItemRow): number {
+  const q = parseInt(line.qty, 10);
+  const a = parseNum(line.amount);
+  return q > 0 ? q * a : a;
+}
 
 export default function ExpensesScreen() {
   const insets = useSafeAreaInsets();
@@ -59,14 +64,15 @@ export default function ExpensesScreen() {
   const [tab, setTab] = useState<'add' | 'history'>('add');
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
+  // ── Edit mode ───────────────────────────────────────────────
+  const [editingId, setEditingId] = useState<string | null>(null);
+
   // ── Form state ──────────────────────────────────────────────────
   const [description, setDescription] = useState('');
   const [category, setCategory] = useState('autre');
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'orange_money'>('cash');
   const [date, setDate] = useState(toDateStr(new Date()));
-  // Simple amount (used when no line items)
   const [amount, setAmount] = useState('');
-  // Line items (receipt mode)
   const [lineItems, setLineItems] = useState<LineItemRow[]>([]);
 
   // ── Modals ──────────────────────────────────────────────────────
@@ -77,12 +83,12 @@ export default function ExpensesScreen() {
 
   const allCats = [...BUILT_IN, ...customCats];
 
-  // ── Draft persistence ───────────────────────────────────────────
+  // ── Draft persistence (only when not editing) ───────────────────
   const draftKey = `expense_draft_${getFactoryId() ?? 'default'}`;
   const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Load draft on first mount
   useEffect(() => {
+    if (editingId) return;
     AsyncStorage.getItem(draftKey).then((raw) => {
       if (!raw) return;
       try {
@@ -98,21 +104,22 @@ export default function ExpensesScreen() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Auto-save draft 400ms after last change
   const saveDraft = useCallback(() => {
+    if (editingId) return;
     if (draftTimer.current) clearTimeout(draftTimer.current);
     draftTimer.current = setTimeout(() => {
       AsyncStorage.setItem(draftKey, JSON.stringify({ description, amount, category, paymentMethod, date, lineItems }));
     }, 400);
-  }, [description, amount, category, paymentMethod, date, lineItems, draftKey]);
+  }, [description, amount, category, paymentMethod, date, lineItems, draftKey, editingId]);
 
   useEffect(() => { saveDraft(); }, [saveDraft]);
 
-  function clearDraft() {
-    AsyncStorage.removeItem(draftKey);
+  function clearForm() {
+    setEditingId(null);
     setDescription(''); setAmount(''); setCategory('autre');
     setPaymentMethod('cash'); setDate(toDateStr(new Date()));
     setLineItems([]);
+    AsyncStorage.removeItem(draftKey);
   }
 
   // ── Load data ───────────────────────────────────────────────────
@@ -127,36 +134,80 @@ export default function ExpensesScreen() {
 
   // ── Line item helpers ───────────────────────────────────────────
   const hasLines = lineItems.length > 0;
-  const lineTotal = lineItems.reduce((s, l) => s + (parseInt(l.amount.replace(/\s/g, ''), 10) || 0), 0);
-  const totalAmount = hasLines ? lineTotal : (parseInt(amount.replace(/\s/g, ''), 10) || 0);
+  const totalLineItems = lineItems.reduce((s, l) => s + lineTotal(l), 0);
+  const totalAmount = hasLines ? totalLineItems : parseNum(amount);
 
-  function updateLine(id: string, field: 'name' | 'amount', val: string) {
+  function updateLine(id: string, field: keyof Omit<LineItemRow, 'id'>, val: string) {
     setLineItems(prev => prev.map(l => l.id === id ? { ...l, [field]: val } : l));
   }
   function removeLine(id: string) {
     setLineItems(prev => prev.filter(l => l.id !== id));
   }
 
+  // ── Open expense for editing ────────────────────────────────────
+  function openEdit(expense: Expense) {
+    setEditingId(expense.id);
+    setDescription(expense.description);
+    setCategory(expense.category);
+    setPaymentMethod(expense.paymentMethod);
+    setDate(expense.date);
+    if (expense.lineItems?.length) {
+      setLineItems(expense.lineItems.map(li => ({
+        id: Math.random().toString(36).slice(2),
+        name: li.name,
+        qty: li.quantity ? String(li.quantity) : '',
+        amount: li.quantity ? String(Math.round(li.amount / li.quantity)) : String(li.amount),
+      })));
+      setAmount('');
+    } else {
+      setLineItems([]);
+      setAmount(String(expense.amount));
+    }
+    setTab('add');
+  }
+
   // ── Submit ──────────────────────────────────────────────────────
-  async function handleAdd() {
+  async function handleSave() {
     if (!description.trim()) return Alert.alert('Erreur', 'Ajoutez un titre / description.');
     if (totalAmount <= 0) return Alert.alert('Erreur', hasLines ? 'Ajoutez au moins un article avec un montant.' : 'Montant invalide.');
 
     const validLines: ExpenseLineItem[] = lineItems
-      .filter(l => l.name.trim() && parseInt(l.amount.replace(/\s/g, ''), 10) > 0)
-      .map(l => ({ name: l.name.trim(), amount: parseInt(l.amount.replace(/\s/g, ''), 10) }));
+      .filter(l => l.name.trim() && parseNum(l.amount) > 0)
+      .map(l => {
+        const q = parseInt(l.qty, 10);
+        const unitPrice = parseNum(l.amount);
+        return {
+          name: l.name.trim(),
+          amount: q > 0 ? q * unitPrice : unitPrice,
+          quantity: q > 0 ? q : undefined,
+        };
+      });
 
-    const item = await addExpense({
-      date,
-      category,
-      description: description.trim(),
-      amount: totalAmount,
-      paymentMethod,
-      lineItems: validLines.length > 0 ? validLines : undefined,
-    });
-    clearDraft();
-    setExpenses(prev => [item, ...prev]);
-    Alert.alert('Dépense ajoutée', `${formatGNF(totalAmount)} enregistré.`);
+    if (editingId) {
+      await updateExpense(editingId, {
+        date,
+        category,
+        description: description.trim(),
+        amount: totalAmount,
+        paymentMethod,
+        lineItems: validLines.length > 0 ? validLines : undefined,
+      });
+      clearForm();
+      await load();
+      Alert.alert('Dépense mise à jour', `${formatGNF(totalAmount)} enregistré.`);
+    } else {
+      const item = await addExpense({
+        date,
+        category,
+        description: description.trim(),
+        amount: totalAmount,
+        paymentMethod,
+        lineItems: validLines.length > 0 ? validLines : undefined,
+      });
+      clearForm();
+      setExpenses(prev => [item, ...prev]);
+      Alert.alert('Dépense ajoutée', `${formatGNF(totalAmount)} enregistré.`);
+    }
   }
 
   async function handleDelete(id: string) {
@@ -165,6 +216,7 @@ export default function ExpensesScreen() {
       { text: 'Supprimer', style: 'destructive', onPress: async () => {
         await deleteExpense(id);
         setExpenses(prev => prev.filter(e => e.id !== id));
+        if (editingId === id) clearForm();
       }},
     ]);
   }
@@ -217,7 +269,9 @@ export default function ExpensesScreen() {
 
       <View style={styles.tabs}>
         <TouchableOpacity style={[styles.tab, tab === 'add' && styles.tabActive]} onPress={() => setTab('add')}>
-          <Text style={[styles.tabText, tab === 'add' && styles.tabTextActive]}>Ajouter</Text>
+          <Text style={[styles.tabText, tab === 'add' && styles.tabTextActive]}>
+            {editingId ? 'Modifier' : 'Ajouter'}
+          </Text>
         </TouchableOpacity>
         <TouchableOpacity style={[styles.tab, tab === 'history' && styles.tabActive]} onPress={() => setTab('history')}>
           <Text style={[styles.tabText, tab === 'history' && styles.tabTextActive]}>Historique ({expenses.length})</Text>
@@ -226,6 +280,15 @@ export default function ExpensesScreen() {
 
       {tab === 'add' ? (
         <ScrollView contentContainerStyle={styles.form} keyboardShouldPersistTaps="handled">
+          {!!editingId && (
+            <View style={styles.editBanner}>
+              <Ionicons name="pencil" size={14} color={C.orange} />
+              <Text style={styles.editBannerText}>Mode modification — enregistrez pour mettre à jour</Text>
+              <TouchableOpacity onPress={clearForm}>
+                <Text style={styles.editCancelText}>Annuler</Text>
+              </TouchableOpacity>
+            </View>
+          )}
 
           {/* Category */}
           <Text style={styles.label}>Catégorie</Text>
@@ -261,34 +324,57 @@ export default function ExpensesScreen() {
           )}
 
           {lineItems.map((line, idx) => (
-            <View key={line.id} style={styles.lineRow}>
-              <Text style={styles.lineNum}>{idx + 1}</Text>
-              <TextInput
-                style={[styles.input, styles.lineName]}
-                placeholder="Article…"
-                placeholderTextColor={C.muted}
-                value={line.name}
-                onChangeText={v => updateLine(line.id, 'name', v)}
-              />
-              <TextInput
-                style={[styles.input, styles.lineAmt]}
-                placeholder="GNF"
-                placeholderTextColor={C.muted}
-                keyboardType="numeric"
-                value={line.amount}
-                onChangeText={v => updateLine(line.id, 'amount', v)}
-              />
-              <TouchableOpacity onPress={() => removeLine(line.id)} style={styles.lineDelete}>
-                <Ionicons name="close-circle" size={20} color={C.red} />
-              </TouchableOpacity>
+            <View key={line.id} style={styles.lineBlock}>
+              <View style={styles.lineRow}>
+                <Text style={styles.lineNum}>{idx + 1}</Text>
+                <TextInput
+                  style={[styles.input, styles.lineName]}
+                  placeholder="Article…"
+                  placeholderTextColor={C.muted}
+                  value={line.name}
+                  onChangeText={v => updateLine(line.id, 'name', v)}
+                />
+                <TouchableOpacity onPress={() => removeLine(line.id)} style={styles.lineDelete}>
+                  <Ionicons name="close-circle" size={20} color={C.red} />
+                </TouchableOpacity>
+              </View>
+              <View style={styles.lineAmtRow}>
+                <View style={styles.qtyWrap}>
+                  <Text style={styles.qtyLabel}>Qté</Text>
+                  <TextInput
+                    style={[styles.input, styles.qtyInput]}
+                    placeholder="—"
+                    placeholderTextColor={C.muted}
+                    keyboardType="numeric"
+                    value={line.qty}
+                    onChangeText={v => updateLine(line.id, 'qty', v)}
+                  />
+                </View>
+                <Text style={styles.qtyX}>×</Text>
+                <View style={styles.priceWrap}>
+                  <Text style={styles.qtyLabel}>Prix unit. (GNF)</Text>
+                  <TextInput
+                    style={[styles.input, styles.lineAmt]}
+                    placeholder="0"
+                    placeholderTextColor={C.muted}
+                    keyboardType="numeric"
+                    value={line.amount}
+                    onChangeText={v => updateLine(line.id, 'amount', v)}
+                  />
+                </View>
+                <View style={styles.lineTotalWrap}>
+                  <Text style={styles.qtyLabel}>Total</Text>
+                  <Text style={styles.lineTotalVal}>{formatGNF(lineTotal(line))}</Text>
+                </View>
+              </View>
             </View>
           ))}
 
-          {/* Total line (computed) or manual amount */}
+          {/* Total line or manual amount */}
           {hasLines ? (
             <View style={styles.totalRow}>
               <Text style={styles.totalLabel}>Total</Text>
-              <Text style={styles.totalValue}>{formatGNF(lineTotal)}</Text>
+              <Text style={styles.totalValue}>{formatGNF(totalLineItems)}</Text>
             </View>
           ) : (
             <>
@@ -322,15 +408,17 @@ export default function ExpensesScreen() {
             ))}
           </View>
 
-          <TouchableOpacity style={styles.addBtn} onPress={handleAdd}>
-            <Text style={styles.addBtnText}>Enregistrer — {totalAmount > 0 ? formatGNF(totalAmount) : '…'}</Text>
+          <TouchableOpacity style={styles.addBtn} onPress={handleSave}>
+            <Text style={styles.addBtnText}>
+              {editingId ? `Mettre à jour — ${totalAmount > 0 ? formatGNF(totalAmount) : '…'}` : `Enregistrer — ${totalAmount > 0 ? formatGNF(totalAmount) : '…'}`}
+            </Text>
           </TouchableOpacity>
 
-          {(description || amount || lineItems.length > 0) && (
+          {!editingId && (description || amount || lineItems.length > 0) && (
             <TouchableOpacity style={styles.discardBtn} onPress={() => {
               Alert.alert('Effacer le brouillon ?', '', [
                 { text: 'Annuler', style: 'cancel' },
-                { text: 'Effacer', style: 'destructive', onPress: clearDraft },
+                { text: 'Effacer', style: 'destructive', onPress: clearForm },
               ]);
             }}>
               <Text style={styles.discardTxt}>Effacer le brouillon</Text>
@@ -354,8 +442,8 @@ export default function ExpensesScreen() {
             const isExpanded = expandedId === item.id;
             return (
               <TouchableOpacity
-                style={styles.expenseCard}
-                activeOpacity={item.lineItems?.length ? 0.7 : 1}
+                style={[styles.expenseCard, editingId === item.id && styles.expenseCardEditing]}
+                activeOpacity={0.85}
                 onPress={() => item.lineItems?.length ? setExpandedId(isExpanded ? null : item.id) : null}
               >
                 <View style={styles.expenseMain}>
@@ -369,14 +457,19 @@ export default function ExpensesScreen() {
                   </View>
                   <View style={styles.expenseRight}>
                     <Text style={styles.expenseAmount}>{formatGNF(item.amount)}</Text>
+                    <TouchableOpacity onPress={() => openEdit(item)} style={{ padding: 4 }}>
+                      <Ionicons name="pencil-outline" size={16} color={C.primary} />
+                    </TouchableOpacity>
                     <TouchableOpacity onPress={() => handleDelete(item.id)} style={{ padding: 4 }}>
-                      <Ionicons name="trash-outline" size={18} color={C.red} />
+                      <Ionicons name="trash-outline" size={16} color={C.red} />
                     </TouchableOpacity>
                   </View>
                 </View>
                 {isExpanded && item.lineItems?.map((li, i) => (
                   <View key={i} style={styles.lineItemRow}>
-                    <Text style={styles.lineItemName}>{li.name}</Text>
+                    <Text style={styles.lineItemName}>
+                      {li.quantity ? `${li.quantity} × ` : ''}{li.name}
+                    </Text>
                     <Text style={styles.lineItemAmt}>{formatGNF(li.amount)}</Text>
                   </View>
                 ))}
@@ -468,17 +561,30 @@ const styles = StyleSheet.create({
   input: { backgroundColor: C.card, borderRadius: 12, padding: 14, fontSize: 15, color: C.text, borderWidth: 1, borderColor: C.border },
   picker: { backgroundColor: C.card, borderRadius: 12, padding: 14, borderWidth: 1, borderColor: C.border, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   pickerText: { fontSize: 16, color: C.text },
+  // edit banner
+  editBanner: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#FEF4E4', borderRadius: 10, padding: 12, marginBottom: 4 },
+  editBannerText: { flex: 1, fontSize: 13, color: C.orange, fontWeight: '500' },
+  editCancelText: { fontSize: 13, color: C.red, fontWeight: '600' },
   // line items
   lineHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 14, marginBottom: 6 },
   addLineBtn: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   addLineTxt: { fontSize: 14, fontWeight: '600', color: C.primary },
   emptyLines: { flexDirection: 'row', alignItems: 'center', gap: 8, borderWidth: 1, borderColor: C.border, borderStyle: 'dashed', borderRadius: 12, padding: 14, justifyContent: 'center' },
   emptyLinesTxt: { fontSize: 14, color: C.muted },
-  lineRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 },
+  lineBlock: { marginBottom: 10, backgroundColor: C.card, borderRadius: 12, borderWidth: 1, borderColor: C.border, padding: 10, gap: 8 },
+  lineRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   lineNum: { fontSize: 13, color: C.muted, width: 18, textAlign: 'center' },
-  lineName: { flex: 1, marginBottom: 0, paddingVertical: 11 },
-  lineAmt: { width: 100, marginBottom: 0, paddingVertical: 11 },
+  lineName: { flex: 1, marginBottom: 0, paddingVertical: 10 },
   lineDelete: { padding: 4 },
+  lineAmtRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 8 },
+  qtyWrap: { alignItems: 'center', width: 56 },
+  qtyLabel: { fontSize: 10, color: C.muted, marginBottom: 4 },
+  qtyInput: { width: 56, paddingVertical: 10, textAlign: 'center', marginBottom: 0 },
+  qtyX: { fontSize: 18, color: C.muted, marginBottom: 8 },
+  priceWrap: { flex: 1, alignItems: 'flex-start' },
+  lineAmt: { width: '100%', marginBottom: 0, paddingVertical: 10 },
+  lineTotalWrap: { alignItems: 'flex-end', minWidth: 72 },
+  lineTotalVal: { fontSize: 13, fontWeight: '700', color: C.primary, marginBottom: 8 },
   totalRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderColor: C.border },
   totalLabel: { fontSize: 15, fontWeight: '700', color: C.text },
   totalValue: { fontSize: 18, fontWeight: '800', color: C.primary },
@@ -496,14 +602,15 @@ const styles = StyleSheet.create({
   sectionTitle: { fontSize: 14, fontWeight: '700', color: C.text },
   sectionTotal: { fontSize: 14, fontWeight: '700', color: C.red },
   expenseCard: { backgroundColor: C.card, borderRadius: 12, borderWidth: 1, borderColor: C.border, overflow: 'hidden' },
+  expenseCardEditing: { borderColor: C.orange, borderWidth: 2 },
   expenseMain: { flexDirection: 'row', alignItems: 'center', padding: 14, gap: 12 },
   expenseIcon: { fontSize: 28 },
   expenseDesc: { fontSize: 15, fontWeight: '600', color: C.text },
   expenseMeta: { fontSize: 12, color: C.muted, marginTop: 2 },
-  expenseRight: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  expenseRight: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   expenseAmount: { fontSize: 15, fontWeight: '700', color: C.red },
   lineItemRow: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 58, paddingVertical: 7, borderTopWidth: 1, borderColor: C.border, backgroundColor: '#FAFAF8' },
-  lineItemName: { fontSize: 13, color: C.muted },
+  lineItemName: { fontSize: 13, color: C.muted, flex: 1 },
   lineItemAmt: { fontSize: 13, fontWeight: '600', color: C.text },
   empty: { textAlign: 'center', color: C.muted, marginTop: 40, fontSize: 15 },
   // category sheet

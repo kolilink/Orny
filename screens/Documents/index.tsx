@@ -104,12 +104,15 @@ export default function DocumentsScreen() {
               style={styles.card}
               onPress={() => navigation.navigate('DocumentDetail', { document: item })}
             >
-              <View style={[styles.thumb, { backgroundColor: item.fileUri.startsWith('placeholder:')
-                ? item.fileUri.replace('placeholder:', '') : '#E8E8E4' }]}
-              >
-                {!item.fileUri.startsWith('placeholder:') && (
-                  <Ionicons name={item.fileType === 'pdf' ? 'document' : 'image'} size={24} color="#6B6B66" />
-                )}
+              <View style={[
+                styles.thumb,
+                { backgroundColor: item.fileType === 'pdf' ? '#FDECEA' : '#E8F0FE' },
+              ]}>
+                <Ionicons
+                  name={item.fileType === 'pdf' ? 'document-text' : 'image-outline'}
+                  size={30}
+                  color={item.fileType === 'pdf' ? '#E24B4A' : '#4A90D9'}
+                />
               </View>
               <View style={styles.cardBody}>
                 <Text style={styles.cardTitle} numberOfLines={2}>{item.title}</Text>

@@ -1,7 +1,8 @@
 import React from 'react';
 import {
-  View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, Linking, Alert,
+  View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, Linking, Alert, Platform,
 } from 'react-native';
+import * as FileSystem from 'expo-file-system/legacy';
 import { RouteProp, useRoute } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { RootStackParamList, BusinessDocument } from '../../types';
@@ -52,14 +53,24 @@ export default function DocumentDetailScreen() {
       return;
     }
     try {
-      const supported = await Linking.canOpenURL(doc.fileUri);
-      if (supported) {
-        await Linking.openURL(doc.fileUri);
+      if (Platform.OS === 'web') {
+        const base64 = await FileSystem.readAsStringAsync(doc.fileUri, {
+          encoding: (FileSystem as any).EncodingType?.Base64 ?? 'base64',
+        });
+        const mimeType = doc.fileType === 'pdf' ? 'application/pdf' : 'image/jpeg';
+        const byteCharacters = atob(base64);
+        const byteArray = new Uint8Array(byteCharacters.length);
+        for (let i = 0; i < byteCharacters.length; i++) {
+          byteArray[i] = byteCharacters.charCodeAt(i);
+        }
+        const blob = new Blob([byteArray], { type: mimeType });
+        const url = URL.createObjectURL(blob);
+        (window as any).open(url, '_blank');
       } else {
-        Alert.alert('Impossible d\'ouvrir', 'Aucune application disponible pour ouvrir ce fichier.');
+        await Linking.openURL(doc.fileUri);
       }
     } catch {
-      Alert.alert('Erreur', 'Impossible d\'ouvrir le fichier.');
+      Alert.alert('Impossible d\'ouvrir', 'Le fichier n\'est plus disponible. Essayez de le ré-ajouter.');
     }
   };
 

@@ -4,12 +4,12 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
-import { getSales } from '../../store/sales';
-import { getBatches } from '../../store/production';
-import { getStock } from '../../store/stock';
+import { getSales, syncSalesFromSupabase } from '../../store/sales';
+import { getBatches, syncProductionFromSupabase } from '../../store/production';
+import { getStock, syncStockFromSupabase } from '../../store/stock';
 import { getClients } from '../../store/clients';
-import { getExpenses } from '../../store/expenses';
-import { getCustomerOrders } from '../../store/customerOrders';
+import { getExpenses, syncExpensesFromSupabase } from '../../store/expenses';
+import { getCustomerOrders, syncCustomerOrdersFromSupabase } from '../../store/customerOrders';
 import { checkStockAlerts, checkOverdueOrders } from '../../utils/notifications';
 import { formatGNF } from '../../utils/format';
 import { isToday, isThisWeek, getLast7Days, getDayLabel } from '../../utils/dates';
@@ -40,6 +40,7 @@ export default function DashboardScreen() {
   const [refreshing, setRefreshing] = useState(false);
 
   const load = useCallback(async () => {
+    // Read from cache immediately (fast for returning users)
     const [s, b, st, clients, exp, ord] = await Promise.all([getSales(), getBatches(), getStock(), getClients(), getExpenses(), getCustomerOrders()]);
     setSalesState(s);
     setBatchesState(b);
@@ -49,6 +50,12 @@ export default function DashboardScreen() {
     setOrdersState(ord);
     checkStockAlerts(st);
     checkOverdueOrders(ord);
+    // Sync from Supabase in background — essential for new devices (investors)
+    syncSalesFromSupabase().then(() => getSales().then(setSalesState));
+    syncProductionFromSupabase().then(() => getBatches().then(setBatchesState));
+    syncStockFromSupabase().then(() => getStock().then((st2) => { setStockState(st2); checkStockAlerts(st2); }));
+    syncExpensesFromSupabase().then(() => getExpenses().then(setExpensesState));
+    syncCustomerOrdersFromSupabase().then(() => getCustomerOrders().then((ord2) => { setOrdersState(ord2); checkOverdueOrders(ord2); }));
   }, []);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));

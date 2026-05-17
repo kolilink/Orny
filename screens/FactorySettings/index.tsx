@@ -50,6 +50,9 @@ export default function FactorySettingsScreen() {
   const [targetInput, setTargetInput] = useState('');
   const [approveModal, setApproveModal] = useState(false);
   const [selectedRequest, setSelectedRequest] = useState<JoinRequestDisplay | null>(null);
+  const [memberModal, setMemberModal] = useState(false);
+  const [selectedMember, setSelectedMember] = useState<MemberDisplay | null>(null);
+  const [removeConfirmModal, setRemoveConfirmModal] = useState(false);
 
   const isAdmin = membership?.role === 'admin';
 
@@ -141,27 +144,8 @@ export default function FactorySettingsScreen() {
 
   function handleMemberOptions(member: MemberDisplay) {
     if (member.isCurrentUser) return;
-    Alert.alert(member.email, `Rôle actuel : ${ROLE_LABELS[member.role]}`, [
-      {
-        text: 'Changer le rôle', onPress: () => {
-          Alert.alert('Nouveau rôle', '', [
-            { text: 'Employé', onPress: async () => { await updateMemberRole(member.userId, 'employee'); await load(); } },
-            { text: 'Investisseur', onPress: async () => { await updateMemberRole(member.userId, 'investor'); await load(); } },
-            { text: 'Administrateur', onPress: async () => { await updateMemberRole(member.userId, 'admin'); await load(); } },
-            { text: 'Annuler', style: 'cancel' },
-          ]);
-        },
-      },
-      {
-        text: 'Retirer de l\'usine', style: 'destructive', onPress: async () => {
-          Alert.alert('Retirer ce membre ?', member.email, [
-            { text: 'Annuler', style: 'cancel' },
-            { text: 'Retirer', style: 'destructive', onPress: async () => { await removeMember(member.userId); await load(); } },
-          ]);
-        },
-      },
-      { text: 'Annuler', style: 'cancel' },
-    ]);
+    setSelectedMember(member);
+    setMemberModal(true);
   }
 
   function handleApproveRequest(req: JoinRequestDisplay) {
@@ -320,6 +304,69 @@ export default function FactorySettingsScreen() {
             <TouchableOpacity style={styles.modalCancel} onPress={() => setApproveModal(false)}>
               <Text style={styles.modalCancelText}>Annuler</Text>
             </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Member options modal — role change + remove */}
+      <Modal visible={memberModal} transparent animationType="fade" onRequestClose={() => setMemberModal(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalBox}>
+            <Text style={styles.modalTitle}>{selectedMember?.email}</Text>
+            <Text style={[styles.modalSub, { marginBottom: 4 }]}>
+              Rôle actuel : {selectedMember ? ROLE_LABELS[selectedMember.role] : ''}
+            </Text>
+            <Text style={[styles.modalSub, { marginBottom: 12 }]}>Choisissez un nouveau rôle :</Text>
+            {(['employee', 'investor', 'admin'] as UserRole[]).map((role) => (
+              <TouchableOpacity
+                key={role}
+                style={[styles.roleBtn, { borderColor: ROLE_COLORS[role] }]}
+                onPress={async () => {
+                  if (!selectedMember) return;
+                  setMemberModal(false);
+                  await updateMemberRole(selectedMember.userId, role);
+                  await load();
+                }}
+              >
+                <Text style={[styles.roleBtnText, { color: ROLE_COLORS[role] }]}>{ROLE_LABELS[role]}</Text>
+              </TouchableOpacity>
+            ))}
+            <TouchableOpacity
+              style={[styles.roleBtn, { borderColor: C.red, marginTop: 8 }]}
+              onPress={() => { setMemberModal(false); setRemoveConfirmModal(true); }}
+            >
+              <Text style={[styles.roleBtnText, { color: C.red }]}>Retirer de l'usine</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.modalCancel} onPress={() => setMemberModal(false)}>
+              <Text style={styles.modalCancelText}>Annuler</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Remove member confirmation modal */}
+      <Modal visible={removeConfirmModal} transparent animationType="fade" onRequestClose={() => setRemoveConfirmModal(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalBox}>
+            <Text style={styles.modalTitle}>Retirer ce membre ?</Text>
+            <Text style={[styles.modalSub, { marginBottom: 20 }]}>{selectedMember?.email}</Text>
+            <View style={styles.modalBtns}>
+              <TouchableOpacity style={styles.modalCancel} onPress={() => setRemoveConfirmModal(false)}>
+                <Text style={styles.modalCancelText}>Annuler</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modalSave, { backgroundColor: C.red }]}
+                onPress={async () => {
+                  if (!selectedMember) return;
+                  setRemoveConfirmModal(false);
+                  await removeMember(selectedMember.userId);
+                  await load();
+                  setSelectedMember(null);
+                }}
+              >
+                <Text style={styles.modalSaveText}>Retirer</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
       </Modal>

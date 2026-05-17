@@ -92,6 +92,7 @@ export interface Investor {
   sharePercentage: number;
   dateAdded: string;
   notes?: string;
+  userId?: string;
 }
 
 export const isSalePaid = (sale: Sale): boolean => {
@@ -115,6 +116,7 @@ export interface CustomCategory {
 export interface ExpenseLineItem {
   name: string;
   amount: number;
+  quantity?: number;
 }
 
 export interface Expense {

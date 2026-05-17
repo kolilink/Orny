@@ -6,13 +6,16 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
-import { getInvestors, addInvestor, updateInvestor, deleteInvestor } from '../../store/investors';
+import { useAuth } from '../../context/AuthContext';
+import { getInvestors, addInvestor, updateInvestor, deleteInvestor, syncInvestorsFromSupabase } from '../../store/investors';
 import {
   getInvestmentEntries, addInvestmentEntry, deleteInvestmentEntry,
+  syncInvestmentEntriesFromSupabase,
 } from '../../store/investmentEntries';
 import { Investor, InvestmentEntry } from '../../types';
 import { formatGNF, formatDate } from '../../utils/format';
 import { toDateString } from '../../utils/dates';
+import DatePickerField from '../../components/DatePickerField';
 
 const C = {
   primary: '#1D9E75',
@@ -34,6 +37,10 @@ const EMPTY_ENTRY: EntryForm = { amount: '', date: toDateString(), notes: '' };
 
 export default function InvestorsScreen() {
   const insets = useSafeAreaInsets();
+  const { membership, user } = useAuth();
+  const isAdmin = membership?.role === 'admin';
+  const isInvestor = membership?.role === 'investor';
+
   const [investors, setInvestorsState] = useState<Investor[]>([]);
   const [entries, setEntriesState] = useState<InvestmentEntry[]>([]);
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -49,12 +56,19 @@ export default function InvestorsScreen() {
   const [saving, setSaving] = useState(false);
 
   const load = useCallback(async () => {
+    syncInvestorsFromSupabase();
+    syncInvestmentEntriesFromSupabase();
     const [inv, ent] = await Promise.all([getInvestors(), getInvestmentEntries()]);
     setInvestorsState(inv);
     setEntriesState(ent);
   }, []);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
+
+  // Filter: investor role only sees their own linked record
+  const visibleInvestors = isInvestor
+    ? investors.filter(inv => inv.userId === user?.id)
+    : investors;
 
   const totalForInvestor = (investor: Investor): number => {
     const entriesSum = entries
@@ -186,14 +200,42 @@ export default function InvestorsScreen() {
     setExpandedId((prev) => (prev === id ? null : id));
   };
 
+  // ── Investor role: no linked record found ────────────────────────
+  if (isInvestor && visibleInvestors.length === 0) {
+    return (
+      <View style={[styles.container, { paddingTop: insets.top }]}>
+        <View style={styles.header}>
+          <Text style={styles.title}>Mon investissement</Text>
+        </View>
+        <View style={styles.emptyWrap}>
+          <Ionicons name="information-circle-outline" size={48} color={C.muted} />
+          <Text style={styles.emptyText}>Profil non lié</Text>
+          <Text style={styles.emptyHint}>
+            Votre profil d'investisseur n'a pas encore été configuré.{'\n'}
+            Contactez l'administrateur pour qu'il lie votre compte à vos données d'investisseur.
+          </Text>
+        </View>
+      </View>
+    );
+  }
+
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <View style={styles.header}>
-        <Text style={styles.title}>Investisseurs</Text>
-        <TouchableOpacity style={styles.addBtn} onPress={openAddInvestor}>
-          <Ionicons name="add" size={24} color="#FFFFFF" />
-        </TouchableOpacity>
+        <Text style={styles.title}>{isInvestor ? 'Mon investissement' : 'Investisseurs'}</Text>
+        {isAdmin && (
+          <TouchableOpacity style={styles.addBtn} onPress={openAddInvestor}>
+            <Ionicons name="add" size={24} color="#FFFFFF" />
+          </TouchableOpacity>
+        )}
       </View>
+
+      {isInvestor && (
+        <View style={styles.readOnlyBanner}>
+          <Ionicons name="eye-outline" size={14} color={C.muted} />
+          <Text style={styles.readOnlyText}>Vue lecture seule — contactez l'administrateur pour modifier</Text>
+        </View>
+      )}
 
       <View style={styles.summaryCard}>
         <View style={styles.summaryItem}>
@@ -205,7 +247,7 @@ export default function InvestorsScreen() {
           <Text style={styles.summaryLabel}>Parts distribuées</Text>
           <Text style={styles.summaryValue}>{totalShares.toFixed(1)}%</Text>
         </View>
-        {totalShares < 100 && (
+        {!isInvestor && totalShares < 100 && (
           <>
             <View style={styles.divider} />
             <View style={styles.summaryItem}>
@@ -219,14 +261,14 @@ export default function InvestorsScreen() {
       </View>
 
       <FlatList
-        data={investors}
+        data={visibleInvestors}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.list}
         ListEmptyComponent={
           <View style={styles.emptyWrap}>
             <Ionicons name="trending-up-outline" size={48} color={C.muted} />
             <Text style={styles.emptyText}>Aucun investisseur</Text>
-            <Text style={styles.emptyHint}>Appuyez sur + pour ajouter un investisseur</Text>
+            {isAdmin && <Text style={styles.emptyHint}>Appuyez sur + pour ajouter un investisseur</Text>}
           </View>
         }
         renderItem={({ item }) => {
@@ -249,14 +291,16 @@ export default function InvestorsScreen() {
                     <Text style={styles.investorNotes} numberOfLines={1}>{item.notes}</Text>
                   )}
                 </View>
-                <View style={styles.cardActions}>
-                  <TouchableOpacity style={styles.actionBtn} onPress={() => openEditInvestor(item)}>
-                    <Ionicons name="pencil-outline" size={18} color={C.primary} />
-                  </TouchableOpacity>
-                  <TouchableOpacity style={styles.actionBtn} onPress={() => handleDeleteInvestor(item)}>
-                    <Ionicons name="trash-outline" size={18} color={C.red} />
-                  </TouchableOpacity>
-                </View>
+                {isAdmin && (
+                  <View style={styles.cardActions}>
+                    <TouchableOpacity style={styles.actionBtn} onPress={() => openEditInvestor(item)}>
+                      <Ionicons name="pencil-outline" size={18} color={C.primary} />
+                    </TouchableOpacity>
+                    <TouchableOpacity style={styles.actionBtn} onPress={() => handleDeleteInvestor(item)}>
+                      <Ionicons name="trash-outline" size={18} color={C.red} />
+                    </TouchableOpacity>
+                  </View>
+                )}
               </View>
 
               <View style={styles.cardStats}>
@@ -288,13 +332,15 @@ export default function InvestorsScreen() {
                     Historique ({item.amountInvested > 0 ? investorEntries.length + 1 : investorEntries.length} versements)
                   </Text>
                 </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.addEntryBtn}
-                  onPress={() => openAddEntry(item.id)}
-                >
-                  <Ionicons name="add" size={16} color={C.primary} />
-                  <Text style={styles.addEntryText}>Versement</Text>
-                </TouchableOpacity>
+                {isAdmin && (
+                  <TouchableOpacity
+                    style={styles.addEntryBtn}
+                    onPress={() => openAddEntry(item.id)}
+                  >
+                    <Ionicons name="add" size={16} color={C.primary} />
+                    <Text style={styles.addEntryText}>Versement</Text>
+                  </TouchableOpacity>
+                )}
               </View>
 
               {isExpanded && (
@@ -320,12 +366,14 @@ export default function InvestorsScreen() {
                         )}
                       </View>
                       <Text style={styles.entryDate}>{formatDate(entry.date)}</Text>
-                      <TouchableOpacity
-                        style={styles.deleteEntryBtn}
-                        onPress={() => handleDeleteEntry(entry)}
-                      >
-                        <Ionicons name="close-circle-outline" size={18} color={C.red} />
-                      </TouchableOpacity>
+                      {isAdmin && (
+                        <TouchableOpacity
+                          style={styles.deleteEntryBtn}
+                          onPress={() => handleDeleteEntry(entry)}
+                        >
+                          <Ionicons name="close-circle-outline" size={18} color={C.red} />
+                        </TouchableOpacity>
+                      )}
                     </View>
                   ))}
                 </View>
@@ -335,7 +383,7 @@ export default function InvestorsScreen() {
         }}
       />
 
-      {/* Investor form modal */}
+      {/* Investor form modal — admin only */}
       <Modal visible={showInvestorModal} animationType="slide" transparent onRequestClose={() => setShowInvestorModal(false)}>
         <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
           <View style={styles.modalOverlay}>
@@ -398,7 +446,7 @@ export default function InvestorsScreen() {
         </KeyboardAvoidingView>
       </Modal>
 
-      {/* Investment entry modal */}
+      {/* Investment entry modal — admin only */}
       <Modal visible={showEntryModal} animationType="slide" transparent onRequestClose={() => setShowEntryModal(false)}>
         <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
           <View style={styles.modalOverlay}>
@@ -413,12 +461,10 @@ export default function InvestorsScreen() {
                 onChangeText={(v) => setEntryForm((f) => ({ ...f, amount: v }))}
                 autoFocus
               />
-              <Text style={styles.fieldLabel}>Date (AAAA-MM-JJ)</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="2026-05-12"
+              <DatePickerField
+                label="Date"
                 value={entryForm.date}
-                onChangeText={(v) => setEntryForm((f) => ({ ...f, date: v }))}
+                onChange={(v) => setEntryForm((f) => ({ ...f, date: v }))}
               />
               <Text style={styles.fieldLabel}>Notes (optionnel)</Text>
               <TextInput
@@ -460,6 +506,12 @@ const styles = StyleSheet.create({
     width: 44, height: 44, borderRadius: 22,
     backgroundColor: C.primary, alignItems: 'center', justifyContent: 'center',
   },
+  readOnlyBanner: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    backgroundColor: '#F0F0EE', paddingHorizontal: 16, paddingVertical: 8,
+    borderBottomWidth: 1, borderColor: C.border,
+  },
+  readOnlyText: { fontSize: 12, color: C.muted },
   summaryCard: {
     backgroundColor: C.card, margin: 16, borderRadius: 14,
     borderWidth: 1, borderColor: C.border,
@@ -471,9 +523,9 @@ const styles = StyleSheet.create({
   summaryValue: { fontSize: 15, fontWeight: '700', color: C.text, textAlign: 'center' },
   divider: { width: 1, backgroundColor: C.border, marginHorizontal: 8 },
   list: { paddingHorizontal: 16, paddingBottom: 40, gap: 10 },
-  emptyWrap: { alignItems: 'center', paddingTop: 40, gap: 8 },
+  emptyWrap: { alignItems: 'center', paddingTop: 40, gap: 8, paddingHorizontal: 32 },
   emptyText: { fontSize: 16, fontWeight: '600', color: C.muted },
-  emptyHint: { fontSize: 13, color: C.muted, textAlign: 'center' },
+  emptyHint: { fontSize: 13, color: C.muted, textAlign: 'center', lineHeight: 20 },
   card: {
     backgroundColor: C.card, borderRadius: 12, padding: 14,
     borderWidth: 1, borderColor: C.border,

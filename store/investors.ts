@@ -29,6 +29,7 @@ export const syncInvestorsFromSupabase = async (): Promise<void> => {
     sharePercentage: r.share_percentage,
     dateAdded: r.date_added,
     notes: r.notes,
+    userId: r.user_id ?? undefined,
   }));
   await setCache(investors);
 };
@@ -54,6 +55,7 @@ export const addInvestor = async (
     share_percentage: newInvestor.sharePercentage,
     date_added: newInvestor.dateAdded,
     notes: newInvestor.notes ?? null,
+    user_id: newInvestor.userId ?? null,
   }).then(({ error }) => { if (error) console.warn('investors insert sync error', error.message); });
 
   return newInvestor;
@@ -71,6 +73,7 @@ export const updateInvestor = async (
   if (updates.amountInvested !== undefined) row.amount_invested = updates.amountInvested;
   if (updates.sharePercentage !== undefined) row.share_percentage = updates.sharePercentage;
   if (updates.notes !== undefined) row.notes = updates.notes;
+  if (updates.userId !== undefined) row.user_id = updates.userId ?? null;
 
   supabase.from('investors').update(row).eq('id', id).eq('factory_id', getFactoryId())
     .then(({ error }) => { if (error) console.warn('investors update sync error', error.message); });
