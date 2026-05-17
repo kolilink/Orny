@@ -2,12 +2,13 @@ import React, { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, TextInput, TouchableOpacity,
   Image, ScrollView, ActivityIndicator, Alert,
-  KeyboardAvoidingView, Platform,
+  KeyboardAvoidingView, Platform, Modal,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '../../context/AuthContext';
 import { getProfile, saveProfile, saveAvatarFromUri } from '../../store/profile';
 
@@ -21,11 +22,25 @@ const C = {
   red: '#E24B4A',
 };
 
-const ROLE_LABELS = {
+const ROLE_LABELS: Record<string, string> = {
   admin: 'Administrateur',
   employee: 'Employé',
   investor: 'Investisseur',
 };
+
+const keyAvatar = (userId: string) => `profile_avatar_uri_${userId}`;
+
+// On web: convert blob URL → base64 data URL so it survives page refresh
+async function webBlobToDataUrl(blobUrl: string): Promise<string> {
+  const response = await fetch(blobUrl);
+  const blob = await response.blob();
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result as string);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
 
 export default function ProfileScreen() {
   const navigation = useNavigation();
@@ -35,6 +50,7 @@ export default function ProfileScreen() {
   const [avatarUri, setAvatarUri] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [photoModal, setPhotoModal] = useState(false);
 
   useEffect(() => {
     if (!user) return;
@@ -46,24 +62,35 @@ export default function ProfileScreen() {
   }, [user?.id]);
 
   async function pickFromLibrary() {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Permission requise', "Autorisez l'accès à la galerie.");
-      return;
+    setPhotoModal(false);
+    if (Platform.OS !== 'web') {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission requise', "Autorisez l'accès à la galerie.");
+        return;
+      }
     }
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsEditing: true,
       aspect: [1, 1],
-      quality: 0.8,
+      quality: 0.7,
     });
     if (!result.canceled && result.assets[0]) {
-      const uri = await saveAvatarFromUri(user!.id, result.assets[0].uri);
-      setAvatarUri(uri);
+      const rawUri = result.assets[0].uri;
+      if (Platform.OS === 'web') {
+        const dataUrl = rawUri.startsWith('data:') ? rawUri : await webBlobToDataUrl(rawUri);
+        await AsyncStorage.setItem(keyAvatar(user!.id), dataUrl);
+        setAvatarUri(dataUrl);
+      } else {
+        const uri = await saveAvatarFromUri(user!.id, rawUri);
+        setAvatarUri(uri);
+      }
     }
   }
 
   async function pickFromCamera() {
+    setPhotoModal(false);
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
     if (status !== 'granted') {
       Alert.alert('Permission requise', "Autorisez l'accès à la caméra.");
@@ -72,7 +99,7 @@ export default function ProfileScreen() {
     const result = await ImagePicker.launchCameraAsync({
       allowsEditing: true,
       aspect: [1, 1],
-      quality: 0.8,
+      quality: 0.7,
     });
     if (!result.canceled && result.assets[0]) {
       const uri = await saveAvatarFromUri(user!.id, result.assets[0].uri);
@@ -80,13 +107,9 @@ export default function ProfileScreen() {
     }
   }
 
-  function handleAvatarPress() {
-    Alert.alert('Photo de profil', 'Choisir une source', [
-      { text: 'Galerie photo', onPress: pickFromLibrary },
-      { text: 'Appareil photo', onPress: pickFromCamera },
-      ...(avatarUri ? [{ text: 'Supprimer la photo', style: 'destructive' as const, onPress: () => setAvatarUri(null) }] : []),
-      { text: 'Annuler', style: 'cancel' },
-    ]);
+  async function removeAvatar() {
+    setPhotoModal(false);
+    setAvatarUri(null);
   }
 
   async function handleSave() {
@@ -127,7 +150,7 @@ export default function ProfileScreen() {
         keyboardShouldPersistTaps="handled"
       >
         {/* Avatar */}
-        <TouchableOpacity style={styles.avatarWrap} onPress={handleAvatarPress} activeOpacity={0.8}>
+        <TouchableOpacity style={styles.avatarWrap} onPress={() => setPhotoModal(true)} activeOpacity={0.8}>
           {avatarUri ? (
             <Image source={{ uri: avatarUri }} style={styles.avatar} />
           ) : (
@@ -163,7 +186,7 @@ export default function ProfileScreen() {
             <>
               <Text style={styles.label}>Rôle actuel</Text>
               <View style={[styles.input, styles.readOnly, { marginBottom: 0 }]}>
-                <Text style={styles.readOnlyText}>{ROLE_LABELS[membership.role]}</Text>
+                <Text style={styles.readOnlyText}>{ROLE_LABELS[membership.role] ?? membership.role}</Text>
               </View>
             </>
           )}
@@ -179,6 +202,34 @@ export default function ProfileScreen() {
             : <Text style={styles.saveBtnText}>Enregistrer</Text>}
         </TouchableOpacity>
       </ScrollView>
+
+      {/* Photo picker modal — replaces Alert.alert (broken on web) */}
+      <Modal visible={photoModal} transparent animationType="fade" onRequestClose={() => setPhotoModal(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalBox}>
+            <Text style={styles.modalTitle}>Photo de profil</Text>
+            <TouchableOpacity style={styles.modalOption} onPress={pickFromLibrary}>
+              <Ionicons name="images-outline" size={22} color={C.primary} style={{ marginRight: 14 }} />
+              <Text style={styles.modalOptionText}>Galerie photo</Text>
+            </TouchableOpacity>
+            {Platform.OS !== 'web' && (
+              <TouchableOpacity style={styles.modalOption} onPress={pickFromCamera}>
+                <Ionicons name="camera-outline" size={22} color={C.primary} style={{ marginRight: 14 }} />
+                <Text style={styles.modalOptionText}>Appareil photo</Text>
+              </TouchableOpacity>
+            )}
+            {avatarUri && (
+              <TouchableOpacity style={styles.modalOption} onPress={removeAvatar}>
+                <Ionicons name="trash-outline" size={22} color={C.red} style={{ marginRight: 14 }} />
+                <Text style={[styles.modalOptionText, { color: C.red }]}>Supprimer la photo</Text>
+              </TouchableOpacity>
+            )}
+            <TouchableOpacity style={[styles.modalOption, { borderBottomWidth: 0 }]} onPress={() => setPhotoModal(false)}>
+              <Text style={[styles.modalOptionText, { color: C.muted }]}>Annuler</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </KeyboardAvoidingView>
   );
 }
@@ -233,4 +284,10 @@ const styles = StyleSheet.create({
     borderRadius: 14, padding: 16, alignItems: 'center',
   },
   saveBtnText: { fontSize: 16, fontWeight: '700', color: '#FFF' },
+
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', padding: 24 },
+  modalBox: { backgroundColor: C.card, borderRadius: 20, overflow: 'hidden' },
+  modalTitle: { fontSize: 15, fontWeight: '700', color: C.muted, textAlign: 'center', paddingVertical: 16, borderBottomWidth: 1, borderColor: C.border },
+  modalOption: { flexDirection: 'row', alignItems: 'center', paddingVertical: 16, paddingHorizontal: 20, borderBottomWidth: 1, borderColor: C.border },
+  modalOptionText: { fontSize: 16, color: C.text, fontWeight: '500' },
 });
