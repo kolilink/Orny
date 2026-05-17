@@ -85,11 +85,10 @@ export default function ExpensesScreen() {
     const amt = parseInt(amount.replace(/\s/g, ''), 10);
     if (!description.trim()) return Alert.alert('Erreur', 'Ajoutez une description.');
     if (!amt || amt <= 0) return Alert.alert('Erreur', 'Montant invalide.');
-    await addExpense({ date, category, description: description.trim(), amount: amt, paymentMethod });
+    const item = await addExpense({ date, category, description: description.trim(), amount: amt, paymentMethod });
     setDescription(''); setAmount(''); setCategory('autre');
     setPaymentMethod('cash'); setDate(toDateStr(new Date()));
-    const data = await getExpenses();
-    setExpenses(data);
+    setExpenses(prev => [item, ...prev]);
     Alert.alert('Dépense ajoutée', `${formatGNF(amt)} enregistré.`);
   }
 

@@ -122,7 +122,7 @@ export default function ProductionScreen() {
           unit: m.unit,
         }));
 
-      await addBatch({
+      const newBatch = await addBatch({
         date,
         potatoesUsedKg: potatoesNum,
         sachets80g: sachetsNum,
@@ -141,7 +141,9 @@ export default function ProductionScreen() {
       }
       await deductStock(stockDeductions);
 
-      await load();
+      // Optimistic update — no reload spinner
+      setBatchesState(prev => [newBatch, ...prev]);
+      getStock().then(setStockItems);
       setPotatoes('');
       setSachets('');
       setGas('');

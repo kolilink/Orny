@@ -84,7 +84,7 @@ export default function SuppliersScreen() {
     if (!pProduct.trim()) return Alert.alert('Erreur', 'Produit requis.');
     if (!qty || qty <= 0) return Alert.alert('Erreur', 'Quantité invalide.');
     if (!up || up <= 0) return Alert.alert('Erreur', 'Prix unitaire invalide.');
-    await addPurchase({
+    const item = await addPurchase({
       supplierId: pSupplier?.id,
       supplierName: pSupplier?.name ?? 'Inconnu',
       date: pDate,
@@ -99,8 +99,7 @@ export default function SuppliersScreen() {
     setPProduct(''); setPQty(''); setPUnitPrice(''); setPNotes('');
     setPPayment('cash'); setPDate(toDateStr(new Date())); setPSupplier(null);
     setPurchaseModal(false);
-    const data = await getPurchases();
-    setPurchases(data);
+    setPurchases(prev => [item, ...prev]);
   }
 
   async function handleDeletePurchase(id: string) {

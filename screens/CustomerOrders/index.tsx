@@ -68,7 +68,7 @@ export default function CustomerOrdersScreen() {
     if (!up || up <= 0) return Alert.alert('Erreur', 'Prix unitaire invalide.');
     if (!deliveryDate) return Alert.alert('Erreur', 'Date de livraison requise.');
 
-    await addCustomerOrder({
+    const item = await addCustomerOrder({
       clientName: clientName.trim(),
       product: product.trim(),
       quantity: q,
@@ -81,8 +81,7 @@ export default function CustomerOrdersScreen() {
     setClientName(''); setProduct(''); setQty(''); setUnitPrice('');
     setDeliveryDate(''); setNotes('');
     setAddModal(false);
-    const data = await getCustomerOrders();
-    setOrders(data);
+    setOrders(prev => [item, ...prev]);
   }
 
   async function handleStatusChange(order: CustomerOrder, newStatus: CustomerOrder['status']) {

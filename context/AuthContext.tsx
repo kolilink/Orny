@@ -183,20 +183,82 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   useEffect(() => {
-    let settled = false;
-    const finish = () => { if (!settled) { settled = true; setLoading(false); } };
-    const timer = setTimeout(finish, 8000);
+    let cancelled = false;
 
-    supabase.auth.getSession()
-      .then(async ({ data: { session: s } }) => { await applySession(s); })
-      .catch(() => {})
-      .finally(() => { clearTimeout(timer); finish(); });
+    async function boot() {
+      const { data: { session: s } } = await supabase.auth.getSession();
+      if (cancelled) return;
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, s) => {
+      setSession(s);
+      setUser(s?.user ?? null);
+
+      if (s?.user) {
+        const cached = await loadCachedMemberships(s.user.id);
+        if (cancelled) return;
+
+        if (cached.length > 0) {
+          // Cache hit → show app immediately, sync network in background
+          const savedId = await AsyncStorage.getItem(ACTIVE_FACTORY_KEY);
+          const active = cached.find((m) => m.factoryId === savedId) ?? cached[0];
+          setAllMemberships(cached);
+          setMembership(active);
+          setCurrentFactory(active.factoryId);
+          setPendingRequest(null);
+          setLoading(false);
+          setMembershipLoading(false);
+
+          // Silent background refresh — no spinner, just updates data if changed
+          loadAllMemberships(s.user.id).then(async (fresh) => {
+            if (cancelled || fresh.length === 0) return;
+            setAllMemberships(fresh);
+            const sid = await AsyncStorage.getItem(ACTIVE_FACTORY_KEY);
+            const act = fresh.find((m) => m.factoryId === sid) ?? fresh[0];
+            setMembership(act);
+            setCurrentFactory(act.factoryId);
+          }).catch(() => {});
+        } else {
+          // No cache (first install on this device) — wait for network, 5s max
+          try {
+            const fresh = await Promise.race([
+              loadAllMemberships(s.user.id),
+              new Promise<FactoryMembership[]>((r) => setTimeout(() => r([]), 5000)),
+            ]);
+            if (!cancelled) {
+              if (fresh.length > 0) {
+                const savedId = await AsyncStorage.getItem(ACTIVE_FACTORY_KEY);
+                const active = fresh.find((m) => m.factoryId === savedId) ?? fresh[0];
+                setAllMemberships(fresh);
+                setMembership(active);
+                setCurrentFactory(active.factoryId);
+                setPendingRequest(null);
+              } else {
+                const pr = await loadPendingRequest(s.user.id).catch(() => null);
+                setPendingRequest(pr);
+              }
+            }
+          } catch { /* keep null membership → FactorySetupScreen */ }
+          if (!cancelled) { setLoading(false); setMembershipLoading(false); }
+        }
+      } else {
+        // No session → login screen immediately
+        setLoading(false);
+        setMembershipLoading(false);
+      }
+    }
+
+    boot();
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, s) => {
+      if (cancelled) return;
+      // TOKEN_REFRESHED fires every hour — just update the token silently, no spinner
+      if (event === 'TOKEN_REFRESHED') { setSession(s); return; }
+      // INITIAL_SESSION is handled by boot() above
+      if (event === 'INITIAL_SESSION') return;
+      // SIGNED_IN / SIGNED_OUT / USER_UPDATED → full flow
       await applySession(s);
     });
 
-    return () => { settled = true; clearTimeout(timer); subscription.unsubscribe(); };
+    return () => { cancelled = true; subscription.unsubscribe(); };
   }, []);
 
   // ─── AUTH ─────────────────────────────────────────────────────
