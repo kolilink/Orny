@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TextInput,
   TouchableOpacity, KeyboardAvoidingView, Platform, Alert,
@@ -7,12 +7,14 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { addBatch, getBatches } from '../../store/production';
 import DatePickerField from '../../components/DatePickerField';
 import { deductStock, getStock } from '../../store/stock';
 import { getWeeklyTarget, setWeeklyTarget } from '../../store/weeklyTarget';
 import { ProductionBatch, StockItem } from '../../types';
 import { toDateString, isThisWeek } from '../../utils/dates';
+import { getFactoryId } from '../../store/context';
 
 const C = {
   primary: '#1D9E75',
@@ -44,6 +46,34 @@ export default function ProductionScreen() {
   const [stockItems, setStockItems] = useState<StockItem[]>([]);
   const [extraMaterials, setExtraMaterials] = useState<ExtraMaterial[]>([]);
   const [showStockPicker, setShowStockPicker] = useState(false);
+
+  // ── Draft persistence ──────────────────────────────────────────
+  const draftKey = `production_draft_${getFactoryId() ?? 'default'}`;
+  const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    AsyncStorage.getItem(draftKey).then((raw) => {
+      if (!raw) return;
+      try {
+        const d = JSON.parse(raw);
+        if (d.date) setDate(d.date);
+        if (d.potatoes) setPotatoes(d.potatoes);
+        if (d.sachets) setSachets(d.sachets);
+        if (d.gas) setGas(d.gas);
+        if (d.hours) setHours(d.hours);
+        if (d.extraMaterials?.length) setExtraMaterials(d.extraMaterials);
+      } catch {}
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (draftTimer.current) clearTimeout(draftTimer.current);
+    draftTimer.current = setTimeout(() => {
+      AsyncStorage.setItem(draftKey, JSON.stringify({ date, potatoes, sachets, gas, hours, extraMaterials }));
+    }, 400);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [date, potatoes, sachets, gas, hours, extraMaterials]);
 
   const CORE_IDS = ['pommes_de_terre', 'gaz_lpg', 'sachets_80g'];
   const extraStockItems = stockItems.filter((s) => !CORE_IDS.includes(s.id));
@@ -150,6 +180,7 @@ export default function ProductionScreen() {
       setHours('');
       setExtraMaterials([]);
       setDate(toDateString());
+      AsyncStorage.removeItem(draftKey);
       Alert.alert('Succès', 'Lot de production enregistré.');
     } finally {
       setSaving(false);

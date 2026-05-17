@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, FlatList,
   TextInput, Alert, Modal, ScrollView,
@@ -6,11 +6,13 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Supplier, Purchase } from '../../types';
 import DatePickerField from '../../components/DatePickerField';
 import { getSuppliers, addSupplier, deleteSupplier, syncSuppliersFromSupabase } from '../../store/suppliers';
 import { getPurchases, addPurchase, deletePurchase, syncPurchasesFromSupabase } from '../../store/purchases';
 import { formatGNF } from '../../utils/format';
+import { getFactoryId } from '../../store/context';
 
 const C = {
   primary: '#1D9E75', red: '#E24B4A', orange: '#EF9F27',
@@ -45,6 +47,41 @@ export default function SuppliersScreen() {
   const [pDate, setPDate] = useState(toDateStr(new Date()));
   const [pNotes, setPNotes] = useState('');
   const [supplierPickerVisible, setSupplierPickerVisible] = useState(false);
+
+  // ── Draft persistence (purchase form) ─────────────────────────
+  const purchaseDraftKey = `purchase_draft_${getFactoryId() ?? 'default'}`;
+  const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    AsyncStorage.getItem(purchaseDraftKey).then((raw) => {
+      if (!raw) return;
+      try {
+        const d = JSON.parse(raw);
+        if (d.pProduct) setPProduct(d.pProduct);
+        if (d.pQty) setPQty(d.pQty);
+        if (d.pUnit) setPUnit(d.pUnit);
+        if (d.pUnitPrice) setPUnitPrice(d.pUnitPrice);
+        if (d.pPayment) setPPayment(d.pPayment);
+        if (d.pDate) setPDate(d.pDate);
+        if (d.pNotes) setPNotes(d.pNotes);
+        if (d.pSupplierId && d.pSupplierName) {
+          setPSupplier({ id: d.pSupplierId, name: d.pSupplierName } as Supplier);
+        }
+      } catch {}
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (draftTimer.current) clearTimeout(draftTimer.current);
+    draftTimer.current = setTimeout(() => {
+      AsyncStorage.setItem(purchaseDraftKey, JSON.stringify({
+        pProduct, pQty, pUnit, pUnitPrice, pPayment, pDate, pNotes,
+        pSupplierId: pSupplier?.id, pSupplierName: pSupplier?.name,
+      }));
+    }, 400);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pProduct, pQty, pUnit, pUnitPrice, pPayment, pDate, pNotes, pSupplier]);
 
   const load = useCallback(async () => {
     syncSuppliersFromSupabase();
@@ -98,6 +135,7 @@ export default function SuppliersScreen() {
     });
     setPProduct(''); setPQty(''); setPUnitPrice(''); setPNotes('');
     setPPayment('cash'); setPDate(toDateStr(new Date())); setPSupplier(null);
+    AsyncStorage.removeItem(purchaseDraftKey);
     setPurchaseModal(false);
     setPurchases(prev => [item, ...prev]);
   }

@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, FlatList,
   TextInput, Alert, Modal, ScrollView,
@@ -6,6 +6,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { CustomerOrder } from '../../types';
 import DatePickerField from '../../components/DatePickerField';
 import {
@@ -13,6 +14,7 @@ import {
   deleteCustomerOrder, syncCustomerOrdersFromSupabase,
 } from '../../store/customerOrders';
 import { formatGNF } from '../../utils/format';
+import { getFactoryId } from '../../store/context';
 
 const C = {
   primary: '#1D9E75', red: '#E24B4A', orange: '#EF9F27',
@@ -51,6 +53,34 @@ export default function CustomerOrdersScreen() {
   const [deliveryDate, setDeliveryDate] = useState('');
   const [notes, setNotes] = useState('');
 
+  // ── Draft persistence ──────────────────────────────────────────
+  const draftKey = `customer_order_draft_${getFactoryId() ?? 'default'}`;
+  const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    AsyncStorage.getItem(draftKey).then((raw) => {
+      if (!raw) return;
+      try {
+        const d = JSON.parse(raw);
+        if (d.clientName) setClientName(d.clientName);
+        if (d.product) setProduct(d.product);
+        if (d.qty) setQty(d.qty);
+        if (d.unitPrice) setUnitPrice(d.unitPrice);
+        if (d.deliveryDate) setDeliveryDate(d.deliveryDate);
+        if (d.notes) setNotes(d.notes);
+      } catch {}
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (draftTimer.current) clearTimeout(draftTimer.current);
+    draftTimer.current = setTimeout(() => {
+      AsyncStorage.setItem(draftKey, JSON.stringify({ clientName, product, qty, unitPrice, deliveryDate, notes }));
+    }, 400);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clientName, product, qty, unitPrice, deliveryDate, notes]);
+
   const load = useCallback(async () => {
     syncCustomerOrdersFromSupabase();
     const data = await getCustomerOrders();
@@ -80,6 +110,7 @@ export default function CustomerOrdersScreen() {
     });
     setClientName(''); setProduct(''); setQty(''); setUnitPrice('');
     setDeliveryDate(''); setNotes('');
+    AsyncStorage.removeItem(draftKey);
     setAddModal(false);
     setOrders(prev => [item, ...prev]);
   }

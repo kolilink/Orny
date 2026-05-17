@@ -1,15 +1,17 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView,
-  TextInput, Alert, Modal, FlatList, SectionList,
+  TextInput, Alert, Modal, SectionList,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
-import { Expense, CustomCategory } from '../../types';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Expense, CustomCategory, ExpenseLineItem } from '../../types';
 import DatePickerField from '../../components/DatePickerField';
 import { getExpenses, addExpense, deleteExpense, syncExpensesFromSupabase } from '../../store/expenses';
 import { getCustomCategories, addCustomCategory, deleteCustomCategory } from '../../store/customCategories';
+import { getFactoryId } from '../../store/context';
 import { formatGNF } from '../../utils/format';
 
 const C = {
@@ -33,45 +35,87 @@ const EMOJI_GRID = [
   '🚗','✈️','🏥','📚','🎓','💻','📞','🔒','🛠️','🌍',
 ];
 
-function catInfo(key: string, allCats: CustomCategory[]): { label: string; icon: string } {
+function catInfo(key: string, allCats: CustomCategory[]) {
   return allCats.find((c) => c.key === key) ?? { label: key, icon: '📦' };
 }
-
 function toDateStr(d: Date) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
-
-function monthKey(dateStr: string) { return dateStr.slice(0, 7); } // YYYY-MM
-
+function monthKey(dateStr: string) { return dateStr.slice(0, 7); }
 function monthLabel(ym: string) {
   const [y, m] = ym.split('-');
   const months = ['Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre'];
   return `${months[parseInt(m, 10) - 1]} ${y}`;
 }
 
+interface LineItemRow { id: string; name: string; amount: string; }
+
+function makeLine(): LineItemRow { return { id: Math.random().toString(36).slice(2), name: '', amount: '' }; }
+
 export default function ExpensesScreen() {
   const insets = useSafeAreaInsets();
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [customCats, setCustomCats] = useState<CustomCategory[]>([]);
   const [tab, setTab] = useState<'add' | 'history'>('add');
+  const [expandedId, setExpandedId] = useState<string | null>(null);
 
-  // Form state
+  // ── Form state ──────────────────────────────────────────────────
   const [description, setDescription] = useState('');
-  const [amount, setAmount] = useState('');
   const [category, setCategory] = useState('autre');
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'orange_money'>('cash');
   const [date, setDate] = useState(toDateStr(new Date()));
+  // Simple amount (used when no line items)
+  const [amount, setAmount] = useState('');
+  // Line items (receipt mode)
+  const [lineItems, setLineItems] = useState<LineItemRow[]>([]);
 
-  // Category picker modal
+  // ── Modals ──────────────────────────────────────────────────────
   const [catModal, setCatModal] = useState(false);
-
-  // Add category modal
   const [addCatModal, setAddCatModal] = useState(false);
   const [newCatLabel, setNewCatLabel] = useState('');
   const [newCatEmoji, setNewCatEmoji] = useState('');
 
   const allCats = [...BUILT_IN, ...customCats];
 
+  // ── Draft persistence ───────────────────────────────────────────
+  const draftKey = `expense_draft_${getFactoryId() ?? 'default'}`;
+  const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Load draft on first mount
+  useEffect(() => {
+    AsyncStorage.getItem(draftKey).then((raw) => {
+      if (!raw) return;
+      try {
+        const d = JSON.parse(raw);
+        if (d.description) setDescription(d.description);
+        if (d.amount) setAmount(d.amount);
+        if (d.category) setCategory(d.category);
+        if (d.paymentMethod) setPaymentMethod(d.paymentMethod);
+        if (d.date) setDate(d.date);
+        if (d.lineItems?.length) setLineItems(d.lineItems);
+      } catch { /* corrupt draft — ignore */ }
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Auto-save draft 400ms after last change
+  const saveDraft = useCallback(() => {
+    if (draftTimer.current) clearTimeout(draftTimer.current);
+    draftTimer.current = setTimeout(() => {
+      AsyncStorage.setItem(draftKey, JSON.stringify({ description, amount, category, paymentMethod, date, lineItems }));
+    }, 400);
+  }, [description, amount, category, paymentMethod, date, lineItems, draftKey]);
+
+  useEffect(() => { saveDraft(); }, [saveDraft]);
+
+  function clearDraft() {
+    AsyncStorage.removeItem(draftKey);
+    setDescription(''); setAmount(''); setCategory('autre');
+    setPaymentMethod('cash'); setDate(toDateStr(new Date()));
+    setLineItems([]);
+  }
+
+  // ── Load data ───────────────────────────────────────────────────
   const load = useCallback(async () => {
     syncExpensesFromSupabase();
     const [exp, cats] = await Promise.all([getExpenses(), getCustomCategories()]);
@@ -81,51 +125,72 @@ export default function ExpensesScreen() {
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
+  // ── Line item helpers ───────────────────────────────────────────
+  const hasLines = lineItems.length > 0;
+  const lineTotal = lineItems.reduce((s, l) => s + (parseInt(l.amount.replace(/\s/g, ''), 10) || 0), 0);
+  const totalAmount = hasLines ? lineTotal : (parseInt(amount.replace(/\s/g, ''), 10) || 0);
+
+  function updateLine(id: string, field: 'name' | 'amount', val: string) {
+    setLineItems(prev => prev.map(l => l.id === id ? { ...l, [field]: val } : l));
+  }
+  function removeLine(id: string) {
+    setLineItems(prev => prev.filter(l => l.id !== id));
+  }
+
+  // ── Submit ──────────────────────────────────────────────────────
   async function handleAdd() {
-    const amt = parseInt(amount.replace(/\s/g, ''), 10);
-    if (!description.trim()) return Alert.alert('Erreur', 'Ajoutez une description.');
-    if (!amt || amt <= 0) return Alert.alert('Erreur', 'Montant invalide.');
-    const item = await addExpense({ date, category, description: description.trim(), amount: amt, paymentMethod });
-    setDescription(''); setAmount(''); setCategory('autre');
-    setPaymentMethod('cash'); setDate(toDateStr(new Date()));
+    if (!description.trim()) return Alert.alert('Erreur', 'Ajoutez un titre / description.');
+    if (totalAmount <= 0) return Alert.alert('Erreur', hasLines ? 'Ajoutez au moins un article avec un montant.' : 'Montant invalide.');
+
+    const validLines: ExpenseLineItem[] = lineItems
+      .filter(l => l.name.trim() && parseInt(l.amount.replace(/\s/g, ''), 10) > 0)
+      .map(l => ({ name: l.name.trim(), amount: parseInt(l.amount.replace(/\s/g, ''), 10) }));
+
+    const item = await addExpense({
+      date,
+      category,
+      description: description.trim(),
+      amount: totalAmount,
+      paymentMethod,
+      lineItems: validLines.length > 0 ? validLines : undefined,
+    });
+    clearDraft();
     setExpenses(prev => [item, ...prev]);
-    Alert.alert('Dépense ajoutée', `${formatGNF(amt)} enregistré.`);
+    Alert.alert('Dépense ajoutée', `${formatGNF(totalAmount)} enregistré.`);
   }
 
   async function handleDelete(id: string) {
     Alert.alert('Supprimer ?', 'Cette dépense sera définitivement supprimée.', [
       { text: 'Annuler', style: 'cancel' },
-      {
-        text: 'Supprimer', style: 'destructive', onPress: async () => {
-          await deleteExpense(id);
-          setExpenses((prev) => prev.filter((e) => e.id !== id));
-        },
-      },
+      { text: 'Supprimer', style: 'destructive', onPress: async () => {
+        await deleteExpense(id);
+        setExpenses(prev => prev.filter(e => e.id !== id));
+      }},
     ]);
   }
 
+  // ── Category ─────────────────────────────────────────────────────
   async function handleAddCategory() {
-    if (!newCatLabel.trim()) return Alert.alert('Erreur', 'Entrez un nom de catégorie.');
+    if (!newCatLabel.trim()) return Alert.alert('Erreur', 'Entrez un nom.');
     const cat = await addCustomCategory(newCatLabel, newCatEmoji || '📦');
-    setCustomCats((prev) => [...prev, cat]);
+    setCustomCats(prev => [...prev, cat]);
     setCategory(cat.key);
     setNewCatLabel(''); setNewCatEmoji('');
-    setAddCatModal(false);
-    setCatModal(false);
+    setAddCatModal(false); setCatModal(false);
   }
-
   async function handleDeleteCat(key: string) {
     await deleteCustomCategory(key);
-    setCustomCats((prev) => prev.filter((c) => c.key !== key));
+    setCustomCats(prev => prev.filter(c => c.key !== key));
     if (category === key) setCategory('autre');
   }
 
+  // ── Summary pill ─────────────────────────────────────────────────
   const now = new Date();
   const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
-  const monthTotal = expenses.filter((e) => e.date >= monthStart).reduce((sum, e) => sum + e.amount, 0);
+  const monthTotal = expenses.filter(e => e.date >= monthStart).reduce((s, e) => s + e.amount, 0);
 
-  // Group history by month
-  const grouped: { [ym: string]: Expense[] } = {};
+  // ── Group history by month ────────────────────────────────────────
+  const grouped: Record<string, Expense[]> = {};
   for (const e of expenses) {
     const k = monthKey(e.date);
     if (!grouped[k]) grouped[k] = [];
@@ -133,7 +198,7 @@ export default function ExpensesScreen() {
   }
   const sections = Object.keys(grouped)
     .sort((a, b) => b.localeCompare(a))
-    .map((ym) => ({
+    .map(ym => ({
       title: ym,
       total: grouped[ym].reduce((s, e) => s + e.amount, 0),
       data: grouped[ym].sort((a, b) => b.date.localeCompare(a.date)),
@@ -155,44 +220,96 @@ export default function ExpensesScreen() {
           <Text style={[styles.tabText, tab === 'add' && styles.tabTextActive]}>Ajouter</Text>
         </TouchableOpacity>
         <TouchableOpacity style={[styles.tab, tab === 'history' && styles.tabActive]} onPress={() => setTab('history')}>
-          <Text style={[styles.tabText, tab === 'history' && styles.tabTextActive]}>
-            Historique ({expenses.length})
-          </Text>
+          <Text style={[styles.tabText, tab === 'history' && styles.tabTextActive]}>Historique ({expenses.length})</Text>
         </TouchableOpacity>
       </View>
 
       {tab === 'add' ? (
-        <ScrollView contentContainerStyle={styles.form}>
+        <ScrollView contentContainerStyle={styles.form} keyboardShouldPersistTaps="handled">
+
+          {/* Category */}
           <Text style={styles.label}>Catégorie</Text>
           <TouchableOpacity style={styles.picker} onPress={() => setCatModal(true)}>
             <Text style={styles.pickerText}>{catIcon}  {catLabel}</Text>
             <Ionicons name="chevron-down" size={18} color={C.muted} />
           </TouchableOpacity>
 
-          <Text style={styles.label}>Description</Text>
+          {/* Title */}
+          <Text style={styles.label}>Titre / Description</Text>
           <TextInput
             style={styles.input}
-            placeholder="Ex: Achat huile, électricité..."
+            placeholder="Ex: Achats du marché, Loyer mai…"
             placeholderTextColor={C.muted}
             value={description}
             onChangeText={setDescription}
           />
 
-          <Text style={styles.label}>Montant (GNF)</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="Ex: 50000"
-            placeholderTextColor={C.muted}
-            keyboardType="numeric"
-            value={amount}
-            onChangeText={setAmount}
-          />
+          {/* ── Line items (receipt mode) ── */}
+          <View style={styles.lineHeader}>
+            <Text style={styles.label}>Articles / Lignes</Text>
+            <TouchableOpacity style={styles.addLineBtn} onPress={() => setLineItems(prev => [...prev, makeLine()])}>
+              <Ionicons name="add-circle-outline" size={20} color={C.primary} />
+              <Text style={styles.addLineTxt}>Ajouter</Text>
+            </TouchableOpacity>
+          </View>
+
+          {lineItems.length === 0 && (
+            <TouchableOpacity style={styles.emptyLines} onPress={() => setLineItems([makeLine()])}>
+              <Ionicons name="receipt-outline" size={20} color={C.muted} />
+              <Text style={styles.emptyLinesTxt}>Ajouter les articles d'un reçu</Text>
+            </TouchableOpacity>
+          )}
+
+          {lineItems.map((line, idx) => (
+            <View key={line.id} style={styles.lineRow}>
+              <Text style={styles.lineNum}>{idx + 1}</Text>
+              <TextInput
+                style={[styles.input, styles.lineName]}
+                placeholder="Article…"
+                placeholderTextColor={C.muted}
+                value={line.name}
+                onChangeText={v => updateLine(line.id, 'name', v)}
+              />
+              <TextInput
+                style={[styles.input, styles.lineAmt]}
+                placeholder="GNF"
+                placeholderTextColor={C.muted}
+                keyboardType="numeric"
+                value={line.amount}
+                onChangeText={v => updateLine(line.id, 'amount', v)}
+              />
+              <TouchableOpacity onPress={() => removeLine(line.id)} style={styles.lineDelete}>
+                <Ionicons name="close-circle" size={20} color={C.red} />
+              </TouchableOpacity>
+            </View>
+          ))}
+
+          {/* Total line (computed) or manual amount */}
+          {hasLines ? (
+            <View style={styles.totalRow}>
+              <Text style={styles.totalLabel}>Total</Text>
+              <Text style={styles.totalValue}>{formatGNF(lineTotal)}</Text>
+            </View>
+          ) : (
+            <>
+              <Text style={styles.label}>Montant total (GNF)</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="Ex: 50 000"
+                placeholderTextColor={C.muted}
+                keyboardType="numeric"
+                value={amount}
+                onChangeText={setAmount}
+              />
+            </>
+          )}
 
           <DatePickerField label="Date" value={date} onChange={setDate} />
 
+          {/* Payment method */}
           <Text style={styles.label}>Mode de paiement</Text>
           <View style={styles.row}>
-            {(['cash', 'orange_money'] as const).map((m) => (
+            {(['cash', 'orange_money'] as const).map(m => (
               <TouchableOpacity
                 key={m}
                 style={[styles.methodBtn, paymentMethod === m && styles.methodBtnActive]}
@@ -206,13 +323,24 @@ export default function ExpensesScreen() {
           </View>
 
           <TouchableOpacity style={styles.addBtn} onPress={handleAdd}>
-            <Text style={styles.addBtnText}>Enregistrer la dépense</Text>
+            <Text style={styles.addBtnText}>Enregistrer — {totalAmount > 0 ? formatGNF(totalAmount) : '…'}</Text>
           </TouchableOpacity>
+
+          {(description || amount || lineItems.length > 0) && (
+            <TouchableOpacity style={styles.discardBtn} onPress={() => {
+              Alert.alert('Effacer le brouillon ?', '', [
+                { text: 'Annuler', style: 'cancel' },
+                { text: 'Effacer', style: 'destructive', onPress: clearDraft },
+              ]);
+            }}>
+              <Text style={styles.discardTxt}>Effacer le brouillon</Text>
+            </TouchableOpacity>
+          )}
         </ScrollView>
       ) : (
         <SectionList
           sections={sections}
-          keyExtractor={(e) => e.id}
+          keyExtractor={e => e.id}
           contentContainerStyle={{ padding: 16, paddingBottom: 32 }}
           ListEmptyComponent={<Text style={styles.empty}>Aucune dépense enregistrée</Text>}
           renderSectionHeader={({ section }) => (
@@ -223,22 +351,36 @@ export default function ExpensesScreen() {
           )}
           renderItem={({ item }) => {
             const info = catInfo(item.category, allCats);
+            const isExpanded = expandedId === item.id;
             return (
-              <View style={styles.expenseCard}>
-                <View style={styles.expenseLeft}>
+              <TouchableOpacity
+                style={styles.expenseCard}
+                activeOpacity={item.lineItems?.length ? 0.7 : 1}
+                onPress={() => item.lineItems?.length ? setExpandedId(isExpanded ? null : item.id) : null}
+              >
+                <View style={styles.expenseMain}>
                   <Text style={styles.expenseIcon}>{info.icon}</Text>
                   <View style={{ flex: 1 }}>
                     <Text style={styles.expenseDesc}>{item.description || info.label}</Text>
-                    <Text style={styles.expenseMeta}>{info.label} · {item.date}</Text>
+                    <Text style={styles.expenseMeta}>
+                      {info.label} · {item.date}
+                      {item.lineItems?.length ? `  ·  ${item.lineItems.length} articles` : ''}
+                    </Text>
+                  </View>
+                  <View style={styles.expenseRight}>
+                    <Text style={styles.expenseAmount}>{formatGNF(item.amount)}</Text>
+                    <TouchableOpacity onPress={() => handleDelete(item.id)} style={{ padding: 4 }}>
+                      <Ionicons name="trash-outline" size={18} color={C.red} />
+                    </TouchableOpacity>
                   </View>
                 </View>
-                <View style={styles.expenseRight}>
-                  <Text style={styles.expenseAmount}>{formatGNF(item.amount)}</Text>
-                  <TouchableOpacity onPress={() => handleDelete(item.id)} style={{ padding: 4 }}>
-                    <Ionicons name="trash-outline" size={18} color={C.red} />
-                  </TouchableOpacity>
-                </View>
-              </View>
+                {isExpanded && item.lineItems?.map((li, i) => (
+                  <View key={i} style={styles.lineItemRow}>
+                    <Text style={styles.lineItemName}>{li.name}</Text>
+                    <Text style={styles.lineItemAmt}>{formatGNF(li.amount)}</Text>
+                  </View>
+                ))}
+              </TouchableOpacity>
             );
           }}
           SectionSeparatorComponent={() => <View style={{ height: 4 }} />}
@@ -246,7 +388,7 @@ export default function ExpensesScreen() {
         />
       )}
 
-      {/* Category picker */}
+      {/* ── Category picker ── */}
       <Modal visible={catModal} transparent animationType="slide">
         <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={() => setCatModal(false)} />
         <View style={styles.sheet}>
@@ -258,7 +400,7 @@ export default function ExpensesScreen() {
             </TouchableOpacity>
           </View>
           <ScrollView style={{ maxHeight: 400 }}>
-            {allCats.map((c) => (
+            {allCats.map(c => (
               <TouchableOpacity
                 key={c.key}
                 style={[styles.sheetRow, category === c.key && styles.sheetRowActive]}
@@ -267,7 +409,7 @@ export default function ExpensesScreen() {
                 <Text style={styles.sheetIcon}>{c.icon}</Text>
                 <Text style={styles.sheetLabel}>{c.label}</Text>
                 {category === c.key && <Ionicons name="checkmark" size={18} color={C.primary} />}
-                {!BUILT_IN.find((b) => b.key === c.key) && (
+                {!BUILT_IN.find(b => b.key === c.key) && (
                   <TouchableOpacity onPress={() => handleDeleteCat(c.key)} style={{ padding: 4, marginLeft: 4 }}>
                     <Ionicons name="trash-outline" size={16} color={C.red} />
                   </TouchableOpacity>
@@ -278,41 +420,25 @@ export default function ExpensesScreen() {
         </View>
       </Modal>
 
-      {/* Add custom category */}
+      {/* ── Add custom category ── */}
       <Modal visible={addCatModal} transparent animationType="fade">
         <View style={styles.modalOverlay}>
           <View style={styles.modalBox}>
             <Text style={styles.modalTitle}>Nouvelle catégorie</Text>
-
             <Text style={styles.fieldLabel}>Nom</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="Ex: Marketing, Eau..."
-              placeholderTextColor={C.muted}
-              value={newCatLabel}
-              onChangeText={setNewCatLabel}
-            />
-
+            <TextInput style={styles.input} placeholder="Ex: Marketing, Eau…" placeholderTextColor={C.muted}
+              value={newCatLabel} onChangeText={setNewCatLabel} />
             <Text style={styles.fieldLabel}>Emoji</Text>
-            <TextInput
-              style={[styles.input, styles.emojiInput]}
-              placeholder="🏷️"
-              value={newCatEmoji}
-              onChangeText={(v) => setNewCatEmoji(v.slice(-2))}
-              maxLength={2}
-            />
+            <TextInput style={[styles.input, styles.emojiInput]} placeholder="🏷️"
+              value={newCatEmoji} onChangeText={v => setNewCatEmoji(v.slice(-2))} maxLength={2} />
             <View style={styles.emojiGrid}>
-              {EMOJI_GRID.map((e) => (
-                <TouchableOpacity
-                  key={e}
-                  style={[styles.emojiCell, newCatEmoji === e && styles.emojiCellActive]}
-                  onPress={() => setNewCatEmoji(e)}
-                >
+              {EMOJI_GRID.map(e => (
+                <TouchableOpacity key={e} style={[styles.emojiCell, newCatEmoji === e && styles.emojiCellActive]}
+                  onPress={() => setNewCatEmoji(e)}>
                   <Text style={styles.emojiCellText}>{e}</Text>
                 </TouchableOpacity>
               ))}
             </View>
-
             <TouchableOpacity style={styles.confirmBtn} onPress={handleAddCategory}>
               <Text style={styles.confirmBtnText}>Créer la catégorie</Text>
             </TouchableOpacity>
@@ -339,9 +465,23 @@ const styles = StyleSheet.create({
   tabTextActive: { color: C.text, fontWeight: '700' },
   form: { padding: 16, paddingBottom: 40 },
   label: { fontSize: 13, fontWeight: '600', color: C.muted, marginBottom: 6, marginTop: 14 },
-  input: { backgroundColor: C.card, borderRadius: 12, padding: 14, fontSize: 16, color: C.text, borderWidth: 1, borderColor: C.border },
+  input: { backgroundColor: C.card, borderRadius: 12, padding: 14, fontSize: 15, color: C.text, borderWidth: 1, borderColor: C.border },
   picker: { backgroundColor: C.card, borderRadius: 12, padding: 14, borderWidth: 1, borderColor: C.border, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   pickerText: { fontSize: 16, color: C.text },
+  // line items
+  lineHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 14, marginBottom: 6 },
+  addLineBtn: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  addLineTxt: { fontSize: 14, fontWeight: '600', color: C.primary },
+  emptyLines: { flexDirection: 'row', alignItems: 'center', gap: 8, borderWidth: 1, borderColor: C.border, borderStyle: 'dashed', borderRadius: 12, padding: 14, justifyContent: 'center' },
+  emptyLinesTxt: { fontSize: 14, color: C.muted },
+  lineRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 },
+  lineNum: { fontSize: 13, color: C.muted, width: 18, textAlign: 'center' },
+  lineName: { flex: 1, marginBottom: 0, paddingVertical: 11 },
+  lineAmt: { width: 100, marginBottom: 0, paddingVertical: 11 },
+  lineDelete: { padding: 4 },
+  totalRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderColor: C.border },
+  totalLabel: { fontSize: 15, fontWeight: '700', color: C.text },
+  totalValue: { fontSize: 18, fontWeight: '800', color: C.primary },
   row: { flexDirection: 'row', gap: 10 },
   methodBtn: { flex: 1, padding: 14, borderRadius: 12, borderWidth: 1, borderColor: C.border, backgroundColor: C.card, alignItems: 'center' },
   methodBtnActive: { borderColor: C.primary, backgroundColor: '#E8F6F0' },
@@ -349,17 +489,22 @@ const styles = StyleSheet.create({
   methodTextActive: { color: C.primary, fontWeight: '700' },
   addBtn: { marginTop: 24, backgroundColor: C.primary, borderRadius: 14, padding: 16, alignItems: 'center' },
   addBtnText: { color: '#FFF', fontSize: 16, fontWeight: '700' },
+  discardBtn: { marginTop: 12, alignItems: 'center', padding: 10 },
+  discardTxt: { fontSize: 13, color: C.muted },
   // history
   sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 10, paddingHorizontal: 4 },
   sectionTitle: { fontSize: 14, fontWeight: '700', color: C.text },
   sectionTotal: { fontSize: 14, fontWeight: '700', color: C.red },
-  expenseCard: { backgroundColor: C.card, borderRadius: 12, padding: 14, borderWidth: 1, borderColor: C.border, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  expenseLeft: { flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 },
+  expenseCard: { backgroundColor: C.card, borderRadius: 12, borderWidth: 1, borderColor: C.border, overflow: 'hidden' },
+  expenseMain: { flexDirection: 'row', alignItems: 'center', padding: 14, gap: 12 },
   expenseIcon: { fontSize: 28 },
   expenseDesc: { fontSize: 15, fontWeight: '600', color: C.text },
   expenseMeta: { fontSize: 12, color: C.muted, marginTop: 2 },
   expenseRight: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   expenseAmount: { fontSize: 15, fontWeight: '700', color: C.red },
+  lineItemRow: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 58, paddingVertical: 7, borderTopWidth: 1, borderColor: C.border, backgroundColor: '#FAFAF8' },
+  lineItemName: { fontSize: 13, color: C.muted },
+  lineItemAmt: { fontSize: 13, fontWeight: '600', color: C.text },
   empty: { textAlign: 'center', color: C.muted, marginTop: 40, fontSize: 15 },
   // category sheet
   overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.3)' },

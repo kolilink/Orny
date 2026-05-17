@@ -30,6 +30,7 @@ export const syncExpensesFromSupabase = async (): Promise<void> => {
     description: r.description,
     amount: r.amount,
     paymentMethod: r.payment_method,
+    lineItems: r.line_items ?? undefined,
   }));
   await setCache(items);
 };
@@ -47,6 +48,7 @@ export const addExpense = async (expense: Omit<Expense, 'id' | 'factory_id'>): P
     description: item.description,
     amount: item.amount,
     payment_method: item.paymentMethod,
+    line_items: item.lineItems ?? null,
   }).then();
   return item;
 };

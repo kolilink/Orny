@@ -112,6 +112,11 @@ export interface CustomCategory {
   icon: string;
 }
 
+export interface ExpenseLineItem {
+  name: string;
+  amount: number;
+}
+
 export interface Expense {
   id: string;
   factory_id: string;
@@ -120,6 +125,7 @@ export interface Expense {
   description: string;
   amount: number;
   paymentMethod: 'cash' | 'orange_money';
+  lineItems?: ExpenseLineItem[];
 }
 
 export interface Supplier {

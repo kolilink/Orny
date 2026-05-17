@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TextInput,
   TouchableOpacity, FlatList, Modal, KeyboardAvoidingView,
@@ -7,6 +7,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getSales, addSale, updateSale, deleteSale } from '../../store/sales';
 import { getClients, upsertClient } from '../../store/clients';
 import { getFlavors } from '../../store/flavors';
@@ -14,6 +15,7 @@ import { getBulks } from '../../store/bulks';
 import { Sale, ProductFlavor, BulkProduct, Client, saleDebt } from '../../types';
 import { formatGNF, formatDate } from '../../utils/format';
 import { toDateString } from '../../utils/dates';
+import { getFactoryId } from '../../store/context';
 
 const C = {
   primary: '#1D9E75',
@@ -71,6 +73,31 @@ export default function VentesScreen() {
   const [cartItems, setCartItems] = useState<CartItem[]>([]);
   const [saving, setSaving] = useState(false);
 
+  // ── Draft persistence ──────────────────────────────────────────
+  const draftKey = `ventes_draft_${getFactoryId() ?? 'default'}`;
+  const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    AsyncStorage.getItem(draftKey).then((raw) => {
+      if (!raw) return;
+      try {
+        const d = JSON.parse(raw);
+        if (d.clientQuery) setClientQuery(d.clientQuery);
+        if (d.paymentMethod) setPaymentMethod(d.paymentMethod);
+        if (d.cartItems?.length) setCartItems(d.cartItems);
+      } catch {}
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (draftTimer.current) clearTimeout(draftTimer.current);
+    draftTimer.current = setTimeout(() => {
+      AsyncStorage.setItem(draftKey, JSON.stringify({ clientQuery, paymentMethod, cartItems }));
+    }, 400);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clientQuery, paymentMethod, cartItems]);
+
   const [detailSale, setDetailSale] = useState<Sale | null>(null);
   const [editingSale, setEditingSale] = useState<Sale | null>(null);
   const [editForm, setEditForm] = useState<{
@@ -123,6 +150,7 @@ export default function VentesScreen() {
     setPaymentMethod('cash');
     setShowSuggestions(false);
     setCartItems([]);
+    AsyncStorage.removeItem(draftKey);
     if (productMode === 'flavor' && selectedFlavor) {
       setUnitPrice(selectedFlavor.defaultPrice);
     } else if (productMode === 'bulk' && selectedBulk) {
