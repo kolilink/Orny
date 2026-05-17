@@ -99,12 +99,12 @@ Top débiteurs :
 ${debtorLines}
 
 🏭 PRODUCTION
-  Aujourd'hui : ${production.today.batches} batch(es) | ${production.today.sachets} sachets | ${production.today.potatoesKg} kg PDT | ${production.today.hours}h travaillées
-  Cette semaine : ${production.week.batches} batch(es) | ${production.week.sachets} sachets | ${production.week.potatoesKg} kg PDT | ${production.week.hours}h
-  Rendement moyen semaine : ${production.week.avgYield} g/kg | Rendement moyen global : ${production.avgYieldGPerKg} g/kg
-  Objectif hebdo : ${production.weeklyTarget} sachets → ${pct(production.weeklyProgress)} atteint
-  Couverture prod / ventes : ${pct(production.productionCoverage)} (si > 100% = stock de sachets en cours)
-  Ce mois : ${production.month.batches} batch(es) | ${production.month.sachets} sachets
+  Aujourd'hui : ${production.today.batches} lot(s) | ${production.today.sachets} unités prod. | ${production.today.potatoesKg} kg intrant | ${production.today.hours}h travaillées
+  Cette semaine : ${production.week.batches} lot(s) | ${production.week.sachets} unités prod. | ${production.week.potatoesKg} kg intrant | ${production.week.hours}h
+  Rendement moyen semaine : ${production.week.avgYield} | Rendement global : ${production.avgYieldGPerKg}
+  Objectif hebdo : ${production.weeklyTarget} unités → ${pct(production.weeklyProgress)} atteint
+  Couverture prod / ventes : ${pct(production.productionCoverage)}
+  Ce mois : ${production.month.batches} lot(s) | ${production.month.sachets} unités prod.
 
 📊 STOCK
 ${stockLines}

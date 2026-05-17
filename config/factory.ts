@@ -3,9 +3,7 @@ export const FACTORY_CONFIG = {
   name: 'Orny',
   currency: 'GNF',
   weeklyProductionTarget: 1000,
-  products: [
-    { id: 'chips_nature', label: 'Chips Nature 80g', weightG: 80, defaultPrice: 15000 },
-  ],
+  products: [] as { id: string; label: string; weightG: number; defaultPrice: number }[],
   stockAlerts: {
     pommes_de_terre: { unit: 'kg', threshold: 50 },
     huile: { unit: 'L', threshold: 20 },

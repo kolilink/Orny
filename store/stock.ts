@@ -7,10 +7,10 @@ import { supabase } from '../lib/supabase';
 function cacheKey() { return `${getFactoryId()}_stock`; }
 
 const STOCK_NAMES: Record<string, string> = {
-  pommes_de_terre: 'Pommes de terre',
-  huile: 'Huile',
-  sachets_80g: 'Sachets 80g',
-  gaz_lpg: 'Gaz LPG',
+  pommes_de_terre: 'Matière première',
+  huile: 'Matière 2',
+  sachets_80g: 'Produit fini',
+  gaz_lpg: 'Énergie',
 };
 
 export const getStock = async (): Promise<StockItem[]> => {

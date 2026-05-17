@@ -197,9 +197,9 @@ export default function ProductionScreen() {
 
         <View style={styles.card}>
           <DatePickerField label="Date" value={date} onChange={setDate} />
-          <NumField label="Pommes de terre utilisées (kg)" value={potatoes} onChangeText={setPotatoes} />
-          <NumField label="Sachets 80g produits" value={sachets} onChangeText={setSachets} />
-          <NumField label="Gaz utilisé (kg)" value={gas} onChangeText={setGas} />
+          <NumField label="Matière première (kg)" value={potatoes} onChangeText={setPotatoes} />
+          <NumField label="Unités produites" value={sachets} onChangeText={setSachets} />
+          <NumField label="Énergie / Combustible (kg)" value={gas} onChangeText={setGas} />
           <NumField label="Heures travaillées" value={hours} onChangeText={setHours} />
         </View>
 
@@ -298,7 +298,7 @@ export default function ProductionScreen() {
             <View key={b.id} style={styles.batchRow}>
               <Text style={styles.batchDate}>{b.date}</Text>
               <Text style={styles.batchInfo}>
-                {b.potatoesUsedKg}kg pdT · {b.sachets80g} sachets · {b.gasUsedKg}kg gaz
+                {b.potatoesUsedKg}kg mat. · {b.sachets80g} unités · {b.gasUsedKg}kg énergie
               </Text>
             </View>
           ))}
@@ -314,7 +314,7 @@ export default function ProductionScreen() {
           <View style={styles.modalOverlay}>
             <View style={styles.modalCard}>
               <Text style={styles.modalTitle}>Objectif hebdomadaire</Text>
-              <Text style={styles.fieldLabel}>Objectif (kg de pommes de terre)</Text>
+              <Text style={styles.fieldLabel}>Objectif hebdomadaire (kg de matière)</Text>
               <TextInput
                 style={styles.input}
                 keyboardType="numeric"

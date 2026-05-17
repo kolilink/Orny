@@ -53,7 +53,7 @@ const ALL_SECTIONS: Section[] = [
   {
     title: 'Analyses',
     items: [
-      { label: 'Sol Coach IA', icon: 'bulb', route: 'Coach', hint: 'Bilan · Goulot · Action prioritaire', roles: ['admin', 'investor'] },
+      { label: 'Coach IA', icon: 'bulb', route: 'Coach', hint: 'Bilan · Goulot · Action prioritaire', roles: ['admin', 'investor'] },
       { label: 'Rapports', icon: 'bar-chart', route: 'Reports', hint: 'Statistiques & tendances', roles: ['admin', 'investor'] },
     ],
   },

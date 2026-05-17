@@ -154,7 +154,7 @@ export default function BulksScreen() {
               <View style={{ flex: 1 }}>
                 <Text style={styles.bulkName}>{item.name}</Text>
                 <Text style={styles.bulkMeta}>
-                  {item.bagCount} sachets · {flavorLabel(item.flavorId)}
+                  {item.bagCount} unités · {flavorLabel(item.flavorId)}
                 </Text>
               </View>
               <View style={styles.actions}>
@@ -170,7 +170,7 @@ export default function BulksScreen() {
               <Text style={styles.priceLabel}>Prix du lot</Text>
               <Text style={styles.priceValue}>{formatGNF(item.unitPrice)}</Text>
               <Text style={styles.perBagText}>
-                ({formatGNF(Math.round(item.unitPrice / item.bagCount))}/sachet)
+                ({formatGNF(Math.round(item.unitPrice / item.bagCount))}/unité)
               </Text>
             </View>
           </View>
@@ -217,7 +217,7 @@ export default function BulksScreen() {
                   </View>
                 </ScrollView>
 
-                <Text style={styles.fieldLabel}>Nombre de sachets</Text>
+                <Text style={styles.fieldLabel}>Nombre d'unités</Text>
                 <TextInput
                   style={styles.input}
                   placeholder="15"
@@ -236,7 +236,7 @@ export default function BulksScreen() {
                 />
                 {!!form.bagCount && !!form.unitPrice && (
                   <Text style={styles.perBagCalc}>
-                    = {formatGNF(Math.round((parseInt(form.unitPrice) || 0) / (parseInt(form.bagCount) || 1)))} par sachet
+                    = {formatGNF(Math.round((parseInt(form.unitPrice) || 0) / (parseInt(form.bagCount) || 1)))} par unité
                   </Text>
                 )}
               </ScrollView>

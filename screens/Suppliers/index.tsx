@@ -246,7 +246,7 @@ export default function SuppliersScreen() {
             <Text style={styles.fieldLabel}>Nom *</Text>
             <TextInput style={styles.input} value={sName} onChangeText={setSName} placeholder="Ex: Mamadou Diallo" placeholderTextColor={C.muted} />
             <Text style={styles.fieldLabel}>Produit fourni *</Text>
-            <TextInput style={styles.input} value={sProduct} onChangeText={setSProduct} placeholder="Ex: Pommes de terre" placeholderTextColor={C.muted} />
+            <TextInput style={styles.input} value={sProduct} onChangeText={setSProduct} placeholder="Ex: Farine, matière première..." placeholderTextColor={C.muted} />
             <Text style={styles.fieldLabel}>Téléphone</Text>
             <TextInput style={styles.input} value={sPhone} onChangeText={setSPhone} placeholder="Ex: 622 00 00 00" placeholderTextColor={C.muted} keyboardType="phone-pad" />
             <Text style={styles.fieldLabel}>Notes</Text>
@@ -270,7 +270,7 @@ export default function SuppliersScreen() {
               <Ionicons name="chevron-down" size={16} color={C.muted} />
             </TouchableOpacity>
             <Text style={styles.fieldLabel}>Produit *</Text>
-            <TextInput style={styles.input} value={pProduct} onChangeText={setPProduct} placeholder="Ex: Pommes de terre" placeholderTextColor={C.muted} />
+            <TextInput style={styles.input} value={pProduct} onChangeText={setPProduct} placeholder="Ex: Farine, matière première..." placeholderTextColor={C.muted} />
             <View style={{ flexDirection: 'row', gap: 10 }}>
               <View style={{ flex: 1 }}>
                 <Text style={styles.fieldLabel}>Quantité *</Text>

@@ -82,7 +82,7 @@ export default function FactorySettingsScreen() {
 
   async function saveWeeklyTarget() {
     const n = parseInt(targetInput, 10);
-    if (!n || n < 1) { Alert.alert('Valeur invalide', 'Entrez un nombre de sachets supérieur à 0.'); return; }
+    if (!n || n < 1) { Alert.alert('Valeur invalide', 'Entrez un objectif supérieur à 0.'); return; }
     await setWeeklyTarget(n);
     setWeeklyTargetState(n);
     setTargetModal(false);
@@ -296,7 +296,7 @@ export default function FactorySettingsScreen() {
           <View style={styles.targetCard}>
             <View style={{ flex: 1 }}>
               <Text style={styles.targetLabel}>Objectif hebdomadaire</Text>
-              <Text style={styles.targetValue}>{weeklyTarget} sachets / semaine</Text>
+              <Text style={styles.targetValue}>{weeklyTarget} unités / semaine</Text>
             </View>
             <TouchableOpacity style={styles.editBtn} onPress={() => { setTargetInput(String(weeklyTarget)); setTargetModal(true); }}>
               <Text style={styles.editBtnText}>Modifier</Text>
@@ -328,7 +328,7 @@ export default function FactorySettingsScreen() {
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.modalOverlay}>
           <View style={styles.modalBox}>
             <Text style={styles.modalTitle}>Objectif hebdomadaire</Text>
-            <Text style={styles.modalSub}>Nombre de sachets à produire par semaine</Text>
+            <Text style={styles.modalSub}>Objectif de production par semaine (unités)</Text>
             <TextInput
               style={styles.modalInput}
               value={targetInput}

@@ -359,7 +359,7 @@ export default function VentesScreen() {
                 onPress={() => handleModeChange('flavor')}
               >
                 <Text style={[styles.modeBtnText, productMode === 'flavor' && { color: '#fff' }]}>
-                  Sachets individuels
+                  Unités individuelles
                 </Text>
               </TouchableOpacity>
               <TouchableOpacity
@@ -413,7 +413,7 @@ export default function VentesScreen() {
                           {b.name}
                         </Text>
                         <Text style={[styles.productPrice, selectedBulkId === b.id && { color: 'rgba(255,255,255,0.8)' }]}>
-                          {b.bagCount} sachets · {formatGNF(b.unitPrice)}
+                          {b.bagCount} unités · {formatGNF(b.unitPrice)}
                         </Text>
                       </TouchableOpacity>
                     ))}

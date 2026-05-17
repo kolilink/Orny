@@ -149,7 +149,7 @@ export default function FlavorsScreen() {
                   onChangeText={(v) => setForm((f) => ({ ...f, label: v }))}
                   autoFocus
                 />
-                <Text style={styles.fieldLabel}>Poids par sachet (g)</Text>
+                <Text style={styles.fieldLabel}>Poids unitaire (g)</Text>
                 <TextInput
                   style={styles.input}
                   placeholder="80"

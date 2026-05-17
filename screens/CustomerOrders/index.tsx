@@ -238,7 +238,7 @@ export default function CustomerOrdersScreen() {
             <Text style={styles.fieldLabel}>Client *</Text>
             <TextInput style={styles.input} value={clientName} onChangeText={setClientName} placeholder="Nom du client" placeholderTextColor={C.muted} />
             <Text style={styles.fieldLabel}>Produit *</Text>
-            <TextInput style={styles.input} value={product} onChangeText={setProduct} placeholder="Ex: SOL 80g, Lot x10..." placeholderTextColor={C.muted} />
+            <TextInput style={styles.input} value={product} onChangeText={setProduct} placeholder="Ex: Produit A, Lot x10..." placeholderTextColor={C.muted} />
             <View style={{ flexDirection: 'row', gap: 10 }}>
               <View style={{ flex: 1 }}>
                 <Text style={styles.fieldLabel}>Quantité *</Text>
