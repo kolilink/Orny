@@ -278,7 +278,14 @@ create index if not exists production_batches_v2_date_idx on production_batches_
 
 
 -- ════════════════════════════════════════════════════════════
--- 3. ENABLE ROW LEVEL SECURITY
+-- 3. COLUMN MIGRATIONS (safe to run on existing tables)
+-- ════════════════════════════════════════════════════════════
+
+alter table investors    add column if not exists user_id uuid references auth.users(id) on delete set null;
+alter table profiles     add column if not exists display_name text;
+
+-- ════════════════════════════════════════════════════════════
+-- 4. ENABLE ROW LEVEL SECURITY
 -- ════════════════════════════════════════════════════════════
 
 alter table factories          enable row level security;
@@ -303,7 +310,7 @@ alter table production_batches_v2 enable row level security;
 
 
 -- ════════════════════════════════════════════════════════════
--- 4. TRIGGERS
+-- 5. TRIGGERS
 -- ════════════════════════════════════════════════════════════
 
 -- Auto-add factory creator as admin
@@ -352,7 +359,7 @@ $$;
 
 
 -- ════════════════════════════════════════════════════════════
--- 5. RPC FUNCTIONS
+-- 6. RPC FUNCTIONS
 -- ════════════════════════════════════════════════════════════
 
 create or replace function lookup_factory_by_code(code text)
@@ -428,7 +435,7 @@ $$;
 
 
 -- ════════════════════════════════════════════════════════════
--- 6. RLS POLICIES
+-- 7. RLS POLICIES
 -- ════════════════════════════════════════════════════════════
 
 -- ── FACTORIES ────────────────────────────────────────────────
