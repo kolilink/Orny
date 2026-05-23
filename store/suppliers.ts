@@ -45,13 +45,25 @@ export const addSupplier = async (supplier: Omit<Supplier, 'id' | 'factory_id'>)
     phone: item.phone ?? null,
     product: item.product,
     notes: item.notes ?? null,
-  }).then();
+  }).then(({ error }) => { if (error) console.warn('suppliers insert sync error', error.message); });
   return item;
+};
+
+export const updateSupplier = async (id: string, updates: Partial<Omit<Supplier, 'id' | 'factory_id'>>): Promise<void> => {
+  const all = await getSuppliers();
+  await setCache(all.map(s => s.id === id ? { ...s, ...updates } : s));
+  const row: Record<string, unknown> = {};
+  if (updates.name !== undefined) row.name = updates.name;
+  if (updates.phone !== undefined) row.phone = updates.phone ?? null;
+  if (updates.product !== undefined) row.product = updates.product;
+  if (updates.notes !== undefined) row.notes = updates.notes ?? null;
+  supabase.from('suppliers').update(row).eq('id', id).eq('factory_id', getFactoryId())
+    .then(({ error }) => { if (error) console.warn('suppliers update sync error', error.message); });
 };
 
 export const deleteSupplier = async (id: string): Promise<void> => {
   const factoryId = getFactoryId();
   const all = await getSuppliers();
   await setCache(all.filter((s) => s.id !== id));
-  supabase.from('suppliers').delete().eq('id', id).eq('factory_id', factoryId).then();
+  supabase.from('suppliers').delete().eq('id', id).eq('factory_id', factoryId).then(({ error }) => { if (error) console.warn('suppliers delete sync error', error.message); });
 };

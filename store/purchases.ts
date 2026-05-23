@@ -57,7 +57,7 @@ export const addPurchase = async (purchase: Omit<Purchase, 'id' | 'factory_id'>)
     total_amount: item.totalAmount,
     payment_method: item.paymentMethod,
     notes: item.notes ?? null,
-  }).then();
+  }).then(({ error }) => { if (error) console.warn('purchases insert sync error', error.message); });
   return item;
 };
 
@@ -65,5 +65,5 @@ export const deletePurchase = async (id: string): Promise<void> => {
   const factoryId = getFactoryId();
   const all = await getPurchases();
   await setCache(all.filter((p) => p.id !== id));
-  supabase.from('purchases').delete().eq('id', id).eq('factory_id', factoryId).then();
+  supabase.from('purchases').delete().eq('id', id).eq('factory_id', factoryId).then(({ error }) => { if (error) console.warn('purchases delete sync error', error.message); });
 };

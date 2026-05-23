@@ -34,15 +34,17 @@ export const syncInvestmentEntriesFromSupabase = async (): Promise<void> => {
     amount: r.amount,
     date: r.date,
     notes: r.notes,
+    createdAt: r.created_at ?? undefined,
   }));
   await setCache(entries);
 };
 
 export const addInvestmentEntry = async (
-  entry: Omit<InvestmentEntry, 'id' | 'factory_id'>
+  entry: Omit<InvestmentEntry, 'id' | 'factory_id' | 'createdAt'>
 ): Promise<InvestmentEntry> => {
   const factoryId = getFactoryId();
-  const newEntry: InvestmentEntry = { ...entry, id: generateId(), factory_id: factoryId };
+  const now = new Date().toISOString();
+  const newEntry: InvestmentEntry = { ...entry, id: generateId(), factory_id: factoryId, createdAt: now };
   const entries = await getInvestmentEntries();
   await setCache([newEntry, ...entries]);
 
@@ -53,9 +55,24 @@ export const addInvestmentEntry = async (
     amount: newEntry.amount,
     date: newEntry.date,
     notes: newEntry.notes ?? null,
+    created_at: now,
   }).then(({ error }) => { if (error) console.warn('investment_entries insert sync error', error.message); });
 
   return newEntry;
+};
+
+export const updateInvestmentEntry = async (
+  id: string,
+  updates: Partial<Pick<InvestmentEntry, 'amount' | 'date' | 'notes'>>
+): Promise<void> => {
+  const entries = await getInvestmentEntries();
+  await setCache(entries.map(e => e.id === id ? { ...e, ...updates } : e));
+  const row: Record<string, unknown> = {};
+  if (updates.amount !== undefined) row.amount = updates.amount;
+  if (updates.date !== undefined) row.date = updates.date;
+  if (updates.notes !== undefined) row.notes = updates.notes ?? null;
+  supabase.from('investment_entries').update(row).eq('id', id).eq('factory_id', getFactoryId())
+    .then(({ error }) => { if (error) console.warn('investment_entries update sync error', error.message); });
 };
 
 export const deleteInvestmentEntry = async (id: string): Promise<void> => {

@@ -5,6 +5,7 @@ export interface InvestmentEntry {
   amount: number;
   date: string;
   notes?: string;
+  createdAt?: string;
 }
 
 export interface ProductFlavor {
@@ -128,6 +129,7 @@ export interface Expense {
   amount: number;
   paymentMethod: 'cash' | 'orange_money';
   lineItems?: ExpenseLineItem[];
+  deletedAt?: string;
 }
 
 export interface Supplier {

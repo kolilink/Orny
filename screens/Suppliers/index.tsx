@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, FlatList,
-  TextInput, Alert, Modal, ScrollView,
+  TextInput, Modal, ScrollView,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
@@ -9,7 +9,7 @@ import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Supplier, Purchase } from '../../types';
 import DatePickerField from '../../components/DatePickerField';
-import { getSuppliers, addSupplier, deleteSupplier, syncSuppliersFromSupabase } from '../../store/suppliers';
+import { getSuppliers, addSupplier, updateSupplier, deleteSupplier, syncSuppliersFromSupabase } from '../../store/suppliers';
 import { getPurchases, addPurchase, deletePurchase, syncPurchasesFromSupabase } from '../../store/purchases';
 import { formatGNF } from '../../utils/format';
 import { getFactoryId } from '../../store/context';
@@ -29,14 +29,19 @@ export default function SuppliersScreen() {
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [purchases, setPurchases] = useState<Purchase[]>([]);
 
-  // Supplier form modal
+  // ── Supplier form modal ────────────────────────────────────────
   const [supplierModal, setSupplierModal] = useState(false);
+  const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(null);
   const [sName, setSName] = useState('');
   const [sPhone, setSPhone] = useState('');
   const [sProduct, setSProduct] = useState('');
   const [sNotes, setSNotes] = useState('');
 
-  // Purchase form modal
+  // ── Delete confirm modals ──────────────────────────────────────
+  const [deleteSupplierTarget, setDeleteSupplierTarget] = useState<Supplier | null>(null);
+  const [deletePurchaseId, setDeletePurchaseId] = useState<string | null>(null);
+
+  // ── Purchase form modal ────────────────────────────────────────
   const [purchaseModal, setPurchaseModal] = useState(false);
   const [pSupplier, setPSupplier] = useState<Supplier | null>(null);
   const [pProduct, setPProduct] = useState('');
@@ -93,34 +98,46 @@ export default function SuppliersScreen() {
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
-  async function handleAddSupplier() {
-    if (!sName.trim()) return Alert.alert('Erreur', 'Nom du fournisseur requis.');
-    if (!sProduct.trim()) return Alert.alert('Erreur', 'Produit fourni requis.');
-    await addSupplier({ name: sName.trim(), phone: sPhone.trim() || undefined, product: sProduct.trim(), notes: sNotes.trim() || undefined });
+  function openAddSupplier() {
+    setEditingSupplier(null);
+    setSName(''); setSPhone(''); setSProduct(''); setSNotes('');
+    setSupplierModal(true);
+  }
+
+  function openEditSupplier(s: Supplier) {
+    setEditingSupplier(s);
+    setSName(s.name); setSPhone(s.phone ?? ''); setSProduct(s.product); setSNotes(s.notes ?? '');
+    setSupplierModal(true);
+  }
+
+  async function handleSaveSupplier() {
+    if (!sName.trim()) return;
+    if (!sProduct.trim()) return;
+    if (editingSupplier) {
+      await updateSupplier(editingSupplier.id, {
+        name: sName.trim(), phone: sPhone.trim() || undefined,
+        product: sProduct.trim(), notes: sNotes.trim() || undefined,
+      });
+    } else {
+      await addSupplier({ name: sName.trim(), phone: sPhone.trim() || undefined, product: sProduct.trim(), notes: sNotes.trim() || undefined });
+    }
     setSName(''); setSPhone(''); setSProduct(''); setSNotes('');
     setSupplierModal(false);
     const data = await getSuppliers();
     setSuppliers(data);
   }
 
-  async function handleDeleteSupplier(id: string) {
-    Alert.alert('Supprimer ?', 'Le fournisseur et ses achats associés seront supprimés.', [
-      { text: 'Annuler', style: 'cancel' },
-      {
-        text: 'Supprimer', style: 'destructive', onPress: async () => {
-          await deleteSupplier(id);
-          setSuppliers((p) => p.filter((s) => s.id !== id));
-        },
-      },
-    ]);
+  async function confirmDeleteSupplier() {
+    if (!deleteSupplierTarget) return;
+    await deleteSupplier(deleteSupplierTarget.id);
+    setSuppliers((p) => p.filter((s) => s.id !== deleteSupplierTarget.id));
+    setDeleteSupplierTarget(null);
   }
 
   async function handleAddPurchase() {
     const qty = parseFloat(pQty);
     const up = parseInt(pUnitPrice.replace(/\s/g, ''), 10);
-    if (!pProduct.trim()) return Alert.alert('Erreur', 'Produit requis.');
-    if (!qty || qty <= 0) return Alert.alert('Erreur', 'Quantité invalide.');
-    if (!up || up <= 0) return Alert.alert('Erreur', 'Prix unitaire invalide.');
+    if (!pProduct.trim() || !qty || qty <= 0 || !up || up <= 0) return;
     const item = await addPurchase({
       supplierId: pSupplier?.id,
       supplierName: pSupplier?.name ?? 'Inconnu',
@@ -140,16 +157,11 @@ export default function SuppliersScreen() {
     setPurchases(prev => [item, ...prev]);
   }
 
-  async function handleDeletePurchase(id: string) {
-    Alert.alert('Supprimer ?', undefined, [
-      { text: 'Annuler', style: 'cancel' },
-      {
-        text: 'Supprimer', style: 'destructive', onPress: async () => {
-          await deletePurchase(id);
-          setPurchases((p) => p.filter((x) => x.id !== id));
-        },
-      },
-    ]);
+  async function confirmDeletePurchase() {
+    if (!deletePurchaseId) return;
+    await deletePurchase(deletePurchaseId);
+    setPurchases((p) => p.filter((x) => x.id !== deletePurchaseId));
+    setDeletePurchaseId(null);
   }
 
   const totalPurchases = purchases.reduce((sum, p) => sum + p.totalAmount, 0);
@@ -160,7 +172,7 @@ export default function SuppliersScreen() {
         <Text style={styles.title}>Fournisseurs & Achats</Text>
         <TouchableOpacity
           style={styles.addBtn}
-          onPress={() => tab === 'suppliers' ? setSupplierModal(true) : setPurchaseModal(true)}
+          onPress={() => tab === 'suppliers' ? openAddSupplier() : setPurchaseModal(true)}
         >
           <Ionicons name="add" size={22} color="#FFF" />
         </TouchableOpacity>
@@ -171,7 +183,7 @@ export default function SuppliersScreen() {
           <Text style={[styles.tabText, tab === 'suppliers' && styles.tabTextActive]}>Fournisseurs ({suppliers.length})</Text>
         </TouchableOpacity>
         <TouchableOpacity style={[styles.tab, tab === 'purchases' && styles.tabActive]} onPress={() => setTab('purchases')}>
-          <Text style={[styles.tabText, tab === 'purchases' && styles.tabTextActive]}>Achats</Text>
+          <Text style={[styles.tabText, tab === 'purchases' && styles.tabTextActive]}>Achats ({purchases.length})</Text>
         </TouchableOpacity>
       </View>
 
@@ -188,15 +200,20 @@ export default function SuppliersScreen() {
                 <View style={styles.iconWrap}>
                   <Ionicons name="business" size={20} color={C.primary} />
                 </View>
-                <View>
+                <View style={{ flex: 1 }}>
                   <Text style={styles.cardName}>{item.name}</Text>
                   <Text style={styles.cardSub}>{item.product}{item.phone ? `  ·  ${item.phone}` : ''}</Text>
                   {!!item.notes && <Text style={styles.cardNotes}>{item.notes}</Text>}
                 </View>
               </View>
-              <TouchableOpacity onPress={() => handleDeleteSupplier(item.id)} style={{ padding: 6 }}>
-                <Ionicons name="trash-outline" size={18} color={C.red} />
-              </TouchableOpacity>
+              <View style={{ flexDirection: 'row', gap: 4 }}>
+                <TouchableOpacity onPress={() => openEditSupplier(item)} style={{ padding: 6 }}>
+                  <Ionicons name="pencil-outline" size={18} color={C.primary} />
+                </TouchableOpacity>
+                <TouchableOpacity onPress={() => setDeleteSupplierTarget(item)} style={{ padding: 6 }}>
+                  <Ionicons name="trash-outline" size={18} color={C.red} />
+                </TouchableOpacity>
+              </View>
             </View>
           )}
         />
@@ -228,7 +245,7 @@ export default function SuppliersScreen() {
               </View>
               <View style={{ alignItems: 'flex-end' }}>
                 <Text style={[styles.cardName, { color: C.red }]}>{formatGNF(item.totalAmount)}</Text>
-                <TouchableOpacity onPress={() => handleDeletePurchase(item.id)} style={{ padding: 4, marginTop: 4 }}>
+                <TouchableOpacity onPress={() => setDeletePurchaseId(item.id)} style={{ padding: 4, marginTop: 4 }}>
                   <Ionicons name="trash-outline" size={16} color={C.red} />
                 </TouchableOpacity>
               </View>
@@ -237,11 +254,11 @@ export default function SuppliersScreen() {
         />
       )}
 
-      {/* Add Supplier Modal */}
+      {/* Add / Edit Supplier Modal */}
       <Modal visible={supplierModal} transparent animationType="slide">
         <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={() => setSupplierModal(false)} />
         <View style={styles.sheet}>
-          <Text style={styles.sheetTitle}>Nouveau fournisseur</Text>
+          <Text style={styles.sheetTitle}>{editingSupplier ? 'Modifier fournisseur' : 'Nouveau fournisseur'}</Text>
           <ScrollView>
             <Text style={styles.fieldLabel}>Nom *</Text>
             <TextInput style={styles.input} value={sName} onChangeText={setSName} placeholder="Ex: Mamadou Diallo" placeholderTextColor={C.muted} />
@@ -251,8 +268,8 @@ export default function SuppliersScreen() {
             <TextInput style={styles.input} value={sPhone} onChangeText={setSPhone} placeholder="Ex: 622 00 00 00" placeholderTextColor={C.muted} keyboardType="phone-pad" />
             <Text style={styles.fieldLabel}>Notes</Text>
             <TextInput style={styles.input} value={sNotes} onChangeText={setSNotes} placeholder="Notes optionnelles" placeholderTextColor={C.muted} />
-            <TouchableOpacity style={styles.confirmBtn} onPress={handleAddSupplier}>
-              <Text style={styles.confirmBtnText}>Ajouter le fournisseur</Text>
+            <TouchableOpacity style={styles.confirmBtn} onPress={handleSaveSupplier}>
+              <Text style={styles.confirmBtnText}>{editingSupplier ? 'Mettre à jour' : 'Ajouter le fournisseur'}</Text>
             </TouchableOpacity>
           </ScrollView>
         </View>
@@ -326,6 +343,39 @@ export default function SuppliersScreen() {
           ))}
         </View>
       </Modal>
+
+      {/* Delete Supplier Confirm */}
+      <Modal visible={!!deleteSupplierTarget} transparent animationType="fade">
+        <View style={styles.confirmOverlay}>
+          <View style={styles.confirmBox}>
+            <Ionicons name="trash-outline" size={32} color={C.red} style={{ alignSelf: 'center', marginBottom: 12 }} />
+            <Text style={styles.confirmTitle}>Supprimer ce fournisseur ?</Text>
+            <Text style={styles.confirmSub}>{deleteSupplierTarget?.name}{'\n'}Ses achats associés seront aussi supprimés.</Text>
+            <TouchableOpacity style={styles.confirmBtnRed} onPress={confirmDeleteSupplier}>
+              <Text style={styles.confirmBtnText}>Supprimer</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.cancelBtn} onPress={() => setDeleteSupplierTarget(null)}>
+              <Text style={styles.cancelBtnText}>Annuler</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Delete Purchase Confirm */}
+      <Modal visible={!!deletePurchaseId} transparent animationType="fade">
+        <View style={styles.confirmOverlay}>
+          <View style={styles.confirmBox}>
+            <Ionicons name="trash-outline" size={32} color={C.red} style={{ alignSelf: 'center', marginBottom: 12 }} />
+            <Text style={styles.confirmTitle}>Supprimer cet achat ?</Text>
+            <TouchableOpacity style={styles.confirmBtnRed} onPress={confirmDeletePurchase}>
+              <Text style={styles.confirmBtnText}>Supprimer</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.cancelBtn} onPress={() => setDeletePurchaseId(null)}>
+              <Text style={styles.cancelBtnText}>Annuler</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -367,4 +417,12 @@ const styles = StyleSheet.create({
   supplierRow: { paddingVertical: 14, borderBottomWidth: 1, borderColor: C.border },
   supplierRowText: { fontSize: 15, color: C.text, fontWeight: '500' },
   supplierRowSub: { fontSize: 12, color: C.muted, marginTop: 2 },
+  // confirm modals
+  confirmOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', padding: 24 },
+  confirmBox: { backgroundColor: C.card, borderRadius: 20, padding: 24 },
+  confirmTitle: { fontSize: 17, fontWeight: '700', color: C.text, textAlign: 'center', marginBottom: 8 },
+  confirmSub: { fontSize: 14, color: C.muted, textAlign: 'center', marginBottom: 4, lineHeight: 20 },
+  confirmBtnRed: { marginTop: 16, backgroundColor: C.red, borderRadius: 12, padding: 14, alignItems: 'center' },
+  cancelBtn: { marginTop: 10, borderRadius: 12, padding: 14, alignItems: 'center', borderWidth: 1, borderColor: C.border },
+  cancelBtnText: { color: C.muted, fontWeight: '600', fontSize: 15 },
 });
