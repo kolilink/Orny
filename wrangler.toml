@@ -1,0 +1,6 @@
+name = "orny"
+compatibility_date = "2026-05-23"
+compatibility_flags = ["nodejs_compat"]
+
+[assets]
+directory = "./dist"
