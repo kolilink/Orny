@@ -313,24 +313,28 @@ export default function ProductionScreen() {
         </View>
       ) : (
         products.map((p) => (
-          <TouchableOpacity
-            key={p.id}
-            style={styles.productCard}
-            onPress={() => selectProduct(p)}
-            onLongPress={() => { setActionsProduct(p); setProductActionsModal(true); }}
-            activeOpacity={0.7}
-          >
-            <View style={styles.productInfo}>
-              <Text style={styles.productName}>{p.name}</Text>
-              <Text style={styles.productUnit}>{p.unit}</Text>
-            </View>
-            <View style={styles.productRight}>
+          <View key={p.id} style={styles.productCard}>
+            <TouchableOpacity
+              style={styles.productCardMain}
+              onPress={() => selectProduct(p)}
+              activeOpacity={0.7}
+            >
+              <View style={styles.productInfo}>
+                <Text style={styles.productName}>{p.name}</Text>
+                <Text style={styles.productUnit}>{p.unit}</Text>
+              </View>
               <Text style={lastBatchDate[p.id] ? styles.productLastMade : styles.productNeverMade}>
                 {lastBatchDate[p.id] ? `Dernière fois: ${lastBatchDate[p.id]}` : 'Jamais produit'}
               </Text>
-              <Ionicons name="chevron-forward" size={18} color="#BABAB6" />
-            </View>
-          </TouchableOpacity>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.productMenuBtn}
+              onPress={() => { setActionsProduct(p); setProductActionsModal(true); }}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <Ionicons name="ellipsis-vertical" size={20} color={C.muted} />
+            </TouchableOpacity>
+          </View>
         ))
       )}
     </ScrollView>
@@ -362,7 +366,7 @@ export default function ProductionScreen() {
               placeholderTextColor="#BABAB6"
               autoFocus
             />
-            <Text style={styles.unitsLabel}>{selectedProduct?.unit}</Text>
+            <Text style={styles.unitsLabel} numberOfLines={2}>{selectedProduct?.unit}</Text>
           </View>
         </View>
 
@@ -845,17 +849,25 @@ const styles = StyleSheet.create({
   },
   newProductBtnText: { fontSize: 15, fontWeight: '700', color: C.primary },
   productCard: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    backgroundColor: C.card, borderRadius: 14, padding: 16,
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: C.card, borderRadius: 14,
     borderWidth: 1, borderColor: C.border,
     shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 4, elevation: 1,
+    overflow: 'hidden',
+  },
+  productCardMain: {
+    flex: 1, flexDirection: 'row', alignItems: 'center',
+    justifyContent: 'space-between', padding: 16, gap: 8,
   },
   productInfo: { flex: 1 },
   productName: { fontSize: 16, fontWeight: '600', color: C.text },
   productUnit: { fontSize: 13, color: C.muted, marginTop: 2 },
-  productRight: { alignItems: 'flex-end', gap: 4 },
-  productLastMade: { fontSize: 11, color: C.muted },
-  productNeverMade: { fontSize: 11, color: '#BABAB6', fontStyle: 'italic' },
+  productLastMade: { fontSize: 11, color: C.muted, textAlign: 'right', flexShrink: 1 },
+  productNeverMade: { fontSize: 11, color: '#BABAB6', fontStyle: 'italic', flexShrink: 1 },
+  productMenuBtn: {
+    paddingHorizontal: 14, paddingVertical: 18,
+    borderLeftWidth: 1, borderColor: C.border,
+  },
   emptyState: { paddingVertical: 32, alignItems: 'center' },
   emptyText: { fontSize: 14, color: C.muted, textAlign: 'center', fontStyle: 'italic' },
 
@@ -869,13 +881,13 @@ const styles = StyleSheet.create({
     shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 4, elevation: 1,
   },
   bigFieldLabel: { fontSize: 16, fontWeight: '700', color: C.text },
-  unitsRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  unitsRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   unitsInput: {
-    flex: 1, fontSize: 40, fontWeight: '700', color: C.text,
+    flex: 1, minWidth: 0, fontSize: 36, fontWeight: '700', color: C.text,
     backgroundColor: C.bg, borderRadius: 12, borderWidth: 1, borderColor: C.border,
-    padding: 12, textAlign: 'center',
+    paddingHorizontal: 12, paddingVertical: 14, textAlign: 'center',
   },
-  unitsLabel: { fontSize: 18, fontWeight: '600', color: C.muted, minWidth: 60 },
+  unitsLabel: { fontSize: 16, fontWeight: '600', color: C.muted, flexShrink: 0, maxWidth: 80 },
   cardTitle: { fontSize: 15, fontWeight: '600', color: C.text },
   matRow: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
