@@ -46,6 +46,7 @@ export default function StockScreen() {
   const [editValues, setEditValues] = useState<Record<string, string>>({});
   const [newItemForm, setNewItemForm] = useState<NewItemForm>(EMPTY_ITEM);
   const [saving, setSaving] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<StockItem | null>(null);
 
   const load = useCallback(async () => {
     const s = await getStock();
@@ -100,21 +101,8 @@ export default function StockScreen() {
   };
 
   const handleDeleteItem = (item: StockItem) => {
-    Alert.alert(
-      'Supprimer cet article ?',
-      `Supprimer "${item.name}" du stock ?`,
-      [
-        { text: 'Annuler', style: 'cancel' },
-        {
-          text: 'Supprimer',
-          style: 'destructive',
-          onPress: async () => {
-            await deleteStockItem(item.id);
-            await load();
-          },
-        },
-      ]
-    );
+    console.log('[Stock] delete pressed for', item.id, item.name);
+    setDeleteTarget(item);
   };
 
   return (
@@ -210,6 +198,33 @@ export default function StockScreen() {
                 <Text style={styles.confirmText}>{saving ? 'Enregistrement…' : 'Confirmer'}</Text>
               </TouchableOpacity>
             </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Delete confirm modal */}
+      <Modal visible={!!deleteTarget} transparent animationType="fade" onRequestClose={() => setDeleteTarget(null)}>
+        <View style={styles.confirmOverlay}>
+          <View style={styles.confirmBox}>
+            <Ionicons name="trash-outline" size={32} color={C.red} style={{ alignSelf: 'center', marginBottom: 12 }} />
+            <Text style={styles.confirmTitle}>Supprimer cet article ?</Text>
+            <Text style={styles.confirmSub}>
+              {deleteTarget ? `Supprimer "${deleteTarget.name}" du stock ?` : ''}
+            </Text>
+            <TouchableOpacity
+              style={styles.confirmDeleteBtn}
+              onPress={async () => {
+                if (!deleteTarget) return;
+                await deleteStockItem(deleteTarget.id);
+                await load();
+                setDeleteTarget(null);
+              }}
+            >
+              <Text style={styles.confirmDeleteText}>Supprimer</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.confirmCancelBtn} onPress={() => setDeleteTarget(null)}>
+              <Text style={styles.confirmCancelText}>Annuler</Text>
+            </TouchableOpacity>
           </View>
         </View>
       </Modal>
@@ -338,4 +353,20 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   confirmText: { fontSize: 16, color: '#FFFFFF', fontWeight: '700' },
+  confirmOverlay: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', padding: 24,
+  },
+  confirmBox: { backgroundColor: C.card, borderRadius: 16, padding: 24 },
+  confirmTitle: { fontSize: 17, fontWeight: '700', color: C.text, textAlign: 'center', marginBottom: 6 },
+  confirmSub: { fontSize: 14, color: C.muted, textAlign: 'center', marginBottom: 20 },
+  confirmDeleteBtn: {
+    backgroundColor: C.red, borderRadius: 12, height: 52,
+    alignItems: 'center', justifyContent: 'center', marginBottom: 10,
+  },
+  confirmDeleteText: { color: '#FFFFFF', fontSize: 16, fontWeight: '700' },
+  confirmCancelBtn: {
+    borderRadius: 12, height: 52, borderWidth: 1, borderColor: C.border,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  confirmCancelText: { fontSize: 16, color: C.muted, fontWeight: '600' },
 });

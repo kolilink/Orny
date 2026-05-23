@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity,
   Modal, TextInput, KeyboardAvoidingView, Platform, ScrollView,
@@ -6,6 +6,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '../../context/AuthContext';
 import { getInvestors, addInvestor, updateInvestor, deleteInvestor, syncInvestorsFromSupabase } from '../../store/investors';
 import {
@@ -29,11 +30,36 @@ const C = {
   border: '#E8E8E4',
 };
 
+// ── Edit rate-limiting: 3 edits per 24h rolling window from first edit ──────
+const MAX_EDITS = 3;
 const EDIT_WINDOW_MS = 24 * 60 * 60 * 1000;
 
-function canEditEntry(entry: InvestmentEntry): boolean {
-  if (!entry.createdAt) return false;
-  return Date.now() - new Date(entry.createdAt).getTime() < EDIT_WINDOW_MS;
+function editKey(entryId: string) { return `entry_edits_${entryId}`; }
+
+async function getRecentEdits(entryId: string): Promise<number[]> {
+  try {
+    const raw = await AsyncStorage.getItem(editKey(entryId));
+    if (!raw) return [];
+    const all: number[] = JSON.parse(raw);
+    return all.filter(t => Date.now() - t < EDIT_WINDOW_MS);
+  } catch { return []; }
+}
+
+async function checkEditAllowed(entryId: string): Promise<{ allowed: boolean; remaining: number; hoursUntilReset: number }> {
+  const recent = await getRecentEdits(entryId);
+  if (recent.length >= MAX_EDITS) {
+    const oldest = Math.min(...recent);
+    const hoursUntilReset = Math.ceil((oldest + EDIT_WINDOW_MS - Date.now()) / 3_600_000);
+    return { allowed: false, remaining: 0, hoursUntilReset };
+  }
+  return { allowed: true, remaining: MAX_EDITS - recent.length, hoursUntilReset: 0 };
+}
+
+async function recordEdit(entryId: string): Promise<number> {
+  const recent = await getRecentEdits(entryId);
+  const updated = [...recent, Date.now()];
+  await AsyncStorage.setItem(editKey(entryId), JSON.stringify(updated));
+  return Math.max(0, MAX_EDITS - updated.length);
 }
 
 type InvestorForm = { name: string; share: string; notes: string; initialAmount: string };
@@ -66,6 +92,15 @@ export default function InvestorsScreen() {
   const [deleteEntryTarget, setDeleteEntryTarget] = useState<InvestmentEntry | null>(null);
 
   const [saving, setSaving] = useState(false);
+  const [toast, setToast] = useState<{ message: string; isError: boolean } | null>(null);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [editRemaining, setEditRemaining] = useState(MAX_EDITS);
+
+  function showToast(message: string, isError: boolean) {
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    setToast({ message, isError });
+    toastTimer.current = setTimeout(() => setToast(null), 4500);
+  }
 
   const load = useCallback(async () => {
     syncInvestorsFromSupabase();
@@ -141,7 +176,13 @@ export default function InvestorsScreen() {
     setShowEntryModal(true);
   };
 
-  const openEditEntry = (entry: InvestmentEntry) => {
+  const openEditEntry = async (entry: InvestmentEntry) => {
+    const { allowed, remaining, hoursUntilReset } = await checkEditAllowed(entry.id);
+    if (!allowed) {
+      showToast(`Limite atteinte. Vous pourrez modifier à nouveau dans ${hoursUntilReset}h`, true);
+      return;
+    }
+    setEditRemaining(remaining);
     setEditingEntry(entry);
     setEntryInvestorId(entry.investorId);
     setEntryForm({ amount: String(entry.amount), date: entry.date, notes: entry.notes ?? '' });
@@ -155,11 +196,20 @@ export default function InvestorsScreen() {
     try {
       if (editingEntry) {
         await updateInvestmentEntry(editingEntry.id, { amount, date: entryForm.date, notes: entryForm.notes.trim() || undefined });
+        const remaining = await recordEdit(editingEntry.id);
+        await load();
+        setShowEntryModal(false);
+        if (remaining === 0) {
+          const { hoursUntilReset } = await checkEditAllowed(editingEntry.id);
+          showToast(`Limite atteinte. Vous pourrez modifier à nouveau dans ${hoursUntilReset}h`, true);
+        } else {
+          showToast(`Il vous reste ${remaining} modification${remaining > 1 ? 's' : ''} dans les 24h`, false);
+        }
       } else {
         await addInvestmentEntry({ investorId: entryInvestorId, amount, date: entryForm.date, notes: entryForm.notes.trim() || undefined });
+        await load();
+        setShowEntryModal(false);
       }
-      await load();
-      setShowEntryModal(false);
     } finally {
       setSaving(false);
     }
@@ -314,33 +364,25 @@ export default function InvestorsScreen() {
                   {investorEntries.length === 0 && item.amountInvested === 0 && (
                     <Text style={styles.noEntries}>Aucun versement enregistré</Text>
                   )}
-                  {investorEntries.map((entry) => {
-                    const editable = isAdmin && canEditEntry(entry);
-                    return (
-                      <View key={entry.id} style={styles.entryRow}>
-                        <View style={{ flex: 1 }}>
-                          <Text style={styles.entryAmount}>{formatGNF(entry.amount)}</Text>
-                          {!!entry.notes && <Text style={styles.entryNote}>{entry.notes}</Text>}
-                          {editable && (
-                            <Text style={styles.editableHint}>Modifiable encore aujourd'hui</Text>
-                          )}
-                        </View>
-                        <Text style={styles.entryDate}>{formatDate(entry.date)}</Text>
-                        {isAdmin && (
-                          <View style={{ flexDirection: 'row', gap: 2 }}>
-                            {editable && (
-                              <TouchableOpacity style={styles.deleteEntryBtn} onPress={() => openEditEntry(entry)}>
-                                <Ionicons name="pencil-outline" size={16} color={C.primary} />
-                              </TouchableOpacity>
-                            )}
-                            <TouchableOpacity style={styles.deleteEntryBtn} onPress={() => setDeleteEntryTarget(entry)}>
-                              <Ionicons name="close-circle-outline" size={18} color={C.red} />
-                            </TouchableOpacity>
-                          </View>
-                        )}
+                  {investorEntries.map((entry) => (
+                    <View key={entry.id} style={styles.entryRow}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.entryAmount}>{formatGNF(entry.amount)}</Text>
+                        {!!entry.notes && <Text style={styles.entryNote}>{entry.notes}</Text>}
                       </View>
-                    );
-                  })}
+                      <Text style={styles.entryDate}>{formatDate(entry.date)}</Text>
+                      {isAdmin && (
+                        <View style={{ flexDirection: 'row', gap: 2 }}>
+                          <TouchableOpacity style={styles.deleteEntryBtn} onPress={() => openEditEntry(entry)}>
+                            <Ionicons name="pencil-outline" size={16} color={C.primary} />
+                          </TouchableOpacity>
+                          <TouchableOpacity style={styles.deleteEntryBtn} onPress={() => setDeleteEntryTarget(entry)}>
+                            <Ionicons name="close-circle-outline" size={18} color={C.red} />
+                          </TouchableOpacity>
+                        </View>
+                      )}
+                    </View>
+                  ))}
                 </View>
               )}
             </View>
@@ -390,7 +432,11 @@ export default function InvestorsScreen() {
               {editingEntry && (
                 <View style={styles.editWindowBanner}>
                   <Ionicons name="time-outline" size={14} color={C.orange} />
-                  <Text style={styles.editWindowText}>Modifiable dans les 24h suivant la création</Text>
+                  <Text style={styles.editWindowText}>
+                    {editRemaining === MAX_EDITS
+                      ? `${MAX_EDITS} modifications autorisées par période de 24h`
+                      : `${editRemaining} modification${editRemaining > 1 ? 's' : ''} restante${editRemaining > 1 ? 's' : ''} dans les 24h`}
+                  </Text>
                 </View>
               )}
               <Text style={styles.fieldLabel}>Montant (GNF) *</Text>
@@ -444,6 +490,18 @@ export default function InvestorsScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* Edit rate-limit toast */}
+      {toast && (
+        <View style={[styles.toast, toast.isError ? styles.toastError : styles.toastSuccess]} pointerEvents="none">
+          <Ionicons
+            name={toast.isError ? 'warning-outline' : 'checkmark-circle-outline'}
+            size={18}
+            color="#FFF"
+          />
+          <Text style={styles.toastText}>{toast.message}</Text>
+        </View>
+      )}
     </View>
   );
 }
@@ -507,4 +565,13 @@ const styles = StyleSheet.create({
   confirmSub: { fontSize: 14, color: C.muted, textAlign: 'center', marginBottom: 4, lineHeight: 20 },
   confirmBtnRed: { marginTop: 16, backgroundColor: C.red, borderRadius: 12, padding: 14, alignItems: 'center' },
   confirmBtnText: { color: '#FFF', fontSize: 16, fontWeight: '700' },
+  toast: {
+    position: 'absolute', bottom: 24, left: 16, right: 16,
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    borderRadius: 12, padding: 14, zIndex: 9999,
+    shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 10, elevation: 8,
+  },
+  toastSuccess: { backgroundColor: C.primary },
+  toastError: { backgroundColor: C.red },
+  toastText: { flex: 1, color: '#FFF', fontSize: 14, fontWeight: '600', lineHeight: 20 },
 });
