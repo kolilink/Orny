@@ -6,8 +6,8 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
-import { getClients, upsertClient, updateClient, deleteClient } from '../../store/clients';
-import { getSales } from '../../store/sales';
+import { getClients, upsertClient, updateClient, deleteClient, syncClientsFromSupabase } from '../../store/clients';
+import { getSales, syncSalesFromSupabase } from '../../store/sales';
 import { Client, Sale, saleDebt } from '../../types';
 import { formatGNF } from '../../utils/format';
 
@@ -36,8 +36,10 @@ export default function ClientsScreen() {
   const [editingClient, setEditingClient] = useState<Client | null>(null);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<Client | null>(null);
 
   const load = useCallback(async () => {
+    await Promise.all([syncClientsFromSupabase(), syncSalesFromSupabase()]);
     const [c, sales] = await Promise.all([getClients(), getSales()]);
     setClientsState(c);
 
@@ -109,21 +111,7 @@ export default function ClientsScreen() {
   };
 
   const handleDelete = (client: Client) => {
-    Alert.alert(
-      'Supprimer',
-      `Supprimer "${client.name}" ?`,
-      [
-        { text: 'Annuler', style: 'cancel' },
-        {
-          text: 'Supprimer',
-          style: 'destructive',
-          onPress: async () => {
-            await deleteClient(client.id);
-            await load();
-          },
-        },
-      ]
-    );
+    setDeleteTarget(client);
   };
 
   return (
@@ -239,6 +227,33 @@ export default function ClientsScreen() {
           )}
         </ScrollView>
       )}
+
+      {/* Delete confirm modal */}
+      <Modal visible={!!deleteTarget} transparent animationType="fade" onRequestClose={() => setDeleteTarget(null)}>
+        <View style={styles.confirmOverlay}>
+          <View style={styles.confirmBox}>
+            <Ionicons name="trash-outline" size={32} color={C.red} style={{ alignSelf: 'center', marginBottom: 12 }} />
+            <Text style={styles.confirmTitle}>Supprimer ce client ?</Text>
+            <Text style={styles.confirmSub}>
+              {deleteTarget ? `Supprimer "${deleteTarget.name}" ?` : ''}
+            </Text>
+            <TouchableOpacity
+              style={styles.confirmDeleteBtn}
+              onPress={async () => {
+                if (!deleteTarget) return;
+                await deleteClient(deleteTarget.id);
+                await load();
+                setDeleteTarget(null);
+              }}
+            >
+              <Text style={styles.confirmDeleteText}>Supprimer</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.confirmCancelBtn} onPress={() => setDeleteTarget(null)}>
+              <Text style={styles.confirmCancelText}>Annuler</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
 
       <Modal visible={showModal} animationType="slide" transparent onRequestClose={() => setShowModal(false)}>
         <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -378,4 +393,20 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   confirmText: { fontSize: 16, color: '#FFFFFF', fontWeight: '700' },
+  confirmOverlay: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', padding: 24,
+  },
+  confirmBox: { backgroundColor: C.card, borderRadius: 16, padding: 24 },
+  confirmTitle: { fontSize: 17, fontWeight: '700', color: C.text, textAlign: 'center', marginBottom: 6 },
+  confirmSub: { fontSize: 14, color: C.muted, textAlign: 'center', marginBottom: 20 },
+  confirmDeleteBtn: {
+    backgroundColor: C.red, borderRadius: 12, height: 52,
+    alignItems: 'center', justifyContent: 'center', marginBottom: 10,
+  },
+  confirmDeleteText: { color: '#FFFFFF', fontSize: 16, fontWeight: '700' },
+  confirmCancelBtn: {
+    borderRadius: 12, height: 52, borderWidth: 1, borderColor: C.border,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  confirmCancelText: { fontSize: 16, color: C.muted, fontWeight: '600' },
 });

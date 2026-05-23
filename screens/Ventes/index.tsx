@@ -8,10 +8,10 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { getSales, addSale, updateSale, deleteSale } from '../../store/sales';
-import { getClients, upsertClient } from '../../store/clients';
-import { getFlavors } from '../../store/flavors';
-import { getBulks } from '../../store/bulks';
+import { getSales, addSale, updateSale, deleteSale, syncSalesFromSupabase } from '../../store/sales';
+import { getClients, upsertClient, syncClientsFromSupabase } from '../../store/clients';
+import { getFlavors, syncFlavorsFromSupabase } from '../../store/flavors';
+import { getBulks, syncBulksFromSupabase } from '../../store/bulks';
 import { Sale, ProductFlavor, BulkProduct, Client, saleDebt } from '../../types';
 import { formatGNF, formatDate } from '../../utils/format';
 import { toDateString } from '../../utils/dates';
@@ -99,6 +99,7 @@ export default function VentesScreen() {
   }, [clientQuery, paymentMethod, cartItems]);
 
   const [detailSale, setDetailSale] = useState<Sale | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<Sale | null>(null);
   const [editingSale, setEditingSale] = useState<Sale | null>(null);
   const [editForm, setEditForm] = useState<{
     clientName: string; quantity: number; unitPrice: number;
@@ -106,6 +107,7 @@ export default function VentesScreen() {
   } | null>(null);
 
   const load = useCallback(async () => {
+    await Promise.all([syncSalesFromSupabase(), syncClientsFromSupabase(), syncFlavorsFromSupabase(), syncBulksFromSupabase()]);
     const [s, cls, fl, bk] = await Promise.all([
       getSales(), getClients(), getFlavors(), getBulks(),
     ]);
@@ -281,21 +283,7 @@ export default function VentesScreen() {
 
   const handleDelete = (sale: Sale) => {
     setDetailSale(null);
-    Alert.alert(
-      'Supprimer cette vente ?',
-      `${sale.clientName} — ${formatGNF(sale.totalAmount)}`,
-      [
-        { text: 'Annuler', style: 'cancel' },
-        {
-          text: 'Supprimer',
-          style: 'destructive',
-          onPress: async () => {
-            await deleteSale(sale.id);
-            await load();
-          },
-        },
-      ]
-    );
+    setDeleteTarget(sale);
   };
 
   return (
@@ -591,6 +579,33 @@ export default function VentesScreen() {
         </View>
       </Modal>
 
+      {/* Delete confirm modal */}
+      <Modal visible={!!deleteTarget} transparent animationType="fade" onRequestClose={() => setDeleteTarget(null)}>
+        <View style={styles.confirmOverlay}>
+          <View style={styles.confirmBox}>
+            <Ionicons name="trash-outline" size={32} color={C.red} style={{ alignSelf: 'center', marginBottom: 12 }} />
+            <Text style={styles.confirmTitle}>Supprimer cette vente ?</Text>
+            <Text style={styles.confirmSub}>
+              {deleteTarget ? `${deleteTarget.clientName} — ${formatGNF(deleteTarget.totalAmount)}` : ''}
+            </Text>
+            <TouchableOpacity
+              style={styles.confirmDeleteBtn}
+              onPress={async () => {
+                if (!deleteTarget) return;
+                await deleteSale(deleteTarget.id);
+                await load();
+                setDeleteTarget(null);
+              }}
+            >
+              <Text style={styles.confirmDeleteText}>Supprimer</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.confirmCancelBtn} onPress={() => setDeleteTarget(null)}>
+              <Text style={styles.confirmCancelText}>Annuler</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
       {/* Edit modal */}
       <Modal visible={!!editingSale} animationType="slide" transparent onRequestClose={() => setEditingSale(null)}>
         <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -826,4 +841,22 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   confirmText2: { fontSize: 16, color: '#FFFFFF', fontWeight: '700' },
+  confirmOverlay: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', padding: 24,
+  },
+  confirmBox: {
+    backgroundColor: C.card, borderRadius: 16, padding: 24,
+  },
+  confirmTitle: { fontSize: 17, fontWeight: '700', color: '#1A1A18', textAlign: 'center', marginBottom: 6 },
+  confirmSub: { fontSize: 14, color: C.muted, textAlign: 'center', marginBottom: 20 },
+  confirmDeleteBtn: {
+    backgroundColor: C.red, borderRadius: 12, height: 52,
+    alignItems: 'center', justifyContent: 'center', marginBottom: 10,
+  },
+  confirmDeleteText: { color: '#FFFFFF', fontSize: 16, fontWeight: '700' },
+  confirmCancelBtn: {
+    borderRadius: 12, height: 52, borderWidth: 1, borderColor: C.border,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  confirmCancelText: { fontSize: 16, color: C.muted, fontWeight: '600' },
 });
