@@ -30,9 +30,8 @@ yarn-error.*
 .DS_Store
 *.pem
 
-# local env files
-.env
-.env.*
+# local env files (EXPO_PUBLIC_ keys are public — .env committed for Cloudflare build)
+.env.local
 .env*.local
 
 # typescript
