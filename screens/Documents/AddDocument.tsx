@@ -10,6 +10,28 @@ import { Ionicons } from '@expo/vector-icons';
 import { addDocument } from '../../store/documents';
 import { BusinessDocument } from '../../types';
 
+// Web-only: prompts browser file picker, resolves to a base64 data URL (persists across refresh)
+function webPickFromDisk(accept: string, capture?: string): Promise<{ uri: string; mimeType: string } | null> {
+  return new Promise((resolve) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = accept;
+    if (capture) input.setAttribute('capture', capture);
+    input.style.cssText = 'position:fixed;opacity:0;pointer-events:none';
+    document.body.appendChild(input);
+    input.onchange = () => {
+      const file = input.files?.[0];
+      document.body.removeChild(input);
+      if (!file) { resolve(null); return; }
+      const reader = new FileReader();
+      reader.onloadend = () => resolve({ uri: reader.result as string, mimeType: file.type });
+      reader.onerror = () => resolve(null);
+      reader.readAsDataURL(file);
+    };
+    input.click();
+  });
+}
+
 const CATEGORIES: { key: BusinessDocument['category']; label: string }[] = [
   { key: 'contrat', label: 'Contrat' },
   { key: 'facture', label: 'Facture' },
@@ -31,6 +53,15 @@ export default function AddDocumentScreen() {
   const [saving, setSaving] = useState(false);
 
   const takePhoto = async () => {
+    if (Platform.OS === 'web') {
+      try {
+        const result = await webPickFromDisk('image/*', 'environment');
+        if (result) { setFileUri(result.uri); setFileType('image'); }
+      } catch (e) {
+        Alert.alert('Erreur', `Impossible d'ouvrir la caméra. ${String(e)}`);
+      }
+      return;
+    }
     try {
       const { status } = await ImagePicker.requestCameraPermissionsAsync();
       if (status !== 'granted') {
@@ -51,6 +82,15 @@ export default function AddDocumentScreen() {
   };
 
   const pickFromGallery = async () => {
+    if (Platform.OS === 'web') {
+      try {
+        const result = await webPickFromDisk('image/*');
+        if (result) { setFileUri(result.uri); setFileType('image'); }
+      } catch (e) {
+        Alert.alert('Erreur', `Impossible d'ouvrir la galerie. ${String(e)}`);
+      }
+      return;
+    }
     try {
       const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (status !== 'granted') {
@@ -71,6 +111,18 @@ export default function AddDocumentScreen() {
   };
 
   const pickFile = async () => {
+    if (Platform.OS === 'web') {
+      try {
+        const result = await webPickFromDisk('.pdf,image/*');
+        if (result) {
+          setFileUri(result.uri);
+          setFileType(result.mimeType.includes('pdf') ? 'pdf' : 'image');
+        }
+      } catch (e) {
+        Alert.alert('Erreur', `Impossible d'ouvrir le sélecteur de fichiers. ${String(e)}`);
+      }
+      return;
+    }
     try {
       const result = await DocumentPicker.getDocumentAsync({
         type: ['application/pdf', 'image/*'],

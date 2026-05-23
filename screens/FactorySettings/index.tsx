@@ -53,6 +53,8 @@ export default function FactorySettingsScreen() {
   const [memberModal, setMemberModal] = useState(false);
   const [selectedMember, setSelectedMember] = useState<MemberDisplay | null>(null);
   const [removeConfirmModal, setRemoveConfirmModal] = useState(false);
+  const [regenConfirmModal, setRegenConfirmModal] = useState(false);
+  const [rejectTarget, setRejectTarget] = useState<JoinRequestDisplay | null>(null);
 
   const isAdmin = membership?.role === 'admin';
 
@@ -120,25 +122,17 @@ export default function FactorySettingsScreen() {
     setCountdown(CODE_TTL);
   }, [inviteCode]);
 
-  async function handleManualRegen() {
-    Alert.alert(
-      'Régénérer le code ?',
-      'L\'ancien code sera invalidé immédiatement.',
-      [
-        { text: 'Annuler', style: 'cancel' },
-        {
-          text: 'Régénérer', onPress: async () => {
-            const { error } = await doRegen();
-            if (error) Alert.alert('Erreur', error);
-          },
-        },
-      ]
-    );
+  function handleManualRegen() {
+    setRegenConfirmModal(true);
   }
 
   function copyInviteCode() {
     if (!inviteCode) return;
-    Clipboard.setString(inviteCode);
+    if (Platform.OS === 'web') {
+      navigator.clipboard.writeText(inviteCode).catch(() => {});
+    } else {
+      Clipboard.setString(inviteCode);
+    }
     Alert.alert('Copié !', `Code d'invitation : ${inviteCode}`);
   }
 
@@ -163,16 +157,7 @@ export default function FactorySettingsScreen() {
   }
 
   function handleRejectRequest(req: JoinRequestDisplay) {
-    Alert.alert('Refuser la demande ?', req.userEmail, [
-      { text: 'Annuler', style: 'cancel' },
-      {
-        text: 'Refuser', style: 'destructive', onPress: async () => {
-          const { error } = await rejectJoinRequest(req.id);
-          if (error) Alert.alert('Erreur', error);
-          else await load();
-        },
-      },
-    ]);
+    setRejectTarget(req);
   }
 
   if (loading) {
@@ -396,6 +381,56 @@ export default function FactorySettingsScreen() {
         </KeyboardAvoidingView>
       </Modal>
 
+      {/* Regen code confirm modal */}
+      <Modal visible={regenConfirmModal} transparent animationType="fade" onRequestClose={() => setRegenConfirmModal(false)}>
+        <View style={styles.confirmOverlay}>
+          <View style={styles.confirmBox}>
+            <Ionicons name="refresh" size={32} color={C.primary} style={{ alignSelf: 'center', marginBottom: 12 }} />
+            <Text style={styles.confirmTitle}>Régénérer le code ?</Text>
+            <Text style={styles.confirmSub}>L'ancien code sera invalidé immédiatement.</Text>
+            <TouchableOpacity
+              style={styles.confirmActionBtn}
+              onPress={async () => {
+                setRegenConfirmModal(false);
+                const { error } = await doRegen();
+                if (error) Alert.alert('Erreur', error);
+              }}
+            >
+              <Text style={styles.confirmActionText}>Régénérer</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.confirmCancelBtn} onPress={() => setRegenConfirmModal(false)}>
+              <Text style={styles.confirmCancelText}>Annuler</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Reject request confirm modal */}
+      <Modal visible={!!rejectTarget} transparent animationType="fade" onRequestClose={() => setRejectTarget(null)}>
+        <View style={styles.confirmOverlay}>
+          <View style={styles.confirmBox}>
+            <Ionicons name="warning-outline" size={32} color={C.red} style={{ alignSelf: 'center', marginBottom: 12 }} />
+            <Text style={styles.confirmTitle}>Refuser la demande ?</Text>
+            <Text style={styles.confirmSub}>{rejectTarget?.userEmail ?? ''}</Text>
+            <TouchableOpacity
+              style={styles.confirmDeleteBtn}
+              onPress={async () => {
+                if (!rejectTarget) return;
+                setRejectTarget(null);
+                const { error } = await rejectJoinRequest(rejectTarget.id);
+                if (error) Alert.alert('Erreur', error);
+                else await load();
+              }}
+            >
+              <Text style={styles.confirmDeleteText}>Refuser</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.confirmCancelBtn} onPress={() => setRejectTarget(null)}>
+              <Text style={styles.confirmCancelText}>Annuler</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
       {/* Members */}
       <Text style={[styles.sectionTitle, { marginTop: 20 }]}>Membres ({members.length})</Text>
       <View style={styles.list}>
@@ -479,4 +514,25 @@ const styles = StyleSheet.create({
   modalSaveText: { color: '#fff', fontWeight: '700' },
   roleBtn: { borderWidth: 1.5, borderRadius: 10, padding: 14, alignItems: 'center', marginBottom: 10 },
   roleBtnText: { fontWeight: '700', fontSize: 15 },
+  confirmOverlay: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', padding: 24,
+  },
+  confirmBox: { backgroundColor: '#FFFFFF', borderRadius: 16, padding: 24 },
+  confirmTitle: { fontSize: 17, fontWeight: '700', color: '#1A1A18', textAlign: 'center', marginBottom: 6 },
+  confirmSub: { fontSize: 14, color: C.muted, textAlign: 'center', marginBottom: 20 },
+  confirmActionBtn: {
+    backgroundColor: C.primary, borderRadius: 12, height: 52,
+    alignItems: 'center', justifyContent: 'center', marginBottom: 10,
+  },
+  confirmActionText: { color: '#FFFFFF', fontSize: 16, fontWeight: '700' },
+  confirmDeleteBtn: {
+    backgroundColor: C.red, borderRadius: 12, height: 52,
+    alignItems: 'center', justifyContent: 'center', marginBottom: 10,
+  },
+  confirmDeleteText: { color: '#FFFFFF', fontSize: 16, fontWeight: '700' },
+  confirmCancelBtn: {
+    borderRadius: 12, height: 52, borderWidth: 1, borderColor: C.border,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  confirmCancelText: { fontSize: 16, color: C.muted, fontWeight: '600' },
 });

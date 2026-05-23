@@ -2,7 +2,6 @@ import React from 'react';
 import {
   View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, Linking, Alert, Platform,
 } from 'react-native';
-import * as FileSystem from 'expo-file-system/legacy';
 import { RouteProp, useRoute } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { RootStackParamList, BusinessDocument } from '../../types';
@@ -54,18 +53,19 @@ export default function DocumentDetailScreen() {
     }
     try {
       if (Platform.OS === 'web') {
-        const base64 = await FileSystem.readAsStringAsync(doc.fileUri, {
-          encoding: (FileSystem as any).EncodingType?.Base64 ?? 'base64',
-        });
-        const mimeType = doc.fileType === 'pdf' ? 'application/pdf' : 'image/jpeg';
-        const byteCharacters = atob(base64);
-        const byteArray = new Uint8Array(byteCharacters.length);
-        for (let i = 0; i < byteCharacters.length; i++) {
-          byteArray[i] = byteCharacters.charCodeAt(i);
+        // fileUri is a base64 data URL stored by the web file picker
+        const uri = doc.fileUri;
+        if (uri.startsWith('data:')) {
+          const [header, b64] = uri.split(',');
+          const mime = header.split(':')[1].split(';')[0];
+          const bytes = atob(b64);
+          const arr = new Uint8Array(bytes.length);
+          for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
+          const blob = new Blob([arr], { type: mime });
+          (window as any).open(URL.createObjectURL(blob), '_blank');
+        } else {
+          (window as any).open(uri, '_blank');
         }
-        const blob = new Blob([byteArray], { type: mimeType });
-        const url = URL.createObjectURL(blob);
-        (window as any).open(url, '_blank');
       } else {
         await Linking.openURL(doc.fileUri);
       }
