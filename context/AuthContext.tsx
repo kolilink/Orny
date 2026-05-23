@@ -315,9 +315,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   async function signOut() {
+    const currentUserId = user?.id;
     clearCurrentFactory();
     setMembership(null);
     setPendingRequest(null);
+    if (currentUserId) {
+      // Clear cached avatar so no stale image shows on next login
+      AsyncStorage.removeItem(`profile_avatar_uri_${currentUserId}`).catch(() => {});
+    }
     await supabase.auth.signOut();
   }
 
@@ -353,13 +358,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   async function requestToJoin(inviteCode: string) {
     if (!user) return { error: 'Non connecté.' };
 
-    const { data: factories, error: lookupError } = await supabase
-      .rpc('lookup_factory_by_code', { code: inviteCode.trim().toUpperCase() });
+    const fnUrl = `${process.env.EXPO_PUBLIC_SUPABASE_URL}/functions/v1/lookup-factory`;
+    let factory: { id: string; name: string } | null = null;
+    try {
+      const res = await fetch(fnUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY}`,
+        },
+        body: JSON.stringify({ code: inviteCode.trim().toUpperCase() }),
+      });
+      if (res.status === 429) return { error: 'Trop de tentatives. Attendez 1 minute et réessayez.' };
+      const json = await res.json();
+      factory = json.factory ?? null;
+    } catch {
+      return { error: 'Erreur réseau. Vérifiez votre connexion.' };
+    }
 
-    if (lookupError || !factories?.length) {
+    if (!factory) {
       return { error: 'Code invalide. Vérifiez et réessayez.' };
     }
-    const factory = factories[0];
 
     const { error } = await supabase.from('join_requests').insert({
       factory_id: factory.id,

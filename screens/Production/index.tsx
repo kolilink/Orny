@@ -1,20 +1,18 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TextInput,
-  TouchableOpacity, KeyboardAvoidingView, Platform, Alert,
-  Modal, FlatList,
+  TouchableOpacity, KeyboardAvoidingView, Platform, Modal,
+  FlatList, Animated, Alert, StyleProp, ViewStyle,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { addBatch, getBatches } from '../../store/production';
+import { getProducts, addProduct, updateProduct, deleteProduct } from '../../store/products';
+import { getBatches, addBatch } from '../../store/batches';
+import { getStock, deductStock, updateStock, addStockItem } from '../../store/stock';
 import DatePickerField from '../../components/DatePickerField';
-import { deductStock, getStock } from '../../store/stock';
-import { getWeeklyTarget, setWeeklyTarget } from '../../store/weeklyTarget';
-import { ProductionBatch, StockItem } from '../../types';
-import { toDateString, isThisWeek } from '../../utils/dates';
-import { getFactoryId } from '../../store/context';
+import { toDateString } from '../../utils/dates';
+import { Product, Batch, StockItem } from '../../types';
 
 const C = {
   primary: '#1D9E75',
@@ -27,306 +25,635 @@ const C = {
   border: '#E8E8E4',
 };
 
-type ExtraMaterial = { stockItemId: string; name: string; unit: string; qty: string };
+type ScreenState = 'list' | 'log';
+type MaterialRow = { rawMaterialId: string; name: string; quantity: string; unit: string };
 
 export default function ProductionScreen() {
   const insets = useSafeAreaInsets();
-  const [date, setDate] = useState(toDateString());
-  const [potatoes, setPotatoes] = useState('');
-  const [sachets, setSachets] = useState('');
-  const [gas, setGas] = useState('');
-  const [hours, setHours] = useState('');
-  const [saving, setSaving] = useState(false);
-  const [batches, setBatchesState] = useState<ProductionBatch[]>([]);
 
-  const [weeklyTarget, setWeeklyTargetState] = useState(1000);
-  const [showTargetModal, setShowTargetModal] = useState(false);
-  const [targetInput, setTargetInput] = useState('');
-
+  // ── Data ──────────────────────────────────────────────────────────
+  const [products, setProducts] = useState<Product[]>([]);
+  const [batches, setBatches] = useState<Batch[]>([]);
   const [stockItems, setStockItems] = useState<StockItem[]>([]);
-  const [extraMaterials, setExtraMaterials] = useState<ExtraMaterial[]>([]);
-  const [showStockPicker, setShowStockPicker] = useState(false);
 
-  // ── Draft persistence ──────────────────────────────────────────
-  const draftKey = `production_draft_${getFactoryId() ?? 'default'}`;
-  const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // ── Screen state ──────────────────────────────────────────────────
+  const [screenState, setScreenState] = useState<ScreenState>('list');
+  const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
 
-  useEffect(() => {
-    AsyncStorage.getItem(draftKey).then((raw) => {
-      if (!raw) return;
-      try {
-        const d = JSON.parse(raw);
-        if (d.date) setDate(d.date);
-        if (d.potatoes) setPotatoes(d.potatoes);
-        if (d.sachets) setSachets(d.sachets);
-        if (d.gas) setGas(d.gas);
-        if (d.hours) setHours(d.hours);
-        if (d.extraMaterials?.length) setExtraMaterials(d.extraMaterials);
-      } catch {}
-    });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // ── Batch log form ────────────────────────────────────────────────
+  const [units, setUnits] = useState('');
+  const [materials, setMaterials] = useState<MaterialRow[]>([]);
+  const [logDate, setLogDate] = useState(toDateString());
+  const [energy, setEnergy] = useState('');
+  const [hours, setHours] = useState('');
+  const [notes, setNotes] = useState('');
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
-    if (draftTimer.current) clearTimeout(draftTimer.current);
-    draftTimer.current = setTimeout(() => {
-      AsyncStorage.setItem(draftKey, JSON.stringify({ date, potatoes, sachets, gas, hours, extraMaterials }));
-    }, 400);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [date, potatoes, sachets, gas, hours, extraMaterials]);
+  // ── Modals ────────────────────────────────────────────────────────
+  const [newProductModal, setNewProductModal] = useState(false);
+  const [newProductName, setNewProductName] = useState('');
+  const [newProductUnit, setNewProductUnit] = useState('');
+  const [creatingProduct, setCreatingProduct] = useState(false);
 
-  const CORE_IDS = ['pommes_de_terre', 'gaz_lpg', 'sachets_80g'];
-  const extraStockItems = stockItems.filter((s) => !CORE_IDS.includes(s.id));
+  const [todayModal, setTodayModal] = useState(false);
 
+  const [actionsProduct, setActionsProduct] = useState<Product | null>(null);
+  const [productActionsModal, setProductActionsModal] = useState(false);
+
+  const [renameModal, setRenameModal] = useState(false);
+  const [renameValue, setRenameValue] = useState('');
+  const [renameUnitValue, setRenameUnitValue] = useState('');
+
+  const [historyProduct, setHistoryProduct] = useState<Product | null>(null);
+  const [batchHistoryModal, setBatchHistoryModal] = useState(false);
+
+  const [materialPickerModal, setMaterialPickerModal] = useState(false);
+
+  const [newMatModal, setNewMatModal] = useState(false);
+  const [newMatName, setNewMatName] = useState('');
+  const [newMatUnit, setNewMatUnit] = useState('');
+
+  // ── Toast ─────────────────────────────────────────────────────────
+  const toastOpacity = useRef(new Animated.Value(0)).current;
+  const [toastText, setToastText] = useState('');
+
+  const showToast = (text: string) => {
+    setToastText(text);
+    Animated.sequence([
+      Animated.timing(toastOpacity, { toValue: 1, duration: 200, useNativeDriver: true }),
+      Animated.delay(1800),
+      Animated.timing(toastOpacity, { toValue: 0, duration: 300, useNativeDriver: true }),
+    ]).start();
+  };
+
+  // ── Load ──────────────────────────────────────────────────────────
   const load = useCallback(async () => {
-    const [b, target, stock] = await Promise.all([
-      getBatches(),
-      getWeeklyTarget(),
-      getStock(),
-    ]);
-    setBatchesState(b);
-    setWeeklyTargetState(target);
-    setStockItems(stock);
+    const [p, b, s] = await Promise.all([getProducts(), getBatches(), getStock()]);
+    setProducts(p);
+    setBatches(b);
+    setStockItems(s);
   }, []);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
-  const potatoesNum = parseFloat(potatoes) || 0;
-  const sachetsNum = parseInt(sachets) || 0;
-  const gasNum = parseFloat(gas) || 0;
-  const hoursNum = parseFloat(hours) || 0;
-  const yieldCalc = potatoesNum > 0 ? (sachetsNum * 80) / potatoesNum : 0;
+  // ── Derived data ──────────────────────────────────────────────────
+  const todayStr = toDateString();
+  const todayBatches = batches.filter((b) => b.date === todayStr);
+  const todayUnits = todayBatches.reduce((sum, b) => sum + b.unitsProduced, 0);
 
-  const yieldColor = yieldCalc >= 250 ? C.primary : yieldCalc >= 200 ? C.orange : C.red;
-
-  const weekBatches = batches.filter((b) => isThisWeek(b.date));
-  const weeklyKg = weekBatches.reduce((sum, b) => sum + b.potatoesUsedKg, 0);
-  const progressPct = Math.min((weeklyKg / weeklyTarget) * 100, 100);
-
-  const addExtraMaterial = (item: StockItem) => {
-    if (extraMaterials.find((m) => m.stockItemId === item.id)) {
-      setShowStockPicker(false);
-      return;
+  const lastBatchDate: Record<string, string> = {};
+  for (const b of batches) {
+    if (!lastBatchDate[b.productId] || b.date > lastBatchDate[b.productId]) {
+      lastBatchDate[b.productId] = b.date;
     }
-    setExtraMaterials((prev) => [
-      ...prev,
-      { stockItemId: item.id, name: item.name, unit: item.unit, qty: '' },
-    ]);
-    setShowStockPicker(false);
-  };
+  }
 
-  const removeExtraMaterial = (id: string) => {
-    setExtraMaterials((prev) => prev.filter((m) => m.stockItemId !== id));
-  };
+  // ── Stock status for current materials ────────────────────────────
+  const missingItems = materials
+    .filter((m) => m.rawMaterialId && parseFloat(m.quantity) > 0)
+    .filter((m) => {
+      const s = stockItems.find((si) => si.id === m.rawMaterialId);
+      return s !== undefined && s.currentLevel < parseFloat(m.quantity);
+    })
+    .map((m) => {
+      const s = stockItems.find((si) => si.id === m.rawMaterialId);
+      const deficit = parseFloat(m.quantity) - (s?.currentLevel ?? 0);
+      return `${m.name} (${deficit.toFixed(1)}${m.unit})`;
+    });
+  const stockOk = missingItems.length === 0;
+  const hasMaterialsWithQty = materials.some((m) => parseFloat(m.quantity) > 0);
 
-  const updateExtraQty = (id: string, qty: string) => {
-    setExtraMaterials((prev) =>
-      prev.map((m) => (m.stockItemId === id ? { ...m, qty } : m))
+  // ── Select product → go to log state ─────────────────────────────
+  const selectProduct = (p: Product) => {
+    setSelectedProduct(p);
+    setUnits('');
+    setLogDate(toDateString());
+    setEnergy('');
+    setHours('');
+    setNotes('');
+    setDetailsOpen(false);
+    setMaterials(
+      p.lastRecipe.length > 0
+        ? p.lastRecipe.map((r) => ({
+            rawMaterialId: r.rawMaterialId,
+            name: r.name,
+            quantity: String(r.quantity),
+            unit: r.unit,
+          }))
+        : []
     );
+    setScreenState('log');
   };
 
-  const handleSaveTarget = async () => {
-    const t = parseInt(targetInput) || 0;
-    if (t <= 0) {
-      Alert.alert('Erreur', 'L\'objectif doit être supérieur à 0.');
-      return;
+  const backToList = () => {
+    setScreenState('list');
+    setSelectedProduct(null);
+  };
+
+  // ── Material helpers ──────────────────────────────────────────────
+  const addMaterialFromStock = (item: StockItem) => {
+    if (!materials.find((m) => m.rawMaterialId === item.id)) {
+      setMaterials((prev) => [
+        ...prev,
+        { rawMaterialId: item.id, name: item.name, quantity: '', unit: item.unit },
+      ]);
     }
-    await setWeeklyTarget(t);
-    setWeeklyTargetState(t);
-    setShowTargetModal(false);
+    setMaterialPickerModal(false);
   };
 
+  const removeMaterial = (idx: number) => {
+    setMaterials((prev) => prev.filter((_, i) => i !== idx));
+  };
+
+  const updateMaterialQty = (idx: number, qty: string) => {
+    setMaterials((prev) => prev.map((m, i) => (i === idx ? { ...m, quantity: qty } : m)));
+  };
+
+  // ── Save batch ────────────────────────────────────────────────────
   const handleSave = async () => {
-    if (!potatoes || !sachets || !gas || !hours) {
-      Alert.alert('Erreur', 'Veuillez remplir tous les champs principaux.');
+    const unitsNum = parseFloat(units);
+    if (!units || isNaN(unitsNum) || unitsNum <= 0) {
+      Alert.alert('Erreur', 'Entrez la quantité produite.');
       return;
     }
+    if (materials.length === 0) {
+      Alert.alert('Erreur', 'Ajoutez au moins une matière première.');
+      return;
+    }
+
     setSaving(true);
     try {
-      const extraForBatch = extraMaterials
-        .filter((m) => parseFloat(m.qty) > 0)
-        .map((m) => ({
-          stockItemId: m.stockItemId,
-          name: m.name,
-          quantity: parseFloat(m.qty),
-          unit: m.unit,
-        }));
+      const validMaterials = materials.map((m) => ({
+        rawMaterialId: m.rawMaterialId,
+        name: m.name,
+        quantity: parseFloat(m.quantity) || 0,
+        unit: m.unit,
+      }));
 
-      const newBatch = await addBatch({
-        date,
-        potatoesUsedKg: potatoesNum,
-        sachets80g: sachetsNum,
-        gasUsedKg: gasNum,
-        hoursWorked: hoursNum,
-        extraMaterials: extraForBatch,
+      await addBatch({
+        date: logDate,
+        productId: selectedProduct!.id,
+        productName: selectedProduct!.name,
+        unitsProduced: unitsNum,
+        materialsUsed: validMaterials,
+        energyUsed: energy ? parseFloat(energy) : undefined,
+        hoursWorked: hours ? parseFloat(hours) : undefined,
+        notes: notes || undefined,
       });
 
-      const stockDeductions: Record<string, number> = {
-        pommes_de_terre: potatoesNum,
-        gaz_lpg: gasNum,
-        sachets_80g: sachetsNum,
-      };
-      for (const m of extraForBatch) {
-        stockDeductions[m.stockItemId] = m.quantity;
-      }
-      await deductStock(stockDeductions);
+      // Update product memory (lastRecipe)
+      await updateProduct(selectedProduct!.id, { lastRecipe: validMaterials });
 
-      // Optimistic update — no reload spinner
-      setBatchesState(prev => [newBatch, ...prev]);
-      getStock().then(setStockItems);
-      setPotatoes('');
-      setSachets('');
-      setGas('');
-      setHours('');
-      setExtraMaterials([]);
-      setDate(toDateString());
-      AsyncStorage.removeItem(draftKey);
-      Alert.alert('Succès', 'Lot de production enregistré.');
+      // Deduct raw materials from stock
+      const deductions: Record<string, number> = {};
+      for (const m of validMaterials) {
+        if (m.rawMaterialId && m.quantity > 0) {
+          deductions[m.rawMaterialId] = (deductions[m.rawMaterialId] ?? 0) + m.quantity;
+        }
+      }
+      await deductStock(deductions);
+
+      // Increment finished product stock
+      const finishedItem = stockItems.find((s) => s.id === selectedProduct!.id);
+      if (finishedItem) {
+        await updateStock({ [selectedProduct!.id]: finishedItem.currentLevel + unitsNum });
+      }
+
+      await load();
+      backToList();
+      showToast('✅ Lot enregistré');
     } finally {
       setSaving(false);
     }
   };
 
-  return (
+  // ── Create new product ────────────────────────────────────────────
+  const handleCreateProduct = async () => {
+    if (!newProductName.trim()) return;
+    setCreatingProduct(true);
+    try {
+      await addProduct(newProductName.trim(), newProductUnit.trim() || 'unité');
+      setNewProductName('');
+      setNewProductUnit('');
+      setNewProductModal(false);
+      await load();
+    } finally {
+      setCreatingProduct(false);
+    }
+  };
+
+  // ── Create new raw material inline ────────────────────────────────
+  const handleCreateMaterial = async () => {
+    if (!newMatName.trim() || !newMatUnit.trim()) return;
+    const item = await addStockItem({
+      name: newMatName.trim(),
+      unit: newMatUnit.trim(),
+      currentLevel: 0,
+      alertThreshold: 0,
+    });
+    setMaterials((prev) => [
+      ...prev,
+      { rawMaterialId: item.id, name: item.name, quantity: '', unit: item.unit },
+    ]);
+    setNewMatName('');
+    setNewMatUnit('');
+    setNewMatModal(false);
+    // reload stock so picker shows the new item next time
+    getStock().then(setStockItems);
+  };
+
+  // ── Delete product ────────────────────────────────────────────────
+  const handleDeleteProduct = (p: Product) => {
+    const hasBatches = batches.some((b) => b.productId === p.id);
+    Alert.alert(
+      'Supprimer',
+      hasBatches
+        ? `Supprimer "${p.name}" ? L'historique des lots sera conservé.`
+        : `Supprimer "${p.name}" ?`,
+      [
+        { text: 'Annuler', style: 'cancel' },
+        {
+          text: 'Supprimer',
+          style: 'destructive',
+          onPress: async () => {
+            await deleteProduct(p.id);
+            setProductActionsModal(false);
+            await load();
+          },
+        },
+      ]
+    );
+  };
+
+  // ── Render: STATE 1 — product list ────────────────────────────────
+  const renderList = () => (
+    <ScrollView style={styles.fill} contentContainerStyle={styles.listContent}>
+      {/* Today's batches card */}
+      <TouchableOpacity style={styles.todayCard} onPress={() => setTodayModal(true)} activeOpacity={0.7}>
+        <View>
+          <Text style={styles.todayTitle}>Aujourd'hui</Text>
+          <Text style={styles.todayStats}>
+            {todayBatches.length} lot{todayBatches.length !== 1 ? 's' : ''} · {todayUnits} unités produites
+          </Text>
+        </View>
+        <Ionicons name="chevron-forward" size={18} color="#BABAB6" />
+      </TouchableOpacity>
+
+      {/* New product button */}
+      <TouchableOpacity style={styles.newProductBtn} onPress={() => setNewProductModal(true)}>
+        <Ionicons name="add-circle-outline" size={20} color={C.primary} />
+        <Text style={styles.newProductBtnText}>Nouveau produit</Text>
+      </TouchableOpacity>
+
+      {/* Product list */}
+      {products.length === 0 ? (
+        <View style={styles.emptyState}>
+          <Text style={styles.emptyText}>Créez votre premier produit pour commencer à enregistrer des lots.</Text>
+        </View>
+      ) : (
+        products.map((p) => (
+          <TouchableOpacity
+            key={p.id}
+            style={styles.productCard}
+            onPress={() => selectProduct(p)}
+            onLongPress={() => { setActionsProduct(p); setProductActionsModal(true); }}
+            activeOpacity={0.7}
+          >
+            <View style={styles.productInfo}>
+              <Text style={styles.productName}>{p.name}</Text>
+              <Text style={styles.productUnit}>{p.unit}</Text>
+            </View>
+            <View style={styles.productRight}>
+              <Text style={lastBatchDate[p.id] ? styles.productLastMade : styles.productNeverMade}>
+                {lastBatchDate[p.id] ? `Dernière fois: ${lastBatchDate[p.id]}` : 'Jamais produit'}
+              </Text>
+              <Ionicons name="chevron-forward" size={18} color="#BABAB6" />
+            </View>
+          </TouchableOpacity>
+        ))
+      )}
+    </ScrollView>
+  );
+
+  // ── Render: STATE 2 — batch log form ─────────────────────────────
+  const renderLog = () => (
     <KeyboardAvoidingView
-      style={{ flex: 1, paddingTop: insets.top }}
+      style={styles.fill}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-        <Text style={styles.title}>Enregistrer un lot</Text>
+      <ScrollView contentContainerStyle={styles.logContent}>
+        {/* Back header */}
+        <TouchableOpacity style={styles.backBtn} onPress={backToList}>
+          <Ionicons name="arrow-back" size={22} color={C.primary} />
+          <Text style={styles.backBtnText}>{selectedProduct?.name}</Text>
+        </TouchableOpacity>
 
+        {/* Combien? */}
         <View style={styles.card}>
-          <DatePickerField label="Date" value={date} onChange={setDate} />
-          <NumField label="Matière première (kg)" value={potatoes} onChangeText={setPotatoes} />
-          <NumField label="Unités produites" value={sachets} onChangeText={setSachets} />
-          <NumField label="Énergie / Combustible (kg)" value={gas} onChangeText={setGas} />
-          <NumField label="Heures travaillées" value={hours} onChangeText={setHours} />
+          <Text style={styles.bigFieldLabel}>Combien ?</Text>
+          <View style={styles.unitsRow}>
+            <TextInput
+              style={styles.unitsInput}
+              value={units}
+              onChangeText={setUnits}
+              keyboardType="decimal-pad"
+              placeholder="0"
+              placeholderTextColor="#BABAB6"
+              autoFocus
+            />
+            <Text style={styles.unitsLabel}>{selectedProduct?.unit}</Text>
+          </View>
         </View>
 
-        {/* Extra materials */}
+        {/* Matières utilisées */}
         <View style={styles.card}>
-          <View style={styles.sectionRow}>
-            <Text style={styles.cardTitle}>Autres matières utilisées</Text>
-            {extraStockItems.length > 0 && (
-              <TouchableOpacity
-                style={styles.addMaterialBtn}
-                onPress={() => setShowStockPicker(true)}
-              >
-                <Ionicons name="add" size={18} color={C.primary} />
-                <Text style={styles.addMaterialText}>Ajouter</Text>
-              </TouchableOpacity>
-            )}
-          </View>
-          {extraStockItems.length === 0 && (
-            <Text style={styles.noExtraHint}>
-              Ajoutez d'autres articles au stock (sel, farine…) pour les suivre ici.
-            </Text>
-          )}
-          {extraMaterials.map((m) => (
-            <View key={m.stockItemId} style={styles.extraRow}>
-              <Text style={styles.extraName}>{m.name}</Text>
+          <Text style={styles.cardTitle}>Matières utilisées</Text>
+          {materials.map((m, idx) => (
+            <View key={idx} style={styles.matRow}>
+              <Text style={styles.matName}>{m.name}</Text>
               <TextInput
-                style={styles.extraInput}
-                placeholder="0"
+                style={styles.matQtyInput}
+                value={m.quantity}
+                onChangeText={(v) => updateMaterialQty(idx, v)}
                 keyboardType="decimal-pad"
-                value={m.qty}
-                onChangeText={(v) => updateExtraQty(m.stockItemId, v)}
+                placeholder="0"
+                placeholderTextColor="#BABAB6"
               />
-              <Text style={styles.extraUnit}>{m.unit}</Text>
-              <TouchableOpacity onPress={() => removeExtraMaterial(m.stockItemId)}>
+              <Text style={styles.matUnit}>{m.unit}</Text>
+              <TouchableOpacity onPress={() => removeMaterial(idx)}>
                 <Ionicons name="close-circle-outline" size={22} color={C.red} />
               </TouchableOpacity>
             </View>
           ))}
-          {extraMaterials.length === 0 && extraStockItems.length > 0 && (
-            <Text style={styles.noExtraHint}>
-              Appuyez sur "Ajouter" pour enregistrer d'autres matières.
-            </Text>
-          )}
+          <TouchableOpacity style={styles.addMatBtn} onPress={() => setMaterialPickerModal(true)}>
+            <Ionicons name="add" size={18} color={C.primary} />
+            <Text style={styles.addMatBtnText}>Ajouter une matière</Text>
+          </TouchableOpacity>
         </View>
 
-        {potatoesNum > 0 && sachetsNum > 0 && (
-          <View style={[styles.yieldBox, { borderColor: yieldColor + '55' }]}>
-            <Text style={styles.yieldLabel}>Rendement estimé</Text>
-            <Text style={[styles.yieldValue, { color: yieldColor }]}>
-              {yieldCalc.toFixed(1)} g/kg
-            </Text>
-            <Text style={styles.yieldHint}>
-              {yieldCalc >= 250 ? '✓ Bon rendement' : yieldCalc >= 200 ? '⚠ Rendement moyen' : '✗ Rendement faible'}
-            </Text>
+        {/* Stock status */}
+        {hasMaterialsWithQty && (
+          <View style={[
+            styles.stockStatus,
+            { borderColor: stockOk ? C.primary + '44' : C.orange + '66' },
+          ]}>
+            {stockOk ? (
+              <Text style={[styles.stockStatusText, { color: C.primary }]}>
+                ✅ Tu as tout en stock
+              </Text>
+            ) : (
+              <Text style={[styles.stockStatusText, { color: '#A06000' }]}>
+                ⚠️ Il te manque: {missingItems.join(', ')}
+              </Text>
+            )}
           </View>
         )}
 
+        {/* Plus de détails */}
+        <TouchableOpacity style={styles.detailsToggle} onPress={() => setDetailsOpen(!detailsOpen)}>
+          <Text style={styles.detailsToggleText}>Plus de détails</Text>
+          <Ionicons name={detailsOpen ? 'chevron-up' : 'chevron-down'} size={18} color={C.muted} />
+        </TouchableOpacity>
+
+        {detailsOpen && (
+          <View style={styles.card}>
+            <DatePickerField label="Date" value={logDate} onChange={setLogDate} />
+            <FieldWrap label="Énergie / Combustible (kg)">
+              <TextInput
+                style={styles.input}
+                value={energy}
+                onChangeText={setEnergy}
+                keyboardType="decimal-pad"
+                placeholder="0"
+                placeholderTextColor="#BABAB6"
+              />
+            </FieldWrap>
+            <FieldWrap label="Heures travaillées">
+              <TextInput
+                style={styles.input}
+                value={hours}
+                onChangeText={setHours}
+                keyboardType="decimal-pad"
+                placeholder="0"
+                placeholderTextColor="#BABAB6"
+              />
+            </FieldWrap>
+            <FieldWrap label="Notes">
+              <TextInput
+                style={[styles.input, styles.notesInput]}
+                value={notes}
+                onChangeText={setNotes}
+                multiline
+                placeholder="Notes optionnelles…"
+                placeholderTextColor="#BABAB6"
+              />
+            </FieldWrap>
+          </View>
+        )}
+
+        {/* Save */}
         <TouchableOpacity
-          style={[styles.submitBtn, saving && { opacity: 0.6 }]}
+          style={[styles.saveBtn, saving && { opacity: 0.6 }]}
           onPress={handleSave}
           disabled={saving}
         >
-          <Text style={styles.submitText}>
-            {saving ? 'Enregistrement…' : 'Enregistrer la production'}
-          </Text>
+          <Text style={styles.saveBtnText}>{saving ? 'Enregistrement…' : 'Enregistrer'}</Text>
         </TouchableOpacity>
-
-        <View style={styles.card}>
-          <View style={styles.sectionRow}>
-            <View>
-              <Text style={styles.cardTitle}>Production cette semaine</Text>
-              <Text style={styles.progressText}>
-                {weeklyKg.toFixed(0)} kg / {weeklyTarget} kg objectif
-              </Text>
-            </View>
-            <TouchableOpacity
-              style={styles.editTargetBtn}
-              onPress={() => {
-                setTargetInput(String(weeklyTarget));
-                setShowTargetModal(true);
-              }}
-            >
-              <Ionicons name="pencil-outline" size={16} color={C.primary} />
-              <Text style={styles.editTargetText}>Objectif</Text>
-            </TouchableOpacity>
-          </View>
-          <View style={styles.track}>
-            <View style={[styles.fill, { width: `${progressPct}%` as `${number}%` }]} />
-          </View>
-          <Text style={styles.progressPct}>{progressPct.toFixed(0)}%</Text>
-        </View>
-
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Lots récents</Text>
-          {batches.slice(0, 5).map((b) => (
-            <View key={b.id} style={styles.batchRow}>
-              <Text style={styles.batchDate}>{b.date}</Text>
-              <Text style={styles.batchInfo}>
-                {b.potatoesUsedKg}kg mat. · {b.sachets80g} unités · {b.gasUsedKg}kg énergie
-              </Text>
-            </View>
-          ))}
-          {batches.length === 0 && (
-            <Text style={styles.noExtraHint}>Aucun lot enregistré.</Text>
-          )}
-        </View>
       </ScrollView>
+    </KeyboardAvoidingView>
+  );
 
-      {/* Weekly target modal */}
-      <Modal visible={showTargetModal} animationType="slide" transparent onRequestClose={() => setShowTargetModal(false)}>
+  // ── Main render ───────────────────────────────────────────────────
+  return (
+    <View style={[styles.container, { paddingTop: insets.top }]}>
+      <Text style={styles.pageTitle}>Production</Text>
+
+      {screenState === 'list' ? renderList() : renderLog()}
+
+      {/* Toast */}
+      <Animated.View style={[styles.toast, { opacity: toastOpacity }]} pointerEvents="none">
+        <Text style={styles.toastText}>{toastText}</Text>
+      </Animated.View>
+
+      {/* ── NEW PRODUCT MODAL ── */}
+      <Modal
+        visible={newProductModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setNewProductModal(false)}
+      >
         <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
           <View style={styles.modalOverlay}>
             <View style={styles.modalCard}>
-              <Text style={styles.modalTitle}>Objectif hebdomadaire</Text>
-              <Text style={styles.fieldLabel}>Objectif hebdomadaire (kg de matière)</Text>
-              <TextInput
-                style={styles.input}
-                keyboardType="numeric"
-                value={targetInput}
-                onChangeText={setTargetInput}
-                autoFocus
-              />
+              <Text style={styles.modalTitle}>Nouveau produit</Text>
+              <FieldWrap label="Nom du produit">
+                <TextInput
+                  style={styles.input}
+                  value={newProductName}
+                  onChangeText={setNewProductName}
+                  placeholder="Ex: SOL Original 50g"
+                  placeholderTextColor="#BABAB6"
+                  autoFocus
+                />
+              </FieldWrap>
+              <FieldWrap label="Unité">
+                <TextInput
+                  style={styles.input}
+                  value={newProductUnit}
+                  onChangeText={setNewProductUnit}
+                  placeholder="sachet, kg, bouteille, L…"
+                  placeholderTextColor="#BABAB6"
+                />
+              </FieldWrap>
               <View style={styles.modalActions}>
-                <TouchableOpacity style={styles.cancelBtn} onPress={() => setShowTargetModal(false)}>
+                <TouchableOpacity
+                  style={styles.cancelBtn}
+                  onPress={() => { setNewProductModal(false); setNewProductName(''); setNewProductUnit(''); }}
+                >
                   <Text style={styles.cancelText}>Annuler</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={styles.confirmBtn} onPress={handleSaveTarget}>
+                <TouchableOpacity
+                  style={[styles.confirmBtn, (!newProductName.trim() || creatingProduct) && { opacity: 0.4 }]}
+                  onPress={handleCreateProduct}
+                  disabled={!newProductName.trim() || creatingProduct}
+                >
+                  <Text style={styles.confirmText}>
+                    {creatingProduct ? 'Création…' : 'Créer'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      {/* ── TODAY'S BATCHES MODAL ── */}
+      <Modal
+        visible={todayModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setTodayModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Lots d'aujourd'hui</Text>
+            {todayBatches.length === 0 ? (
+              <Text style={styles.emptyText}>Aucun lot enregistré aujourd'hui.</Text>
+            ) : (
+              <FlatList
+                data={todayBatches}
+                keyExtractor={(b) => b.id}
+                style={styles.modalList}
+                renderItem={({ item }) => {
+                  const prod = products.find((p) => p.id === item.productId);
+                  return (
+                    <View style={styles.historyRow}>
+                      <Text style={styles.historyProduct}>{item.productName}</Text>
+                      <Text style={styles.historyUnits}>
+                        {item.unitsProduced} {prod?.unit ?? ''}
+                      </Text>
+                    </View>
+                  );
+                }}
+              />
+            )}
+            <TouchableOpacity style={[styles.cancelBtn, { marginTop: 12 }]} onPress={() => setTodayModal(false)}>
+              <Text style={styles.cancelText}>Fermer</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ── PRODUCT ACTIONS MODAL ── */}
+      <Modal
+        visible={productActionsModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setProductActionsModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>{actionsProduct?.name}</Text>
+            <ActionRow
+              icon="pencil-outline"
+              label="Renommer"
+              onPress={() => {
+                setRenameValue(actionsProduct?.name ?? '');
+                setRenameUnitValue(actionsProduct?.unit ?? '');
+                setProductActionsModal(false);
+                setRenameModal(true);
+              }}
+            />
+            <ActionRow
+              icon="time-outline"
+              label="Voir l'historique"
+              onPress={() => {
+                setHistoryProduct(actionsProduct);
+                setProductActionsModal(false);
+                setBatchHistoryModal(true);
+              }}
+            />
+            <ActionRow
+              icon="trash-outline"
+              label="Supprimer"
+              color={C.red}
+              last
+              onPress={() => {
+                if (actionsProduct) handleDeleteProduct(actionsProduct);
+              }}
+            />
+            <TouchableOpacity style={[styles.cancelBtn, { marginTop: 12 }]} onPress={() => setProductActionsModal(false)}>
+              <Text style={styles.cancelText}>Annuler</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ── RENAME MODAL ── */}
+      <Modal
+        visible={renameModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setRenameModal(false)}
+      >
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalCard}>
+              <Text style={styles.modalTitle}>Modifier le produit</Text>
+              <FieldWrap label="Nom">
+                <TextInput
+                  style={styles.input}
+                  value={renameValue}
+                  onChangeText={setRenameValue}
+                  autoFocus
+                />
+              </FieldWrap>
+              <FieldWrap label="Unité">
+                <TextInput
+                  style={styles.input}
+                  value={renameUnitValue}
+                  onChangeText={setRenameUnitValue}
+                />
+              </FieldWrap>
+              <View style={styles.modalActions}>
+                <TouchableOpacity style={styles.cancelBtn} onPress={() => setRenameModal(false)}>
+                  <Text style={styles.cancelText}>Annuler</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.confirmBtn, !renameValue.trim() && { opacity: 0.4 }]}
+                  disabled={!renameValue.trim()}
+                  onPress={async () => {
+                    if (actionsProduct && renameValue.trim()) {
+                      await updateProduct(actionsProduct.id, {
+                        name: renameValue.trim(),
+                        unit: renameUnitValue.trim() || actionsProduct.unit,
+                      });
+                      setRenameModal(false);
+                      await load();
+                    }
+                  }}
+                >
                   <Text style={styles.confirmText}>Enregistrer</Text>
                 </TouchableOpacity>
               </View>
@@ -335,139 +662,305 @@ export default function ProductionScreen() {
         </KeyboardAvoidingView>
       </Modal>
 
-      {/* Stock picker modal */}
-      <Modal visible={showStockPicker} animationType="slide" transparent onRequestClose={() => setShowStockPicker(false)}>
+      {/* ── BATCH HISTORY MODAL ── */}
+      <Modal
+        visible={batchHistoryModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setBatchHistoryModal(false)}
+      >
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Choisir un article</Text>
+            <Text style={styles.modalTitle}>{historyProduct?.name}</Text>
             <FlatList
-              data={extraStockItems}
-              keyExtractor={(item) => item.id}
-              style={{ maxHeight: 300 }}
+              data={batches.filter((b) => b.productId === historyProduct?.id)}
+              keyExtractor={(b) => b.id}
+              style={styles.modalList}
               renderItem={({ item }) => (
-                <TouchableOpacity
-                  style={styles.pickerRow}
-                  onPress={() => addExtraMaterial(item)}
-                >
+                <View style={styles.historyRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.historyDate}>{item.date}</Text>
+                    <Text style={styles.historyMats} numberOfLines={2}>
+                      {item.materialsUsed.map((m) => `${m.quantity}${m.unit} ${m.name}`).join(' · ')}
+                    </Text>
+                  </View>
+                  <Text style={styles.historyUnits}>
+                    {item.unitsProduced} {historyProduct?.unit}
+                  </Text>
+                </View>
+              )}
+              ListEmptyComponent={<Text style={styles.emptyText}>Aucun lot enregistré.</Text>}
+            />
+            <TouchableOpacity style={[styles.cancelBtn, { marginTop: 12 }]} onPress={() => setBatchHistoryModal(false)}>
+              <Text style={styles.cancelText}>Fermer</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ── MATERIAL PICKER MODAL ── */}
+      <Modal
+        visible={materialPickerModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setMaterialPickerModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Ajouter une matière</Text>
+            <FlatList
+              data={stockItems.filter((s) => s.id !== selectedProduct?.id)}
+              keyExtractor={(s) => s.id}
+              style={styles.modalList}
+              renderItem={({ item }) => (
+                <TouchableOpacity style={styles.pickerRow} onPress={() => addMaterialFromStock(item)}>
                   <Text style={styles.pickerName}>{item.name}</Text>
-                  <Text style={styles.pickerUnit}>{item.currentLevel} {item.unit} en stock</Text>
+                  <Text style={styles.pickerLevel}>{item.currentLevel} {item.unit} en stock</Text>
                 </TouchableOpacity>
               )}
+              ListEmptyComponent={<Text style={styles.emptyText}>Aucun article en stock.</Text>}
             />
-            <TouchableOpacity style={styles.cancelBtn} onPress={() => setShowStockPicker(false)}>
+            <TouchableOpacity
+              style={styles.addMatBtn}
+              onPress={() => { setMaterialPickerModal(false); setNewMatModal(true); }}
+            >
+              <Ionicons name="add" size={18} color={C.primary} />
+              <Text style={styles.addMatBtnText}>+ Nouvelle matière première</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[styles.cancelBtn, { marginTop: 8 }]} onPress={() => setMaterialPickerModal(false)}>
               <Text style={styles.cancelText}>Annuler</Text>
             </TouchableOpacity>
           </View>
         </View>
       </Modal>
-    </KeyboardAvoidingView>
-  );
-}
 
-function NumField({
-  label, value, onChangeText, keyboard = 'numeric',
-}: {
-  label: string;
-  value: string;
-  onChangeText: (t: string) => void;
-  keyboard?: 'numeric' | 'default';
-}) {
-  return (
-    <View style={styles.fieldWrap}>
-      <Text style={styles.fieldLabel}>{label}</Text>
-      <TextInput
-        style={styles.input}
-        value={value}
-        onChangeText={onChangeText}
-        keyboardType={keyboard === 'numeric' ? 'decimal-pad' : 'default'}
-        placeholder="0"
-        placeholderTextColor="#BABAB6"
-      />
+      {/* ── NEW MATERIAL MODAL ── */}
+      <Modal
+        visible={newMatModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setNewMatModal(false)}
+      >
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalCard}>
+              <Text style={styles.modalTitle}>Nouvelle matière première</Text>
+              <FieldWrap label="Nom">
+                <TextInput
+                  style={styles.input}
+                  value={newMatName}
+                  onChangeText={setNewMatName}
+                  placeholder="Ex: Sel, Farine…"
+                  placeholderTextColor="#BABAB6"
+                  autoFocus
+                />
+              </FieldWrap>
+              <FieldWrap label="Unité">
+                <TextInput
+                  style={styles.input}
+                  value={newMatUnit}
+                  onChangeText={setNewMatUnit}
+                  placeholder="kg, L, g, sac…"
+                  placeholderTextColor="#BABAB6"
+                />
+              </FieldWrap>
+              <View style={styles.modalActions}>
+                <TouchableOpacity
+                  style={styles.cancelBtn}
+                  onPress={() => { setNewMatModal(false); setNewMatName(''); setNewMatUnit(''); }}
+                >
+                  <Text style={styles.cancelText}>Annuler</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.confirmBtn, (!newMatName.trim() || !newMatUnit.trim()) && { opacity: 0.4 }]}
+                  onPress={handleCreateMaterial}
+                  disabled={!newMatName.trim() || !newMatUnit.trim()}
+                >
+                  <Text style={styles.confirmText}>Créer</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </View>
   );
 }
 
+// ── Small helpers ─────────────────────────────────────────────────
+
+function FieldWrap({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <View style={styles.fieldWrap}>
+      <Text style={styles.fieldLabel}>{label}</Text>
+      {children}
+    </View>
+  );
+}
+
+function ActionRow({
+  icon, label, color, last, onPress,
+}: {
+  icon: React.ComponentProps<typeof Ionicons>['name'];
+  label: string;
+  color?: string;
+  last?: boolean;
+  onPress: () => void;
+}) {
+  return (
+    <TouchableOpacity
+      style={[styles.actionRow, last && { borderBottomWidth: 0 }]}
+      onPress={onPress}
+    >
+      <Ionicons name={icon} size={20} color={color ?? C.text} />
+      <Text style={[styles.actionLabel, color ? { color } : undefined]}>{label}</Text>
+    </TouchableOpacity>
+  );
+}
+
+// ── Styles ────────────────────────────────────────────────────────
+
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: C.bg },
-  content: { padding: 16, paddingBottom: 40, gap: 14 },
-  title: { fontSize: 22, fontWeight: '700', color: C.text },
-  card: {
-    backgroundColor: C.card, borderRadius: 12, padding: 16,
+  fill: { flex: 1 },
+  pageTitle: {
+    fontSize: 22, fontWeight: '700', color: C.text,
+    paddingHorizontal: 16, paddingTop: 8, paddingBottom: 4,
+  },
+
+  // List
+  listContent: { padding: 16, paddingBottom: 40, gap: 10 },
+  todayCard: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    backgroundColor: C.card, borderRadius: 14, padding: 16,
     borderWidth: 1, borderColor: C.border,
-    shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 4, elevation: 2,
-    gap: 12,
+    shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 4, elevation: 1,
   },
-  sectionRow: {
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+  todayTitle: { fontSize: 13, fontWeight: '600', color: C.muted, marginBottom: 2 },
+  todayStats: { fontSize: 16, fontWeight: '700', color: C.text },
+  newProductBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    backgroundColor: '#E8F6F0', borderRadius: 12, paddingVertical: 14,
+    borderWidth: 1, borderColor: C.primary + '44',
   },
-  cardTitle: { fontSize: 14, fontWeight: '600', color: C.text },
-  fieldWrap: { gap: 4 },
-  fieldLabel: { fontSize: 14, color: C.muted, fontWeight: '500' },
-  input: {
-    backgroundColor: C.bg, borderRadius: 10, borderWidth: 1,
-    borderColor: C.border, padding: 12, fontSize: 16, color: C.text,
+  newProductBtnText: { fontSize: 15, fontWeight: '700', color: C.primary },
+  productCard: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    backgroundColor: C.card, borderRadius: 14, padding: 16,
+    borderWidth: 1, borderColor: C.border,
+    shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 4, elevation: 1,
   },
-  addMaterialBtn: {
-    flexDirection: 'row', alignItems: 'center', gap: 4,
-    backgroundColor: '#E8F6F0', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6,
+  productInfo: { flex: 1 },
+  productName: { fontSize: 16, fontWeight: '600', color: C.text },
+  productUnit: { fontSize: 13, color: C.muted, marginTop: 2 },
+  productRight: { alignItems: 'flex-end', gap: 4 },
+  productLastMade: { fontSize: 11, color: C.muted },
+  productNeverMade: { fontSize: 11, color: '#BABAB6', fontStyle: 'italic' },
+  emptyState: { paddingVertical: 32, alignItems: 'center' },
+  emptyText: { fontSize: 14, color: C.muted, textAlign: 'center', fontStyle: 'italic' },
+
+  // Log form
+  logContent: { padding: 16, paddingBottom: 60, gap: 12 },
+  backBtn: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 },
+  backBtnText: { fontSize: 18, fontWeight: '700', color: C.text },
+  card: {
+    backgroundColor: C.card, borderRadius: 14, padding: 16, gap: 12,
+    borderWidth: 1, borderColor: C.border,
+    shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 4, elevation: 1,
   },
-  addMaterialText: { fontSize: 13, color: C.primary, fontWeight: '600' },
-  extraRow: {
+  bigFieldLabel: { fontSize: 16, fontWeight: '700', color: C.text },
+  unitsRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  unitsInput: {
+    flex: 1, fontSize: 40, fontWeight: '700', color: C.text,
+    backgroundColor: C.bg, borderRadius: 12, borderWidth: 1, borderColor: C.border,
+    padding: 12, textAlign: 'center',
+  },
+  unitsLabel: { fontSize: 18, fontWeight: '600', color: C.muted, minWidth: 60 },
+  cardTitle: { fontSize: 15, fontWeight: '600', color: C.text },
+  matRow: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
-    backgroundColor: C.bg, borderRadius: 8, padding: 10,
+    backgroundColor: C.bg, borderRadius: 10, padding: 10,
   },
-  extraName: { flex: 1, fontSize: 14, color: C.text, fontWeight: '500' },
-  extraInput: {
-    width: 70, backgroundColor: C.card, borderRadius: 8, borderWidth: 1,
+  matName: { flex: 1, fontSize: 14, fontWeight: '500', color: C.text },
+  matQtyInput: {
+    width: 72, backgroundColor: C.card, borderRadius: 8, borderWidth: 1,
     borderColor: C.border, padding: 8, fontSize: 14, color: C.text, textAlign: 'center',
   },
-  extraUnit: { fontSize: 13, color: C.muted, width: 40 },
-  noExtraHint: { fontSize: 13, color: C.muted, fontStyle: 'italic' },
-  yieldBox: {
-    backgroundColor: C.card, borderRadius: 12, borderWidth: 2,
-    padding: 16, alignItems: 'center',
+  matUnit: { fontSize: 13, color: C.muted, width: 40 },
+  addMatBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    alignSelf: 'flex-start', paddingHorizontal: 10, paddingVertical: 6,
+    backgroundColor: '#E8F6F0', borderRadius: 8,
   },
-  yieldLabel: { fontSize: 13, color: C.muted, marginBottom: 4 },
-  yieldValue: { fontSize: 28, fontWeight: '700' },
-  yieldHint: { fontSize: 13, color: C.muted, marginTop: 4 },
-  submitBtn: {
-    backgroundColor: C.primary, borderRadius: 12, height: 52,
+  addMatBtnText: { fontSize: 13, color: C.primary, fontWeight: '600' },
+  stockStatus: {
+    backgroundColor: C.card, borderRadius: 12, padding: 12,
+    borderWidth: 2,
+  },
+  stockStatusText: { fontSize: 14, fontWeight: '600' },
+  detailsToggle: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingVertical: 4,
+  },
+  detailsToggleText: { fontSize: 14, color: C.muted, fontWeight: '500' },
+  fieldWrap: { gap: 4 },
+  fieldLabel: { fontSize: 13, color: C.muted, fontWeight: '500' },
+  input: {
+    backgroundColor: C.bg, borderRadius: 10, borderWidth: 1,
+    borderColor: C.border, padding: 12, fontSize: 15, color: C.text,
+  },
+  notesInput: { minHeight: 72, textAlignVertical: 'top' },
+  saveBtn: {
+    backgroundColor: C.primary, borderRadius: 14, height: 54,
     alignItems: 'center', justifyContent: 'center',
   },
-  submitText: { color: '#FFFFFF', fontSize: 16, fontWeight: '700' },
-  progressText: { fontSize: 13, color: C.muted },
-  track: { height: 10, backgroundColor: '#F0F0EE', borderRadius: 5, overflow: 'hidden' },
-  fill: { height: '100%', backgroundColor: C.primary, borderRadius: 5 },
-  progressPct: { fontSize: 13, color: C.primary, fontWeight: '600', textAlign: 'right', marginTop: 4 },
-  editTargetBtn: {
-    flexDirection: 'row', alignItems: 'center', gap: 4,
-    backgroundColor: '#E8F6F0', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6,
+  saveBtnText: { color: '#FFFFFF', fontSize: 17, fontWeight: '700' },
+
+  // Toast
+  toast: {
+    position: 'absolute', bottom: 32, alignSelf: 'center',
+    backgroundColor: '#1A1A18EE', paddingHorizontal: 20, paddingVertical: 10,
+    borderRadius: 22,
   },
-  editTargetText: { fontSize: 13, color: C.primary, fontWeight: '600' },
-  batchRow: { gap: 2 },
-  batchDate: { fontSize: 12, color: C.muted, fontWeight: '600' },
-  batchInfo: { fontSize: 13, color: C.text },
+  toastText: { color: '#FFFFFF', fontSize: 15, fontWeight: '600' },
+
+  // Modals
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
   modalCard: {
-    backgroundColor: C.card, borderTopLeftRadius: 20, borderTopRightRadius: 20,
-    padding: 24, paddingBottom: 40, maxHeight: '85%',
+    backgroundColor: C.card, borderTopLeftRadius: 22, borderTopRightRadius: 22,
+    padding: 24, paddingBottom: 40, maxHeight: '88%',
   },
   modalTitle: { fontSize: 18, fontWeight: '700', color: C.text, marginBottom: 16 },
-  modalActions: { flexDirection: 'row', gap: 10, marginTop: 20 },
+  modalList: { maxHeight: 320, marginBottom: 4 },
+  modalActions: { flexDirection: 'row', gap: 10, marginTop: 16 },
   cancelBtn: {
-    flex: 1, height: 52, borderRadius: 12, backgroundColor: C.bg,
+    flex: 1, height: 50, borderRadius: 12, backgroundColor: C.bg,
     borderWidth: 1, borderColor: C.border, alignItems: 'center', justifyContent: 'center',
-    marginTop: 8,
   },
-  cancelText: { fontSize: 16, color: C.muted, fontWeight: '600' },
+  cancelText: { fontSize: 15, color: C.muted, fontWeight: '600' },
   confirmBtn: {
-    flex: 1, height: 52, borderRadius: 12, backgroundColor: C.primary,
+    flex: 1, height: 50, borderRadius: 12, backgroundColor: C.primary,
     alignItems: 'center', justifyContent: 'center',
   },
-  confirmText: { fontSize: 16, color: '#FFFFFF', fontWeight: '700' },
-  pickerRow: {
-    padding: 14, borderBottomWidth: 1, borderColor: '#F0F0EE',
+  confirmText: { fontSize: 15, color: '#FFFFFF', fontWeight: '700' },
+
+  // Action sheet rows
+  actionRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    paddingVertical: 14, borderBottomWidth: 1, borderColor: C.border,
   },
+  actionLabel: { fontSize: 16, color: C.text },
+
+  // History / Picker rows
+  historyRow: {
+    flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between',
+    paddingVertical: 10, borderBottomWidth: 1, borderColor: '#F0F0EE', gap: 8,
+  },
+  historyProduct: { fontSize: 14, fontWeight: '600', color: C.text },
+  historyDate: { fontSize: 12, fontWeight: '600', color: C.muted },
+  historyUnits: { fontSize: 14, fontWeight: '700', color: C.primary },
+  historyMats: { fontSize: 12, color: C.muted, marginTop: 2 },
+  pickerRow: { paddingVertical: 12, borderBottomWidth: 1, borderColor: '#F0F0EE' },
   pickerName: { fontSize: 15, color: C.text, fontWeight: '500' },
-  pickerUnit: { fontSize: 12, color: C.muted, marginTop: 2 },
+  pickerLevel: { fontSize: 12, color: C.muted, marginTop: 2 },
 });

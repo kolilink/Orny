@@ -51,6 +51,29 @@ export interface ProductionBatch {
   extraMaterials?: Array<{ stockItemId: string; name: string; quantity: number; unit: string }>;
 }
 
+export interface Product {
+  id: string;
+  factory_id: string;
+  name: string;
+  unit: string;
+  lastRecipe: Array<{ rawMaterialId: string; name: string; quantity: number; unit: string }>;
+  createdAt: string;
+}
+
+export interface Batch {
+  id: string;
+  factory_id: string;
+  date: string;
+  productId: string;
+  productName: string;
+  unitsProduced: number;
+  materialsUsed: Array<{ rawMaterialId: string; name: string; quantity: number; unit: string }>;
+  energyUsed?: number;
+  hoursWorked?: number;
+  notes?: string;
+  createdAt: string;
+}
+
 export interface StockItem {
   id: string;
   factory_id: string;

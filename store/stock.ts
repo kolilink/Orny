@@ -100,10 +100,10 @@ export const updateStock = async (updates: Record<string, number>): Promise<Stoc
 };
 
 export const addStockItem = async (
-  item: Omit<StockItem, 'id' | 'factory_id' | 'lastUpdated'>
+  item: Omit<StockItem, 'id' | 'factory_id' | 'lastUpdated'> & { id?: string }
 ): Promise<StockItem> => {
   const factoryId = getFactoryId();
-  const newItem: StockItem = { ...item, id: generateId(), factory_id: factoryId, lastUpdated: new Date().toISOString() };
+  const newItem: StockItem = { ...item, id: item.id ?? generateId(), factory_id: factoryId, lastUpdated: new Date().toISOString() };
   const stock = await getStock();
   await setCache([...stock, newItem]);
 

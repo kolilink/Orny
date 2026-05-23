@@ -1,5 +1,8 @@
-import React, { useState, useCallback } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert, Image, Modal } from 'react-native';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
+import {
+  View, Text, StyleSheet, TouchableOpacity, ScrollView,
+  Modal, Animated,
+} from 'react-native';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -82,15 +85,45 @@ export default function PlusScreen() {
   const insets = useSafeAreaInsets();
   const { membership, allMemberships, switchFactory, signOut, user } = useAuth();
   const role = membership?.role ?? 'employee';
+
   const [profile, setProfile] = useState<UserProfile>({ displayName: '', avatarUri: null });
+  const [profileLoaded, setProfileLoaded] = useState(false);
+  const [imageLoaded, setImageLoaded] = useState(false);
+  const imageOpacity = useRef(new Animated.Value(0)).current;
+  const prevAvatarUri = useRef<string | null>(null);
   const [logoutModal, setLogoutModal] = useState(false);
+
+  // Reset image state when the avatar URI actually changes
+  useEffect(() => {
+    if (profile.avatarUri !== prevAvatarUri.current) {
+      prevAvatarUri.current = profile.avatarUri;
+      setImageLoaded(false);
+      imageOpacity.setValue(0);
+    }
+  }, [profile.avatarUri, imageOpacity]);
 
   useFocusEffect(
     useCallback(() => {
       if (!user?.id) return;
-      getProfile(user.id).then(setProfile);
+      setProfileLoaded(false);
+      getProfile(user.id).then((p) => {
+        setProfile(p);
+        setProfileLoaded(true);
+      });
     }, [user?.id])
   );
+
+  const handleImageLoad = () => {
+    setImageLoaded(true);
+    Animated.timing(imageOpacity, {
+      toValue: 1,
+      duration: 250,
+      useNativeDriver: true,
+    }).start();
+  };
+
+  const initials = ((profile.displayName || user?.email || '?')[0]).toUpperCase();
+  const showImage = profileLoaded && !!profile.avatarUri;
 
   const filteredSections = ALL_SECTIONS
     .map((section) => ({
@@ -98,10 +131,6 @@ export default function PlusScreen() {
       items: section.items.filter((item) => item.roles.includes(role)),
     }))
     .filter((section) => section.items.length > 0);
-
-  function handleSignOut() {
-    setLogoutModal(true);
-  }
 
   return (
     <ScrollView style={[styles.container, { paddingTop: insets.top }]} contentContainerStyle={styles.content}>
@@ -112,15 +141,20 @@ export default function PlusScreen() {
         activeOpacity={0.75}
       >
         <View style={styles.profileLeft}>
-          {profile.avatarUri ? (
-            <Image source={{ uri: profile.avatarUri }} style={styles.avatar} />
-          ) : (
-            <View style={styles.avatarPlaceholder}>
-              <Text style={styles.avatarInitials}>
-                {(profile.displayName || user?.email || '?')[0].toUpperCase()}
-              </Text>
+          {/* Avatar: always show initials as base; fade image in on top once loaded */}
+          <View style={styles.avatarContainer}>
+            <View style={[StyleSheet.absoluteFill, styles.avatarPlaceholder]}>
+              <Text style={styles.avatarInitials}>{initials}</Text>
             </View>
-          )}
+            {showImage && (
+              <Animated.Image
+                key={`avatar-${user?.id}`}
+                source={{ uri: profile.avatarUri! }}
+                style={[StyleSheet.absoluteFill, styles.avatarImage, { opacity: imageOpacity }]}
+                onLoad={handleImageLoad}
+              />
+            )}
+          </View>
           <View style={styles.profileInfo}>
             <Text style={styles.profileName} numberOfLines={1}>
               {profile.displayName || user?.email || 'Mon profil'}
@@ -164,7 +198,7 @@ export default function PlusScreen() {
         </View>
       ))}
 
-      {/* Factory switcher — shown only when user belongs to multiple factories */}
+      {/* Factory switcher */}
       {allMemberships.length > 1 && (
         <View style={{ marginTop: 16 }}>
           <Text style={styles.sectionTitle}>Changer d'usine</Text>
@@ -207,7 +241,7 @@ export default function PlusScreen() {
       {/* Logout */}
       <View style={styles.dangerSection}>
         <Text style={styles.dangerTitle}>Compte</Text>
-        <TouchableOpacity style={styles.logoutRow} onPress={handleSignOut}>
+        <TouchableOpacity style={styles.logoutRow} onPress={() => setLogoutModal(true)}>
           <View style={[styles.iconWrap, { backgroundColor: '#FDECEA' }]}>
             <Ionicons name="log-out-outline" size={22} color={C.red} />
           </View>
@@ -231,11 +265,15 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: C.border, marginBottom: 20,
   },
   profileLeft: { flexDirection: 'row', alignItems: 'center', flex: 1 },
-  avatar: { width: 52, height: 52, borderRadius: 26, marginRight: 12 },
-  avatarPlaceholder: {
+  avatarContainer: {
     width: 52, height: 52, borderRadius: 26,
-    backgroundColor: C.primary, alignItems: 'center', justifyContent: 'center', marginRight: 12,
+    overflow: 'hidden', marginRight: 12,
   },
+  avatarPlaceholder: {
+    backgroundColor: C.primary,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  avatarImage: { borderRadius: 26 },
   avatarInitials: { fontSize: 20, fontWeight: '800', color: '#FFF' },
   profileInfo: { flex: 1 },
   profileName: { fontSize: 16, fontWeight: '700', color: C.text, marginBottom: 4 },
