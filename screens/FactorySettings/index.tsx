@@ -9,27 +9,45 @@ import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth, UserRole, MemberDisplay, JoinRequestDisplay } from '../../context/AuthContext';
+import { Palette } from '../../theme/tokens';
+import { useTheme } from '../../theme/ThemeContext';
+import { supabase } from '../../lib/supabase';
+import { AppModal, Button } from '../../components/ui';
 
-const C = {
-  primary: '#1D9E75', bg: '#F8F8F6', card: '#FFFFFF',
-  muted: '#6B6B66', border: '#E8E8E4', red: '#E24B4A', orange: '#EF9F27',
+type ReconciliationFinding = {
+  severity: 'critical' | 'warning';
+  check_name: string;
+  entity_type: string;
+  entity_id: string | null;
+  message: string;
 };
 
 const ROLE_LABELS: Record<UserRole, string> = {
   admin: 'Administrateur',
   employee: 'Employé',
   investor: 'Investisseur',
+  vendeur: 'Vendeur',
+  inspecteur: 'Inspecteur',
 };
 
-const ROLE_COLORS: Record<UserRole, string> = {
-  admin: '#1D9E75',
+// admin tracks the live brand accent (palette.moss) — the other four are
+// deliberately distinct fixed hues outside the main palette, since a role
+// badge needs more distinguishable colors than the app's 1-accent design
+// otherwise provides, and those don't clash with the cool-neutral scheme.
+const makeRoleColors = (palette: Palette): Record<UserRole, string> => ({
+  admin: palette.moss,
   employee: '#5B8AF5',
   investor: '#EF9F27',
-};
+  vendeur: '#8E44AD',
+  inspecteur: '#3E5C76',
+});
 
 const CODE_TTL = 60;
 
 export default function FactorySettingsScreen() {
+  const { palette } = useTheme();
+  const styles = makeStyles(palette);
+  const ROLE_COLORS = makeRoleColors(palette);
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   const {
@@ -55,6 +73,10 @@ export default function FactorySettingsScreen() {
   const [removeConfirmModal, setRemoveConfirmModal] = useState(false);
   const [regenConfirmModal, setRegenConfirmModal] = useState(false);
   const [rejectTarget, setRejectTarget] = useState<JoinRequestDisplay | null>(null);
+  const [checkModal, setCheckModal] = useState(false);
+  const [checkRunning, setCheckRunning] = useState(false);
+  const [checkFindings, setCheckFindings] = useState<ReconciliationFinding[] | null>(null);
+  const [checkError, setCheckError] = useState<string | null>(null);
 
   const isAdmin = membership?.role === 'admin';
 
@@ -71,6 +93,21 @@ export default function FactorySettingsScreen() {
 
   const regenRef = useRef(doRegen);
   regenRef.current = doRegen;
+
+  async function runReconciliation() {
+    if (!membership) return;
+    setCheckModal(true);
+    setCheckRunning(true);
+    setCheckError(null);
+    setCheckFindings(null);
+    const { data, error } = await supabase.rpc('run_factory_reconciliation', { p_factory_id: membership.factoryId });
+    if (error) {
+      setCheckError(error.message);
+    } else {
+      setCheckFindings((data ?? []) as ReconciliationFinding[]);
+    }
+    setCheckRunning(false);
+  }
 
   async function load() {
     const [mems, reqs, code, target] = await Promise.all([
@@ -163,22 +200,22 @@ export default function FactorySettingsScreen() {
   if (loading) {
     return (
       <View style={styles.splash}>
-        <ActivityIndicator size="large" color={C.primary} />
+        <ActivityIndicator size="large" color={palette.moss} />
       </View>
     );
   }
 
   const pct = countdown / CODE_TTL;
-  const barColor = pct > 0.4 ? C.primary : pct > 0.2 ? C.orange : C.red;
+  const barColor = pct > 0.4 ? palette.moss : pct > 0.2 ? palette.caution : palette.critical;
 
   return (
     <ScrollView
       style={[styles.container, { paddingTop: insets.top }]}
       contentContainerStyle={styles.content}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.primary} />}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={palette.moss} />}
     >
       <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
-        <Ionicons name="arrow-back" size={22} color={C.primary} />
+        <Ionicons name="arrow-back" size={22} color={palette.moss} />
         <Text style={styles.backText}>Retour</Text>
       </TouchableOpacity>
       <Text style={styles.title}>Paramètres usine</Text>
@@ -193,10 +230,10 @@ export default function FactorySettingsScreen() {
 
             <View style={styles.codeRow}>
               {regenLoading
-                ? <ActivityIndicator color={C.primary} style={{ flex: 1 }} />
+                ? <ActivityIndicator color={palette.moss} style={{ flex: 1 }} />
                 : <Text style={styles.codeText}>{inviteCode ?? '—'}</Text>}
               <TouchableOpacity style={styles.copyBtn} onPress={copyInviteCode} disabled={regenLoading || !inviteCode}>
-                <Ionicons name="copy-outline" size={18} color={C.primary} />
+                <Ionicons name="copy-outline" size={18} color={palette.moss} />
                 <Text style={styles.copyText}>Copier</Text>
               </TouchableOpacity>
             </View>
@@ -209,7 +246,7 @@ export default function FactorySettingsScreen() {
                 Nouveau code dans {countdown}s
               </Text>
               <TouchableOpacity style={styles.regenBtn} onPress={handleManualRegen} disabled={regenLoading}>
-                <Ionicons name="refresh" size={14} color={C.muted} />
+                <Ionicons name="refresh" size={14} color={palette.muted} />
                 <Text style={styles.regenText}>Régénérer</Text>
               </TouchableOpacity>
             </View>
@@ -244,7 +281,7 @@ export default function FactorySettingsScreen() {
                   style={styles.rejectBtn}
                   onPress={() => handleRejectRequest(req)}
                 >
-                  <Ionicons name="close" size={16} color={C.red} />
+                  <Ionicons name="close" size={16} color={palette.critical} />
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={styles.approveBtn}
@@ -274,6 +311,66 @@ export default function FactorySettingsScreen() {
         </>
       )}
 
+      {/* Data health check — admin only */}
+      {isAdmin && (
+        <>
+          <Text style={[styles.sectionTitle, { marginTop: 20 }]}>Vérification des données</Text>
+          <View style={styles.targetCard}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.targetLabel}>Intégrité des chiffres</Text>
+              <Text style={[styles.targetValue, { fontSize: 13, fontWeight: '400' }]}>
+                Détecte les incohérences (ventes, achats, stock, investisseurs)
+              </Text>
+            </View>
+            <TouchableOpacity style={styles.editBtn} onPress={runReconciliation}>
+              <Text style={styles.editBtnText}>Vérifier</Text>
+            </TouchableOpacity>
+          </View>
+        </>
+      )}
+
+      <AppModal visible={checkModal} onClose={() => setCheckModal(false)} title="Vérification des données">
+        {checkRunning && (
+          <View style={{ paddingVertical: 32, alignItems: 'center' }}>
+            <ActivityIndicator color={palette.moss} />
+            <Text style={[styles.modalSub, { marginTop: 12 }]}>Analyse en cours…</Text>
+          </View>
+        )}
+        {!checkRunning && checkError && (
+          <Text style={[styles.modalSub, { color: palette.critical }]}>{checkError}</Text>
+        )}
+        {!checkRunning && checkFindings && checkFindings.length === 0 && (
+          <View style={{ paddingVertical: 24, alignItems: 'center' }}>
+            <Ionicons name="checkmark-circle" size={40} color={palette.moss} />
+            <Text style={[styles.modalTitle, { marginTop: 12, fontSize: 16 }]}>Tout est cohérent</Text>
+            <Text style={styles.modalSub}>Aucune anomalie détectée dans les données.</Text>
+          </View>
+        )}
+        {!checkRunning && checkFindings && checkFindings.length > 0 && (
+          <ScrollView style={{ maxHeight: 420 }}>
+            {checkFindings.map((f, i) => (
+              <View
+                key={i}
+                style={{
+                  borderLeftWidth: 3,
+                  borderLeftColor: f.severity === 'critical' ? palette.critical : palette.caution,
+                  backgroundColor: palette.paper,
+                  borderRadius: 8,
+                  padding: 12,
+                  marginBottom: 8,
+                }}
+              >
+                <Text style={{ fontSize: 11, fontWeight: '700', color: f.severity === 'critical' ? palette.critical : palette.caution, marginBottom: 4 }}>
+                  {f.severity === 'critical' ? 'CRITIQUE' : 'À VÉRIFIER'}
+                </Text>
+                <Text style={{ fontSize: 14, color: palette.ink }}>{f.message}</Text>
+              </View>
+            ))}
+          </ScrollView>
+        )}
+        <Button label="Fermer" variant="secondary" onPress={() => setCheckModal(false)} style={{ marginTop: 12 }} />
+      </AppModal>
+
       {/* Approve role picker modal — works on web too */}
       <Modal visible={approveModal} transparent animationType="fade" onRequestClose={() => setApproveModal(false)}>
         <View style={styles.modalOverlay}>
@@ -281,7 +378,7 @@ export default function FactorySettingsScreen() {
             <Text style={styles.modalTitle}>Approuver le membre</Text>
             <Text style={styles.modalSub}>{selectedRequest?.userEmail}</Text>
             <Text style={[styles.modalSub, { marginBottom: 16 }]}>Choisissez un rôle :</Text>
-            {(['employee', 'investor', 'admin'] as UserRole[]).map((role) => (
+            {(['vendeur', 'employee', 'investor', 'inspecteur', 'admin'] as UserRole[]).map((role) => (
               <TouchableOpacity key={role} style={[styles.roleBtn, { borderColor: ROLE_COLORS[role] }]} onPress={() => confirmApprove(role)}>
                 <Text style={[styles.roleBtnText, { color: ROLE_COLORS[role] }]}>{ROLE_LABELS[role]}</Text>
               </TouchableOpacity>
@@ -302,7 +399,7 @@ export default function FactorySettingsScreen() {
               Rôle actuel : {selectedMember ? ROLE_LABELS[selectedMember.role] : ''}
             </Text>
             <Text style={[styles.modalSub, { marginBottom: 12 }]}>Choisissez un nouveau rôle :</Text>
-            {(['employee', 'investor', 'admin'] as UserRole[]).map((role) => (
+            {(['vendeur', 'employee', 'investor', 'inspecteur', 'admin'] as UserRole[]).map((role) => (
               <TouchableOpacity
                 key={role}
                 style={[styles.roleBtn, { borderColor: ROLE_COLORS[role] }]}
@@ -317,10 +414,10 @@ export default function FactorySettingsScreen() {
               </TouchableOpacity>
             ))}
             <TouchableOpacity
-              style={[styles.roleBtn, { borderColor: C.red, marginTop: 8 }]}
+              style={[styles.roleBtn, { borderColor: palette.critical, marginTop: 8 }]}
               onPress={() => { setMemberModal(false); setRemoveConfirmModal(true); }}
             >
-              <Text style={[styles.roleBtnText, { color: C.red }]}>Retirer de l'usine</Text>
+              <Text style={[styles.roleBtnText, { color: palette.critical }]}>Retirer de l'usine</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.modalCancel} onPress={() => setMemberModal(false)}>
               <Text style={styles.modalCancelText}>Annuler</Text>
@@ -340,7 +437,7 @@ export default function FactorySettingsScreen() {
                 <Text style={styles.modalCancelText}>Annuler</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={[styles.modalSave, { backgroundColor: C.red }]}
+                style={[styles.modalSave, { backgroundColor: palette.critical }]}
                 onPress={async () => {
                   if (!selectedMember) return;
                   setRemoveConfirmModal(false);
@@ -385,7 +482,7 @@ export default function FactorySettingsScreen() {
       <Modal visible={regenConfirmModal} transparent animationType="fade" onRequestClose={() => setRegenConfirmModal(false)}>
         <View style={styles.confirmOverlay}>
           <View style={styles.confirmBox}>
-            <Ionicons name="refresh" size={32} color={C.primary} style={{ alignSelf: 'center', marginBottom: 12 }} />
+            <Ionicons name="refresh" size={32} color={palette.moss} style={{ alignSelf: 'center', marginBottom: 12 }} />
             <Text style={styles.confirmTitle}>Régénérer le code ?</Text>
             <Text style={styles.confirmSub}>L'ancien code sera invalidé immédiatement.</Text>
             <TouchableOpacity
@@ -409,7 +506,7 @@ export default function FactorySettingsScreen() {
       <Modal visible={!!rejectTarget} transparent animationType="fade" onRequestClose={() => setRejectTarget(null)}>
         <View style={styles.confirmOverlay}>
           <View style={styles.confirmBox}>
-            <Ionicons name="warning-outline" size={32} color={C.red} style={{ alignSelf: 'center', marginBottom: 12 }} />
+            <Ionicons name="warning-outline" size={32} color={palette.critical} style={{ alignSelf: 'center', marginBottom: 12 }} />
             <Text style={styles.confirmTitle}>Refuser la demande ?</Text>
             <Text style={styles.confirmSub}>{rejectTarget?.userEmail ?? ''}</Text>
             <TouchableOpacity
@@ -454,7 +551,7 @@ export default function FactorySettingsScreen() {
                 {ROLE_LABELS[member.role]}
               </Text>
             </View>
-            {!member.isCurrentUser && <Ionicons name="chevron-forward" size={16} color="#BABAB6" style={{ marginLeft: 6 }} />}
+            {!member.isCurrentUser && <Ionicons name="chevron-forward" size={16} color={palette.muted} style={{ marginLeft: 6 }} />}
           </TouchableOpacity>
         ))}
       </View>
@@ -462,77 +559,77 @@ export default function FactorySettingsScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  splash: { flex: 1, backgroundColor: C.bg, alignItems: 'center', justifyContent: 'center' },
-  container: { flex: 1, backgroundColor: C.bg },
+const makeStyles = (palette: Palette) => StyleSheet.create({
+  splash: { flex: 1, backgroundColor: palette.paper, alignItems: 'center', justifyContent: 'center' },
+  container: { flex: 1, backgroundColor: palette.paper },
   content: { padding: 16, paddingBottom: 50 },
   backBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 16 },
-  backText: { color: C.primary, fontSize: 16, fontWeight: '500' },
-  title: { fontSize: 22, fontWeight: '700', color: '#1A1A18', marginBottom: 4 },
-  factoryName: { fontSize: 15, color: C.muted, marginBottom: 24 },
-  sectionTitle: { fontSize: 12, fontWeight: '700', color: C.muted, textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 8 },
+  backText: { color: palette.moss, fontSize: 16, fontWeight: '500' },
+  title: { fontSize: 22, fontWeight: '700', color: palette.ink, marginBottom: 4 },
+  factoryName: { fontSize: 15, color: palette.muted, marginBottom: 24 },
+  sectionTitle: { fontSize: 12, fontWeight: '700', color: palette.muted, textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 8 },
   sectionRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 20, marginBottom: 8 },
-  badge: { backgroundColor: C.orange, borderRadius: 10, paddingHorizontal: 7, paddingVertical: 2 },
-  badgeText: { color: '#fff', fontSize: 11, fontWeight: '700' },
-  codeCard: { backgroundColor: C.card, borderRadius: 16, padding: 20, borderWidth: 1, borderColor: C.border },
-  codeLabel: { fontSize: 13, color: C.muted, marginBottom: 12 },
+  badge: { backgroundColor: palette.caution, borderRadius: 10, paddingHorizontal: 7, paddingVertical: 2 },
+  badgeText: { color: palette.white, fontSize: 11, fontWeight: '700' },
+  codeCard: { backgroundColor: palette.card, borderRadius: 16, padding: 20, borderWidth: 1, borderColor: palette.line },
+  codeLabel: { fontSize: 13, color: palette.muted, marginBottom: 12 },
   codeRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 },
-  codeText: { fontSize: 28, fontWeight: '800', color: '#1A1A18', letterSpacing: 4 },
-  copyBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#E8F6F0', borderRadius: 8, paddingVertical: 8, paddingHorizontal: 14 },
-  copyText: { color: C.primary, fontWeight: '600', fontSize: 14 },
-  barTrack: { height: 4, backgroundColor: C.border, borderRadius: 2, marginBottom: 8, overflow: 'hidden' },
+  codeText: { fontSize: 28, fontWeight: '800', color: palette.ink, letterSpacing: 4 },
+  copyBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: palette.mossSoft, borderRadius: 8, paddingVertical: 8, paddingHorizontal: 14 },
+  copyText: { color: palette.moss, fontWeight: '600', fontSize: 14 },
+  barTrack: { height: 4, backgroundColor: palette.line, borderRadius: 2, marginBottom: 8, overflow: 'hidden' },
   barFill: { height: 4, borderRadius: 2 },
   timerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 },
   timerText: { fontSize: 12, fontWeight: '600' },
   regenBtn: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  regenText: { fontSize: 12, color: C.muted, fontWeight: '500' },
-  codeNote: { fontSize: 12, color: C.muted, lineHeight: 17 },
-  list: { backgroundColor: C.card, borderRadius: 16, borderWidth: 1, borderColor: C.border, overflow: 'hidden' },
-  memberRow: { flexDirection: 'row', alignItems: 'center', padding: 14, borderBottomWidth: 1, borderColor: '#F0F0EE', gap: 10 },
-  memberAvatar: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#F0F0EE', alignItems: 'center', justifyContent: 'center' },
-  memberAvatarText: { fontSize: 16, fontWeight: '700', color: C.muted },
-  memberEmail: { fontSize: 14, color: '#1A1A18', fontWeight: '500' },
+  regenText: { fontSize: 12, color: palette.muted, fontWeight: '500' },
+  codeNote: { fontSize: 12, color: palette.muted, lineHeight: 17 },
+  list: { backgroundColor: palette.card, borderRadius: 16, borderWidth: 1, borderColor: palette.line, overflow: 'hidden' },
+  memberRow: { flexDirection: 'row', alignItems: 'center', padding: 14, borderBottomWidth: 1, borderColor: palette.line, gap: 10 },
+  memberAvatar: { width: 36, height: 36, borderRadius: 18, backgroundColor: palette.line, alignItems: 'center', justifyContent: 'center' },
+  memberAvatarText: { fontSize: 16, fontWeight: '700', color: palette.muted },
+  memberEmail: { fontSize: 14, color: palette.ink, fontWeight: '500' },
   rolePill: { borderRadius: 20, paddingHorizontal: 10, paddingVertical: 4 },
   rolePillText: { fontSize: 12, fontWeight: '700' },
-  approveBtn: { backgroundColor: C.primary, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6 },
-  approveBtnText: { color: '#fff', fontSize: 13, fontWeight: '700' },
-  rejectBtn: { width: 32, height: 32, borderRadius: 16, backgroundColor: '#FFE8E8', alignItems: 'center', justifyContent: 'center' },
-  targetCard: { backgroundColor: C.card, borderRadius: 12, padding: 16, borderWidth: 1, borderColor: C.border, flexDirection: 'row', alignItems: 'center' },
-  targetLabel: { fontSize: 12, color: C.muted, marginBottom: 4 },
-  targetValue: { fontSize: 16, fontWeight: '700', color: '#1A1A18' },
-  editBtn: { backgroundColor: '#E8F6F0', borderRadius: 8, paddingHorizontal: 14, paddingVertical: 8 },
-  editBtnText: { color: C.primary, fontWeight: '700', fontSize: 14 },
+  approveBtn: { backgroundColor: palette.moss, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6 },
+  approveBtnText: { color: palette.white, fontSize: 13, fontWeight: '700' },
+  rejectBtn: { width: 32, height: 32, borderRadius: 16, backgroundColor: palette.criticalSoft, alignItems: 'center', justifyContent: 'center' },
+  targetCard: { backgroundColor: palette.card, borderRadius: 12, padding: 16, borderWidth: 1, borderColor: palette.line, flexDirection: 'row', alignItems: 'center' },
+  targetLabel: { fontSize: 12, color: palette.muted, marginBottom: 4 },
+  targetValue: { fontSize: 16, fontWeight: '700', color: palette.ink },
+  editBtn: { backgroundColor: palette.mossSoft, borderRadius: 8, paddingHorizontal: 14, paddingVertical: 8 },
+  editBtnText: { color: palette.moss, fontWeight: '700', fontSize: 14 },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', alignItems: 'center', padding: 24 },
-  modalBox: { backgroundColor: '#fff', borderRadius: 16, padding: 24, width: '100%' },
-  modalTitle: { fontSize: 17, fontWeight: '700', color: '#1A1A18', marginBottom: 4 },
-  modalSub: { fontSize: 13, color: C.muted, marginBottom: 16 },
-  modalInput: { borderWidth: 1, borderColor: C.border, borderRadius: 10, padding: 12, fontSize: 20, fontWeight: '700', textAlign: 'center', marginBottom: 20 },
+  modalBox: { backgroundColor: palette.card, borderRadius: 16, padding: 24, width: '100%' },
+  modalTitle: { fontSize: 17, fontWeight: '700', color: palette.ink, marginBottom: 4 },
+  modalSub: { fontSize: 13, color: palette.muted, marginBottom: 16 },
+  modalInput: { borderWidth: 1, borderColor: palette.line, borderRadius: 10, padding: 12, fontSize: 20, fontWeight: '700', textAlign: 'center', marginBottom: 20 },
   modalBtns: { flexDirection: 'row', gap: 10 },
-  modalCancel: { flex: 1, padding: 14, borderRadius: 10, borderWidth: 1, borderColor: C.border, alignItems: 'center' },
-  modalCancelText: { color: C.muted, fontWeight: '600' },
-  modalSave: { flex: 1, padding: 14, borderRadius: 10, backgroundColor: C.primary, alignItems: 'center' },
-  modalSaveText: { color: '#fff', fontWeight: '700' },
+  modalCancel: { flex: 1, padding: 14, borderRadius: 10, borderWidth: 1, borderColor: palette.line, alignItems: 'center' },
+  modalCancelText: { color: palette.muted, fontWeight: '600' },
+  modalSave: { flex: 1, padding: 14, borderRadius: 10, backgroundColor: palette.moss, alignItems: 'center' },
+  modalSaveText: { color: palette.white, fontWeight: '700' },
   roleBtn: { borderWidth: 1.5, borderRadius: 10, padding: 14, alignItems: 'center', marginBottom: 10 },
   roleBtnText: { fontWeight: '700', fontSize: 15 },
   confirmOverlay: {
     flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', padding: 24,
   },
-  confirmBox: { backgroundColor: '#FFFFFF', borderRadius: 16, padding: 24 },
-  confirmTitle: { fontSize: 17, fontWeight: '700', color: '#1A1A18', textAlign: 'center', marginBottom: 6 },
-  confirmSub: { fontSize: 14, color: C.muted, textAlign: 'center', marginBottom: 20 },
+  confirmBox: { backgroundColor: palette.card, borderRadius: 16, padding: 24 },
+  confirmTitle: { fontSize: 17, fontWeight: '700', color: palette.ink, textAlign: 'center', marginBottom: 6 },
+  confirmSub: { fontSize: 14, color: palette.muted, textAlign: 'center', marginBottom: 20 },
   confirmActionBtn: {
-    backgroundColor: C.primary, borderRadius: 12, height: 52,
+    backgroundColor: palette.moss, borderRadius: 12, height: 52,
     alignItems: 'center', justifyContent: 'center', marginBottom: 10,
   },
-  confirmActionText: { color: '#FFFFFF', fontSize: 16, fontWeight: '700' },
+  confirmActionText: { color: palette.white, fontSize: 16, fontWeight: '700' },
   confirmDeleteBtn: {
-    backgroundColor: C.red, borderRadius: 12, height: 52,
+    backgroundColor: palette.critical, borderRadius: 12, height: 52,
     alignItems: 'center', justifyContent: 'center', marginBottom: 10,
   },
-  confirmDeleteText: { color: '#FFFFFF', fontSize: 16, fontWeight: '700' },
+  confirmDeleteText: { color: palette.white, fontSize: 16, fontWeight: '700' },
   confirmCancelBtn: {
-    borderRadius: 12, height: 52, borderWidth: 1, borderColor: C.border,
+    borderRadius: 12, height: 52, borderWidth: 1, borderColor: palette.line,
     alignItems: 'center', justifyContent: 'center',
   },
-  confirmCancelText: { fontSize: 16, color: C.muted, fontWeight: '600' },
+  confirmCancelText: { fontSize: 16, color: palette.muted, fontWeight: '600' },
 });

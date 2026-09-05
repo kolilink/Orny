@@ -1,0 +1,33 @@
+-- ============================================================
+-- ORNY / SOL Chips — update17_security_hardening
+-- Found via `supabase db advisors --linked` during a full security
+-- audit. Safe to re-run (idempotent).
+--
+-- REAL FIX: lookup_factory_by_code(text) was callable directly by
+-- both anon and authenticated via /rest/v1/rpc/lookup_factory_by_code
+-- (confirmed live via the advisor, not just a source-code read). The
+-- app itself never calls this RPC directly — only the lookup-factory
+-- edge function does, over its own service-role client, after
+-- enforcing a 5-attempts/60s per-IP rate limit via invite_lookup_log.
+-- Calling the RPC directly skips that edge function entirely, which
+-- means the rate limit was fully bypassable: an attacker holding only
+-- the app's public anon key (not a secret) could brute-force every
+-- 8-character invite code with zero throttling, straight against
+-- Postgres. Revoking here does not affect the edge function — it
+-- authenticates as service_role, which is never touched by a REVOKE
+-- FROM PUBIC/anon/authenticated (Supabase grants it EXECUTE on public
+-- functions independently, at project bootstrap).
+--
+-- Everything else the same advisor run flagged (my_factory_ids,
+-- my_role_in, approve_join_request, get_my_invite_code,
+-- upsert_my_profile all showing as "authenticated can execute") is
+-- intentional, not a bug: the first two are called directly BY every
+-- RLS policy in the schema (revoking authenticated's EXECUTE there
+-- would break every policy in the app), and the other three are real
+-- app-facing RPCs that already do their own auth.uid()-scoped checks
+-- internally (see update9_security_fix.sql's original REVOKE FROM
+-- PUBLIC + explicit re-GRANT for the reasoning) — same posture Patron
+-- documents for its own is_member()/get_role() helpers.
+-- ============================================================
+
+REVOKE EXECUTE ON FUNCTION public.lookup_factory_by_code(text) FROM PUBLIC, anon, authenticated;
