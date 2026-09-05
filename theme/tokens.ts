@@ -42,6 +42,24 @@ export const paletteLight = {
   cautionSoft: '#FEF3C7',
   critical: '#EF4444',
   criticalSoft: '#FEE2E2',
+  // Category-badge hues (Documents screen: contrat/import_export/
+  // investisseur) — same 3-slot recipe as moss (main/Deep-for-readable-
+  // text/Soft-background), added because the badges previously used
+  // flat hex pale-blue/purple backgrounds that never adapted for dark
+  // mode (a near-white tint sitting on a dark card reads as a bug).
+  // Distinct hues on purpose: contrat and import_export used to share
+  // near-identical blues (#2D6BCE vs #4A90D9) that were barely
+  // distinguishable at a glance — info (blue) and teal (cyan) read as
+  // clearly different colors instead.
+  info: '#3B82F6',
+  infoDeep: '#1D4ED8',
+  infoSoft: '#DBEAFE',
+  teal: '#06B6D4',
+  tealDeep: '#0E7490',
+  tealSoft: '#CFFAFE',
+  violet: '#8B5CF6',
+  violetDeep: '#6D28D9',
+  violetSoft: '#EDE9FE',
   white: '#FFFFFF',
   overlay: 'rgba(15, 23, 42, 0.5)',
 } as const;
@@ -71,6 +89,15 @@ export const paletteDark = {
   cautionSoft: '#451A03',
   critical: '#F87171',
   criticalSoft: '#450A0A',
+  info: '#60A5FA',
+  infoDeep: '#93C5FD',
+  infoSoft: '#1E3A8A',
+  teal: '#22D3EE',
+  tealDeep: '#67E8F9',
+  tealSoft: '#164E63',
+  violet: '#A78BFA',
+  violetDeep: '#C4B5FD',
+  violetSoft: '#4C1D95',
   white: '#FFFFFF',
   overlay: 'rgba(0, 0, 0, 0.6)',
 } as const;

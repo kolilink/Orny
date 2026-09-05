@@ -25,12 +25,12 @@ const CATEGORIES: { key: BusinessDocument['category'] | 'all'; label: string }[]
 ];
 
 const makeCatColors = (palette: Palette): Record<BusinessDocument['category'], { bg: string; text: string }> => ({
-  contrat: { bg: '#EBF3FE', text: '#2D6BCE' },
-  facture: { bg: palette.cautionSoft, text: '#B7770A' },
+  contrat: { bg: palette.infoSoft, text: palette.infoDeep },
+  facture: { bg: palette.cautionSoft, text: palette.caution },
   licence: { bg: palette.mossSoft, text: palette.mossDeep },
-  import_export: { bg: '#E8F0FE', text: '#4A90D9' },
-  investisseur: { bg: '#F3E8FE', text: '#8E44AD' },
-  autre: { bg: palette.line, text: '#6B6B66' },
+  import_export: { bg: palette.tealSoft, text: palette.tealDeep },
+  investisseur: { bg: palette.violetSoft, text: palette.violetDeep },
+  autre: { bg: palette.line, text: palette.muted },
 });
 
 const CAT_LABELS: Record<BusinessDocument['category'], string> = {
