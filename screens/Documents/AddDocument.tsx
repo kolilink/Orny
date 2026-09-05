@@ -9,6 +9,8 @@ import * as DocumentPicker from 'expo-document-picker';
 import { Ionicons } from '@expo/vector-icons';
 import { addDocument } from '../../store/documents';
 import { BusinessDocument } from '../../types';
+import { Palette } from '../../theme/tokens';
+import { useTheme } from '../../theme/ThemeContext';
 
 // Web-only: prompts browser file picker, resolves to a base64 data URL (persists across refresh)
 function webPickFromDisk(accept: string, capture?: string): Promise<{ uri: string; mimeType: string } | null> {
@@ -42,6 +44,8 @@ const CATEGORIES: { key: BusinessDocument['category']; label: string }[] = [
 ];
 
 export default function AddDocumentScreen() {
+  const { palette } = useTheme();
+  const styles = makeStyles(palette);
   const navigation = useNavigation();
   const [title, setTitle] = useState('');
   const [category, setCategory] = useState<BusinessDocument['category']>('contrat');
@@ -220,21 +224,21 @@ export default function AddDocumentScreen() {
         <Text style={styles.label}>Fichier</Text>
         <View style={styles.fileGrid}>
           <TouchableOpacity style={styles.fileBtn} onPress={takePhoto}>
-            <Ionicons name="camera" size={22} color="#1D9E75" />
+            <Ionicons name="camera" size={22} color={palette.moss} />
             <Text style={styles.fileBtnText}>Prendre une{'\n'}photo</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.fileBtn} onPress={pickFromGallery}>
-            <Ionicons name="images" size={22} color="#1D9E75" />
+            <Ionicons name="images" size={22} color={palette.moss} />
             <Text style={styles.fileBtnText}>Galerie</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.fileBtn} onPress={pickFile}>
-            <Ionicons name="folder-open" size={22} color="#1D9E75" />
+            <Ionicons name="folder-open" size={22} color={palette.moss} />
             <Text style={styles.fileBtnText}>Fichier{'\n'}/ PDF</Text>
           </TouchableOpacity>
         </View>
         {!!fileUri && (
           <View style={styles.filePreview}>
-            <Ionicons name="checkmark-circle" size={18} color="#1D9E75" />
+            <Ionicons name="checkmark-circle" size={18} color={palette.moss} />
             <Text style={styles.filePreviewText} numberOfLines={1}>
               {fileType === 'pdf' ? 'PDF sélectionné' : 'Photo sélectionnée'}
             </Text>
@@ -273,35 +277,35 @@ export default function AddDocumentScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F8F8F6' },
+const makeStyles = (palette: Palette) => StyleSheet.create({
+  container: { flex: 1, backgroundColor: palette.paper },
   content: { padding: 16, paddingBottom: 40, gap: 6 },
-  label: { fontSize: 14, fontWeight: '600', color: '#1A1A18', marginTop: 12, marginBottom: 4 },
+  label: { fontSize: 14, fontWeight: '600', color: palette.ink, marginTop: 12, marginBottom: 4 },
   input: {
-    backgroundColor: '#FFFFFF', borderRadius: 12, borderWidth: 1,
-    borderColor: '#E8E8E4', padding: 14, fontSize: 16, color: '#1A1A18',
+    backgroundColor: palette.white, borderRadius: 12, borderWidth: 1,
+    borderColor: palette.line, padding: 14, fontSize: 16, color: palette.ink,
   },
   multiline: { height: 90, textAlignVertical: 'top' },
   catGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   catBtn: {
     paddingHorizontal: 14, paddingVertical: 10, borderRadius: 10,
-    backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E8E8E4',
+    backgroundColor: palette.white, borderWidth: 1, borderColor: palette.line,
   },
-  catBtnActive: { backgroundColor: '#1D9E75', borderColor: '#1D9E75' },
-  catBtnText: { fontSize: 14, color: '#6B6B66', fontWeight: '500' },
-  catBtnTextActive: { color: '#FFFFFF', fontWeight: '600' },
+  catBtnActive: { backgroundColor: palette.moss, borderColor: palette.moss },
+  catBtnText: { fontSize: 14, color: palette.muted, fontWeight: '500' },
+  catBtnTextActive: { color: palette.white, fontWeight: '600' },
   fileGrid: { flexDirection: 'row', gap: 8 },
   fileBtn: {
-    flex: 1, minHeight: 72, backgroundColor: '#FFFFFF', borderRadius: 12,
-    borderWidth: 1, borderColor: '#E8E8E4', alignItems: 'center',
+    flex: 1, minHeight: 72, backgroundColor: palette.white, borderRadius: 12,
+    borderWidth: 1, borderColor: palette.line, alignItems: 'center',
     justifyContent: 'center', gap: 6, paddingVertical: 10,
   },
-  fileBtnText: { fontSize: 12, color: '#1D9E75', fontWeight: '600', textAlign: 'center' },
+  fileBtnText: { fontSize: 12, color: palette.moss, fontWeight: '600', textAlign: 'center' },
   filePreview: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  filePreviewText: { fontSize: 13, color: '#1D9E75', flex: 1 },
+  filePreviewText: { fontSize: 13, color: palette.moss, flex: 1 },
   submitBtn: {
-    backgroundColor: '#1D9E75', borderRadius: 12, height: 52,
+    backgroundColor: palette.moss, borderRadius: 12, height: 52,
     alignItems: 'center', justifyContent: 'center', marginTop: 8,
   },
-  submitText: { color: '#FFFFFF', fontSize: 16, fontWeight: '700' },
+  submitText: { color: palette.white, fontSize: 16, fontWeight: '700' },
 });

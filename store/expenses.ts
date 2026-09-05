@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Expense } from '../types';
 import { getFactoryId, generateId } from './context';
 import { supabase } from '../lib/supabase';
+import { enqueueIfNetworkError } from '../lib/syncQueue';
 
 function cacheKey() { return `${getFactoryId()}_expenses`; }
 function trashKey() { return `${getFactoryId()}_expenses_trash`; }
@@ -54,7 +55,7 @@ export const addExpense = async (expense: Omit<Expense, 'id' | 'factory_id'>): P
   const item: Expense = { ...expense, id: generateId(), factory_id: factoryId };
   const all = await getExpenses();
   await setCache([item, ...all]);
-  supabase.from('expenses').insert({
+  const row = {
     id: item.id,
     factory_id: factoryId,
     date: item.date,
@@ -63,7 +64,10 @@ export const addExpense = async (expense: Omit<Expense, 'id' | 'factory_id'>): P
     amount: item.amount,
     payment_method: item.paymentMethod,
     line_items: item.lineItems ?? null,
-  }).then(({ error }) => { if (error) console.warn('expenses insert sync error', error.message); });
+  };
+  supabase.from('expenses').insert(row).then(({ error }) => {
+    if (error) enqueueIfNetworkError(error, { table: 'expenses', op: 'insert', values: row, label: 'dépense' });
+  });
   return item;
 };
 
@@ -77,7 +81,10 @@ export const updateExpense = async (id: string, updates: Partial<Omit<Expense, '
   if (updates.amount !== undefined) row.amount = updates.amount;
   if (updates.paymentMethod !== undefined) row.payment_method = updates.paymentMethod;
   if (updates.lineItems !== undefined) row.line_items = updates.lineItems ?? null;
-  supabase.from('expenses').update(row).eq('id', id).eq('factory_id', getFactoryId()).then(({ error }) => { if (error) console.warn('expenses update sync error', error.message); });
+  const factoryId = getFactoryId();
+  supabase.from('expenses').update(row).eq('id', id).eq('factory_id', factoryId).then(({ error }) => {
+    if (error) enqueueIfNetworkError(error, { table: 'expenses', op: 'update', values: row, match: { id, factory_id: factoryId }, label: 'dépense (modif.)' });
+  });
 };
 
 // Soft delete: moves to trash, hard-deletes from Supabase
@@ -90,7 +97,9 @@ export const deleteExpense = async (id: string): Promise<void> => {
     await AsyncStorage.setItem(trashKey(), JSON.stringify([{ ...target, deletedAt: new Date().toISOString() }, ...trash]));
     await setCache(all.filter(e => e.id !== id));
   }
-  supabase.from('expenses').delete().eq('id', id).eq('factory_id', factoryId).then(({ error }) => { if (error) console.warn('expenses delete sync error', error.message); });
+  supabase.from('expenses').delete().eq('id', id).eq('factory_id', factoryId).then(({ error }) => {
+    if (error) enqueueIfNetworkError(error, { table: 'expenses', op: 'delete', match: { id, factory_id: factoryId }, label: 'dépense (suppr.)' });
+  });
 };
 
 // Restore a soft-deleted expense
@@ -103,7 +112,7 @@ export const restoreExpense = async (id: string): Promise<void> => {
   const active = await getExpenses();
   await setCache([restored, ...active]);
   await AsyncStorage.setItem(trashKey(), JSON.stringify(trash.filter(e => e.id !== id)));
-  supabase.from('expenses').insert({
+  const row = {
     id: restored.id,
     factory_id: factoryId,
     date: restored.date,
@@ -112,7 +121,10 @@ export const restoreExpense = async (id: string): Promise<void> => {
     amount: restored.amount,
     payment_method: restored.paymentMethod,
     line_items: restored.lineItems ?? null,
-  }).then(({ error }) => { if (error) console.warn('expenses restore sync error', error.message); });
+  };
+  supabase.from('expenses').insert(row).then(({ error }) => {
+    if (error) enqueueIfNetworkError(error, { table: 'expenses', op: 'insert', values: row, label: 'dépense (restaur.)' });
+  });
 };
 
 // Permanently delete from trash

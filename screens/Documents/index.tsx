@@ -8,6 +8,9 @@ import { Ionicons } from '@expo/vector-icons';
 import { getDocuments } from '../../store/documents';
 import { BusinessDocument, RootStackParamList } from '../../types';
 import { formatDate } from '../../utils/format';
+import { Palette } from '../../theme/tokens';
+import { useTheme } from '../../theme/ThemeContext';
+import { useAuth } from '../../context/AuthContext';
 
 type DocsNav = NativeStackNavigationProp<RootStackParamList>;
 
@@ -21,14 +24,14 @@ const CATEGORIES: { key: BusinessDocument['category'] | 'all'; label: string }[]
   { key: 'autre', label: 'Autres' },
 ];
 
-const CAT_COLORS: Record<BusinessDocument['category'], { bg: string; text: string }> = {
+const makeCatColors = (palette: Palette): Record<BusinessDocument['category'], { bg: string; text: string }> => ({
   contrat: { bg: '#EBF3FE', text: '#2D6BCE' },
-  facture: { bg: '#FEF4E4', text: '#B7770A' },
-  licence: { bg: '#E8F6F0', text: '#1D9E75' },
+  facture: { bg: palette.cautionSoft, text: '#B7770A' },
+  licence: { bg: palette.mossSoft, text: palette.mossDeep },
   import_export: { bg: '#E8F0FE', text: '#4A90D9' },
   investisseur: { bg: '#F3E8FE', text: '#8E44AD' },
-  autre: { bg: '#F0F0EE', text: '#6B6B66' },
-};
+  autre: { bg: palette.line, text: '#6B6B66' },
+});
 
 const CAT_LABELS: Record<BusinessDocument['category'], string> = {
   contrat: 'Contrat',
@@ -48,7 +51,12 @@ function daysUntilExpiry(dateStr: string): number {
 }
 
 export default function DocumentsScreen() {
+  const { palette } = useTheme();
+  const styles = makeStyles(palette);
+  const CAT_COLORS = makeCatColors(palette);
   const navigation = useNavigation<DocsNav>();
+  const { membership } = useAuth();
+  const canWrite = membership?.role !== 'inspecteur';
   const [docs, setDocs] = useState<BusinessDocument[]>([]);
   const [filter, setFilter] = useState<BusinessDocument['category'] | 'all'>('all');
 
@@ -64,12 +72,14 @@ export default function DocumentsScreen() {
   return (
     <View style={styles.container}>
       <View style={styles.headerRow}>
-        <TouchableOpacity
-          style={styles.addBtn}
-          onPress={() => navigation.navigate('AddDocument')}
-        >
-          <Ionicons name="add" size={22} color="#FFFFFF" />
-        </TouchableOpacity>
+        {canWrite && (
+          <TouchableOpacity
+            style={styles.addBtn}
+            onPress={() => navigation.navigate('AddDocument')}
+          >
+            <Ionicons name="add" size={22} color={palette.white} />
+          </TouchableOpacity>
+        )}
       </View>
 
       <ScrollView
@@ -106,7 +116,7 @@ export default function DocumentsScreen() {
             >
               <View style={[
                 styles.thumb,
-                { backgroundColor: item.fileType === 'pdf' ? '#FDECEA' : '#E8F0FE' },
+                { backgroundColor: item.fileType === 'pdf' ? palette.criticalSoft : '#E8F0FE' },
               ]}>
                 <Ionicons
                   name={item.fileType === 'pdf' ? 'document-text' : 'image-outline'}
@@ -132,7 +142,7 @@ export default function DocumentsScreen() {
                   if (days < 0) {
                     return (
                       <View style={styles.expiryBadgeRed}>
-                        <Ionicons name="alert-circle" size={12} color="#E24B4A" />
+                        <Ionicons name="alert-circle" size={12} color={palette.critical} />
                         <Text style={styles.expiryTextRed}>Expirée</Text>
                       </View>
                     );
@@ -140,7 +150,7 @@ export default function DocumentsScreen() {
                   if (days <= 3) {
                     return (
                       <View style={styles.expiryBadgeOrange}>
-                        <Ionicons name="warning" size={12} color="#EF9F27" />
+                        <Ionicons name="warning" size={12} color={palette.caution} />
                         <Text style={styles.expiryTextOrange}>
                           Expire dans {days === 0 ? "aujourd'hui" : `${days} jour${days > 1 ? 's' : ''}`}
                         </Text>
@@ -158,46 +168,46 @@ export default function DocumentsScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F8F8F6' },
+const makeStyles = (palette: Palette) => StyleSheet.create({
+  container: { flex: 1, backgroundColor: palette.paper },
   headerRow: { flexDirection: 'row', justifyContent: 'flex-end', padding: 16, paddingBottom: 8 },
   addBtn: {
-    width: 40, height: 40, borderRadius: 20, backgroundColor: '#1D9E75',
+    width: 40, height: 40, borderRadius: 20, backgroundColor: palette.moss,
     alignItems: 'center', justifyContent: 'center',
   },
   filterRow: { paddingHorizontal: 16, paddingBottom: 12, gap: 8 },
   chip: {
     paddingHorizontal: 14, paddingVertical: 7, borderRadius: 20,
-    backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E8E8E4',
+    backgroundColor: palette.white, borderWidth: 1, borderColor: palette.line,
   },
-  chipActive: { backgroundColor: '#1D9E75', borderColor: '#1D9E75' },
-  chipText: { fontSize: 13, color: '#6B6B66', fontWeight: '500' },
-  chipTextActive: { color: '#FFFFFF', fontWeight: '600' },
+  chipActive: { backgroundColor: palette.moss, borderColor: palette.moss },
+  chipText: { fontSize: 13, color: palette.muted, fontWeight: '500' },
+  chipTextActive: { color: palette.white, fontWeight: '600' },
   list: { padding: 16, paddingTop: 4, paddingBottom: 32, gap: 12 },
   card: {
-    flexDirection: 'row', backgroundColor: '#FFFFFF', borderRadius: 12,
-    borderWidth: 1, borderColor: '#E8E8E4', overflow: 'hidden',
+    flexDirection: 'row', backgroundColor: palette.white, borderRadius: 12,
+    borderWidth: 1, borderColor: palette.line, overflow: 'hidden',
     shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 4, elevation: 2,
   },
   thumb: { width: 80, minHeight: 80, alignItems: 'center', justifyContent: 'center' },
   cardBody: { flex: 1, padding: 12, gap: 6 },
-  cardTitle: { fontSize: 14, fontWeight: '600', color: '#1A1A18', lineHeight: 20 },
+  cardTitle: { fontSize: 14, fontWeight: '600', color: palette.ink, lineHeight: 20 },
   cardMeta: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   catBadge: { borderRadius: 20, paddingHorizontal: 8, paddingVertical: 3 },
   catBadgeText: { fontSize: 11, fontWeight: '600' },
-  cardDate: { fontSize: 12, color: '#6B6B66' },
-  cardNotes: { fontSize: 12, color: '#6B6B66', lineHeight: 16 },
-  empty: { textAlign: 'center', color: '#6B6B66', marginTop: 40, fontSize: 15 },
+  cardDate: { fontSize: 12, color: palette.muted },
+  cardNotes: { fontSize: 12, color: palette.muted, lineHeight: 16 },
+  empty: { textAlign: 'center', color: palette.muted, marginTop: 40, fontSize: 15 },
   expiryBadgeRed: {
     flexDirection: 'row', alignItems: 'center', gap: 4,
-    backgroundColor: '#FDECEA', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4,
+    backgroundColor: palette.criticalSoft, borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4,
     alignSelf: 'flex-start',
   },
-  expiryTextRed: { fontSize: 11, fontWeight: '600', color: '#E24B4A' },
+  expiryTextRed: { fontSize: 11, fontWeight: '600', color: palette.critical },
   expiryBadgeOrange: {
     flexDirection: 'row', alignItems: 'center', gap: 4,
-    backgroundColor: '#FEF4E4', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4,
+    backgroundColor: palette.cautionSoft, borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4,
     alignSelf: 'flex-start',
   },
-  expiryTextOrange: { fontSize: 11, fontWeight: '600', color: '#EF9F27' },
+  expiryTextOrange: { fontSize: 11, fontWeight: '600', color: palette.caution },
 });

@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Politique de confidentialité — Orny</title>
+<style>
+  :root {
+    --ink: #1C1B17;
+    --paper: #F6F4EF;
+    --card: #FFFFFF;
+    --line: #E4E1D8;
+    --muted: #706B5F;
+    --moss: #1D9E75;
+    --mossSoft: #E3F3ED;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.65;
+  }
+  .wrap {
+    max-width: 700px;
+    margin: 0 auto;
+    padding: 56px 24px 96px;
+  }
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--moss);
+    background: var(--mossSoft);
+    padding: 5px 12px;
+    border-radius: 100px;
+    margin-bottom: 20px;
+  }
+  h1 {
+    font-size: 30px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    margin: 0 0 8px;
+  }
+  .updated {
+    color: var(--muted);
+    font-size: 14px;
+    margin: 0 0 40px;
+  }
+  h2 {
+    font-size: 19px;
+    font-weight: 700;
+    margin: 40px 0 12px;
+  }
+  p, li { font-size: 15.5px; color: var(--ink); }
+  p { margin: 0 0 14px; }
+  ul { margin: 0 0 14px; padding-left: 22px; }
+  li { margin-bottom: 6px; }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 20px 22px;
+    margin: 20px 0;
+  }
+  .contact {
+    background: var(--mossSoft);
+    border-radius: 14px;
+    padding: 20px 22px;
+    margin-top: 12px;
+  }
+  .contact a { color: var(--moss); font-weight: 700; text-decoration: none; }
+  .contact a:hover { text-decoration: underline; }
+  .placeholder {
+    background: #FDF0E4;
+    color: #A6661C;
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-weight: 700;
+  }
+  footer {
+    margin-top: 56px;
+    padding-top: 20px;
+    border-top: 1px solid var(--line);
+    font-size: 13px;
+    color: var(--muted);
+  }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <span class="badge">Orny · SOL Chips</span>
+    <h1>Politique de confidentialité</h1>
+    <p class="updated">Dernière mise à jour : 4 septembre 2026</p>
+
+    <p>Orny est une application de gestion d'usine développée par Kolilink. Cette page explique quelles données Orny collecte, pourquoi, et comment elles sont protégées.</p>
+
+    <h2>1. Données collectées</h2>
+    <p><strong>Compte et connexion.</strong> Lorsque vous créez un compte, nous recevons votre adresse email et, si vous vous connectez via Google ou Apple, votre nom et votre photo de profil tels que fournis par ces services.</p>
+    <p><strong>Données de votre usine.</strong> Tout ce que vous enregistrez dans l'application — ventes, achats, dépenses, lots de production, niveaux de stock, fournisseurs, clients (y compris leur nom, numéro de téléphone et, si vous le renseignez, leur localisation) et informations relatives aux investisseurs — est stocké pour le compte de votre usine.</p>
+    <p><strong>Documents et photos.</strong> Si vous ajoutez une photo de document (contrat, facture, licence) ou une photo de profil, cette image est stockée de façon sécurisée et n'est visible que par les membres autorisés de votre usine.</p>
+    <p><strong>Orny AI.</strong> Lorsque vous posez une question à l'assistant Orny AI, votre message ainsi qu'un résumé des données récentes de votre usine (nécessaires pour vous répondre avec des chiffres réels) sont transmis à nos prestataires d'intelligence artificielle. Les noms des membres de l'équipe sont anonymisés avant cet envoi.</p>
+    <p><strong>Notifications.</strong> Nous conservons un identifiant technique de votre appareil (jeton de notification) afin de vous envoyer des alertes — stock bas, commande en retard, etc.</p>
+    <p>Orny ne collecte aucune donnée de paiement : l'application ne propose actuellement aucun achat intégré.</p>
+
+    <h2>2. Pourquoi nous utilisons ces données</h2>
+    <ul>
+      <li>Faire fonctionner les fonctionnalités de base de l'application (ventes, stock, rapports, etc.)</li>
+      <li>Vous permettre de vous connecter et de retrouver vos données sur un autre appareil</li>
+      <li>Vous envoyer des notifications utiles à la gestion de votre usine</li>
+      <li>Générer les réponses d'Orny AI à partir de vos données réelles</li>
+      <li>Diagnostiquer et corriger les problèmes techniques</li>
+    </ul>
+
+    <h2>3. Avec qui ces données sont partagées</h2>
+    <p>Orny s'appuie sur un petit nombre de prestataires techniques, qui traitent les données uniquement pour le compte d'Orny et n'ont pas le droit de les utiliser à d'autres fins :</p>
+    <ul>
+      <li><strong>Supabase</strong> — hébergement de la base de données, authentification et stockage des fichiers</li>
+      <li><strong>Groq et OpenAI</strong> — traitement des messages envoyés à Orny AI</li>
+      <li><strong>Google et Apple</strong> — uniquement si vous choisissez de vous connecter via ces services</li>
+      <li><strong>Expo</strong> — service technique d'envoi des notifications push</li>
+    </ul>
+    <p>Nous ne vendons aucune donnée personnelle. Les données de votre usine ne sont jamais partagées avec une autre usine utilisant Orny.</p>
+
+    <h2>4. Vos droits</h2>
+    <p>Vous pouvez à tout moment consulter ou corriger vos données depuis l'application. Vous pouvez également supprimer votre compte directement depuis l'application (Menu → Compte → Supprimer mon compte) — cette action est définitive et supprime immédiatement votre compte ainsi que les données de votre usine si vous en êtes l'unique membre. Vous pouvez aussi nous contacter directement pour toute demande — voir le contact ci-dessous.</p>
+
+    <h2>5. Sécurité et conservation</h2>
+    <p>Les données sont chiffrées en transit et l'accès à chaque usine est strictement limité à ses membres. Vos données sont conservées tant que votre compte ou celui de votre usine reste actif, et supprimées sur demande conformément à la section précédente.</p>
+
+    <h2>6. Âge minimum</h2>
+    <p>Orny est destiné aux propriétaires et employés d'entreprises et n'est pas conçu pour être utilisé par des enfants. Nous ne collectons pas sciemment de données concernant des personnes de moins de 16 ans.</p>
+
+    <h2>7. Modifications de cette politique</h2>
+    <p>Cette politique peut évoluer avec l'application. La date de mise à jour en haut de cette page reflète toujours la version la plus récente.</p>
+
+    <h2>Nous contacter</h2>
+    <div class="contact">
+      <p style="margin-bottom:6px;">Pour toute question concernant vos données ou cette politique :</p>
+      <p style="margin-bottom:0;"><a href="https://wa.me/12672421843" style="color:#1D9E75;font-weight:700;text-decoration:none;">+1 267 242 1843 (WhatsApp)</a></p>
+    </div>
+
+    <footer>Orny — une application Kolilink.</footer>
+  </div>
+</body>
+</html>

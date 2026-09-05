@@ -1,6 +1,8 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
+import { Platform } from 'react-native';
 import { Session, User } from '@supabase/supabase-js';
 import * as WebBrowser from 'expo-web-browser';
+import * as AppleAuthentication from 'expo-apple-authentication';
 import { makeRedirectUri } from 'expo-auth-session';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from '../lib/supabase';
@@ -8,7 +10,11 @@ import { setCurrentFactory, clearCurrentFactory } from '../store/context';
 
 WebBrowser.maybeCompleteAuthSession();
 
-export type UserRole = 'admin' | 'employee' | 'investor';
+// 'inspecteur' is a read-only role for an outside auditor (police, tax,
+// health inspector, ...) — DB-enforced read-only via RLS (see
+// db/update15.sql), never added to any write policy. It is not a UI
+// convenience, it's the actual security boundary.
+export type UserRole = 'admin' | 'employee' | 'investor' | 'vendeur' | 'inspecteur';
 
 export interface FactoryMembership {
   factoryId: string;
@@ -49,6 +55,7 @@ interface AuthContextValue {
   signUp: (email: string, password: string) => Promise<{ error: string | null }>;
   signIn: (email: string, password: string) => Promise<{ error: string | null }>;
   signInWithGoogle: () => Promise<{ error: string | null }>;
+  signInWithApple: () => Promise<{ error: string | null }>;
   signOut: () => Promise<void>;
   createFactory: (name: string) => Promise<{ error: string | null }>;
   regenerateInviteCode: () => Promise<{ error: string | null }>;
@@ -314,6 +321,29 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return { error: null };
   }
 
+  async function signInWithApple() {
+    if (Platform.OS !== 'ios') return { error: 'Disponible uniquement sur iOS.' };
+    try {
+      const credential = await AppleAuthentication.signInAsync({
+        requestedScopes: [
+          AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
+          AppleAuthentication.AppleAuthenticationScope.EMAIL,
+        ],
+      });
+      if (!credential.identityToken) return { error: 'Connexion Apple échouée.' };
+      const { error } = await supabase.auth.signInWithIdToken({
+        provider: 'apple',
+        token: credential.identityToken,
+      });
+      if (error) return { error: error.message };
+      return { error: null };
+    } catch (e: any) {
+      // User dismissed the native Apple sheet — not a real error.
+      if (e?.code === 'ERR_REQUEST_CANCELED') return { error: null };
+      return { error: e?.message ?? 'Connexion Apple échouée.' };
+    }
+  }
+
   async function signOut() {
     const currentUserId = user?.id;
     clearCurrentFactory();
@@ -501,7 +531,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     <AuthContext.Provider value={{
       session, user, membership, allMemberships, pendingRequest, loading, membershipLoading,
       switchFactory,
-      signUp, signIn, signInWithGoogle, signOut,
+      signUp, signIn, signInWithGoogle, signInWithApple, signOut,
       createFactory, regenerateInviteCode, getInviteCode, requestToJoin, cancelJoinRequest, refreshMembership,
       getMembers, updateMemberRole, removeMember,
       getPendingRequests, approveJoinRequest, rejectJoinRequest,

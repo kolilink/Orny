@@ -1,5 +1,6 @@
 -- ============================================================
 -- SOL Chips / Corning — Supabase Schema
+-- Idempotent: safe to re-run if tables/policies already exist
 -- Run this entire file in the Supabase SQL Editor
 -- ============================================================
 
@@ -12,7 +13,7 @@ as $$
 $$;
 
 -- ─── FACTORIES ───────────────────────────────────────────────
-create table factories (
+create table if not exists factories (
   id            uuid primary key default gen_random_uuid(),
   name          text not null,
   currency      text not null default 'GNF',
@@ -23,7 +24,7 @@ create table factories (
 );
 
 -- ─── FACTORY MEMBERS (users ↔ factories) ─────────────────────
-create table factory_members (
+create table if not exists factory_members (
   id          uuid primary key default gen_random_uuid(),
   factory_id  uuid not null references factories(id) on delete cascade,
   user_id     uuid not null references auth.users(id) on delete cascade,
@@ -34,7 +35,7 @@ create table factory_members (
 );
 
 -- ─── SALES ───────────────────────────────────────────────────
-create table sales (
+create table if not exists sales (
   id             uuid primary key default gen_random_uuid(),
   factory_id     uuid not null references factories(id) on delete cascade,
   date           text not null,
@@ -51,7 +52,7 @@ create table sales (
 );
 
 -- ─── PRODUCTION BATCHES ──────────────────────────────────────
-create table production_batches (
+create table if not exists production_batches (
   id                uuid primary key default gen_random_uuid(),
   factory_id        uuid not null references factories(id) on delete cascade,
   date              text not null,
@@ -66,7 +67,7 @@ create table production_batches (
 );
 
 -- ─── STOCK ITEMS ─────────────────────────────────────────────
-create table stock_items (
+create table if not exists stock_items (
   id              text not null,
   factory_id      uuid not null references factories(id) on delete cascade,
   name            text not null,
@@ -78,7 +79,7 @@ create table stock_items (
 );
 
 -- ─── CLIENTS ─────────────────────────────────────────────────
-create table clients (
+create table if not exists clients (
   id          uuid primary key default gen_random_uuid(),
   factory_id  uuid not null references factories(id) on delete cascade,
   name        text not null,
@@ -91,7 +92,7 @@ create table clients (
 );
 
 -- ─── INVESTORS ───────────────────────────────────────────────
-create table investors (
+create table if not exists investors (
   id               uuid primary key default gen_random_uuid(),
   factory_id       uuid not null references factories(id) on delete cascade,
   name             text not null,
@@ -103,7 +104,7 @@ create table investors (
 );
 
 -- ─── INVESTMENT ENTRIES ───────────────────────────────────────
-create table investment_entries (
+create table if not exists investment_entries (
   id          uuid primary key default gen_random_uuid(),
   factory_id  uuid not null references factories(id) on delete cascade,
   investor_id uuid not null references investors(id) on delete cascade,
@@ -114,7 +115,7 @@ create table investment_entries (
 );
 
 -- ─── PRODUCT FLAVORS ─────────────────────────────────────────
-create table product_flavors (
+create table if not exists product_flavors (
   id            uuid primary key default gen_random_uuid(),
   factory_id    uuid not null references factories(id) on delete cascade,
   label         text not null,
@@ -124,7 +125,7 @@ create table product_flavors (
 );
 
 -- ─── BULK PRODUCTS ───────────────────────────────────────────
-create table bulk_products (
+create table if not exists bulk_products (
   id          uuid primary key default gen_random_uuid(),
   factory_id  uuid not null references factories(id) on delete cascade,
   name        text not null,
@@ -135,7 +136,7 @@ create table bulk_products (
 );
 
 -- ─── BUSINESS DOCUMENTS ──────────────────────────────────────
-create table business_documents (
+create table if not exists business_documents (
   id              uuid primary key default gen_random_uuid(),
   factory_id      uuid not null references factories(id) on delete cascade,
   title           text not null,
@@ -153,20 +154,19 @@ create table business_documents (
 -- ROW LEVEL SECURITY
 -- ============================================================
 
-alter table factories         enable row level security;
-alter table factory_members   enable row level security;
-alter table sales             enable row level security;
+alter table factories          enable row level security;
+alter table factory_members    enable row level security;
+alter table sales              enable row level security;
 alter table production_batches enable row level security;
-alter table stock_items       enable row level security;
-alter table clients           enable row level security;
-alter table investors         enable row level security;
+alter table stock_items        enable row level security;
+alter table clients            enable row level security;
+alter table investors          enable row level security;
 alter table investment_entries enable row level security;
-alter table product_flavors   enable row level security;
-alter table bulk_products     enable row level security;
+alter table product_flavors    enable row level security;
+alter table bulk_products      enable row level security;
 alter table business_documents enable row level security;
 
--- ─── HELPER VIEW: which factories does the current user belong to? ───
--- Used inside policies to avoid N+1 subqueries
+-- ─── HELPER FUNCTIONS ────────────────────────────────────────
 create or replace function my_factory_ids()
 returns setof uuid language sql security definer
 set search_path = public
@@ -184,15 +184,17 @@ as $$
 $$;
 
 -- ─── FACTORIES policies ──────────────────────────────────────
+drop policy if exists "members can read their factory" on factories;
 create policy "members can read their factory"
   on factories for select
   using (id in (select my_factory_ids()));
 
+drop policy if exists "admins can update their factory" on factories;
 create policy "admins can update their factory"
   on factories for update
   using (my_role_in(id) = 'admin');
 
--- anyone authenticated can create a factory (they become admin via trigger below)
+drop policy if exists "authenticated users can create a factory" on factories;
 create policy "authenticated users can create a factory"
   on factories for insert
   with check (auth.uid() is not null);
@@ -209,80 +211,120 @@ begin
 end;
 $$;
 
+drop trigger if exists on_factory_created on factories;
 create trigger on_factory_created
   after insert on factories
   for each row execute procedure handle_factory_created();
 
 -- ─── FACTORY MEMBERS policies ────────────────────────────────
+drop policy if exists "members can read their factory's members" on factory_members;
 create policy "members can read their factory's members"
   on factory_members for select
   using (factory_id in (select my_factory_ids()));
 
+drop policy if exists "admins can add members to their factory" on factory_members;
 create policy "admins can add members to their factory"
   on factory_members for insert
   with check (my_role_in(factory_id) = 'admin');
 
+drop policy if exists "admins can update member roles" on factory_members;
 create policy "admins can update member roles"
   on factory_members for update
   using (my_role_in(factory_id) = 'admin');
 
+drop policy if exists "admins can remove members" on factory_members;
 create policy "admins can remove members"
   on factory_members for delete
   using (my_role_in(factory_id) = 'admin');
 
--- ─── DATA TABLE POLICIES (sales, production, stock, etc.) ────
--- Pattern: members can read; admins+employees can write; investors read-only
+-- ─── DATA TABLE POLICIES ─────────────────────────────────────
 
 -- SALES
+drop policy if exists "members read sales" on sales;
 create policy "members read sales"      on sales for select using (factory_id in (select my_factory_ids()));
+drop policy if exists "staff insert sales" on sales;
 create policy "staff insert sales"      on sales for insert with check (factory_id in (select my_factory_ids()) and my_role_in(factory_id) in ('admin','employee'));
+drop policy if exists "staff update sales" on sales;
 create policy "staff update sales"      on sales for update using (factory_id in (select my_factory_ids()) and my_role_in(factory_id) in ('admin','employee'));
+drop policy if exists "admin delete sales" on sales;
 create policy "admin delete sales"      on sales for delete using (my_role_in(factory_id) = 'admin');
 
 -- PRODUCTION BATCHES
+drop policy if exists "members read production" on production_batches;
 create policy "members read production"  on production_batches for select using (factory_id in (select my_factory_ids()));
+drop policy if exists "staff insert production" on production_batches;
 create policy "staff insert production"  on production_batches for insert with check (factory_id in (select my_factory_ids()) and my_role_in(factory_id) in ('admin','employee'));
+drop policy if exists "staff update production" on production_batches;
 create policy "staff update production"  on production_batches for update using (factory_id in (select my_factory_ids()) and my_role_in(factory_id) in ('admin','employee'));
+drop policy if exists "admin delete production" on production_batches;
 create policy "admin delete production"  on production_batches for delete using (my_role_in(factory_id) = 'admin');
 
 -- STOCK ITEMS
+drop policy if exists "members read stock" on stock_items;
 create policy "members read stock"       on stock_items for select using (factory_id in (select my_factory_ids()));
+drop policy if exists "staff insert stock" on stock_items;
 create policy "staff insert stock"       on stock_items for insert with check (factory_id in (select my_factory_ids()) and my_role_in(factory_id) in ('admin','employee'));
+drop policy if exists "staff update stock" on stock_items;
 create policy "staff update stock"       on stock_items for update using (factory_id in (select my_factory_ids()) and my_role_in(factory_id) in ('admin','employee'));
+drop policy if exists "admin delete stock" on stock_items;
 create policy "admin delete stock"       on stock_items for delete using (my_role_in(factory_id) = 'admin');
 
 -- CLIENTS
+drop policy if exists "members read clients" on clients;
 create policy "members read clients"     on clients for select using (factory_id in (select my_factory_ids()));
+drop policy if exists "staff insert clients" on clients;
 create policy "staff insert clients"     on clients for insert with check (factory_id in (select my_factory_ids()) and my_role_in(factory_id) in ('admin','employee'));
+drop policy if exists "staff update clients" on clients;
 create policy "staff update clients"     on clients for update using (factory_id in (select my_factory_ids()) and my_role_in(factory_id) in ('admin','employee'));
+drop policy if exists "admin delete clients" on clients;
 create policy "admin delete clients"     on clients for delete using (my_role_in(factory_id) = 'admin');
 
 -- INVESTORS
+drop policy if exists "members read investors" on investors;
 create policy "members read investors"   on investors for select using (factory_id in (select my_factory_ids()));
+drop policy if exists "admin write investors" on investors;
 create policy "admin write investors"    on investors for insert with check (my_role_in(factory_id) = 'admin');
+drop policy if exists "admin update investors" on investors;
 create policy "admin update investors"   on investors for update using (my_role_in(factory_id) = 'admin');
+drop policy if exists "admin delete investors" on investors;
 create policy "admin delete investors"   on investors for delete using (my_role_in(factory_id) = 'admin');
 
 -- INVESTMENT ENTRIES
+drop policy if exists "members read entries" on investment_entries;
 create policy "members read entries"    on investment_entries for select using (factory_id in (select my_factory_ids()));
+drop policy if exists "admin write entries" on investment_entries;
 create policy "admin write entries"     on investment_entries for insert with check (my_role_in(factory_id) = 'admin');
+drop policy if exists "admin update entries" on investment_entries;
 create policy "admin update entries"    on investment_entries for update using (my_role_in(factory_id) = 'admin');
+drop policy if exists "admin delete entries" on investment_entries;
 create policy "admin delete entries"    on investment_entries for delete using (my_role_in(factory_id) = 'admin');
 
 -- PRODUCT FLAVORS
+drop policy if exists "members read flavors" on product_flavors;
 create policy "members read flavors"    on product_flavors for select using (factory_id in (select my_factory_ids()));
+drop policy if exists "admin write flavors" on product_flavors;
 create policy "admin write flavors"     on product_flavors for insert with check (my_role_in(factory_id) = 'admin');
+drop policy if exists "admin update flavors" on product_flavors;
 create policy "admin update flavors"    on product_flavors for update using (my_role_in(factory_id) = 'admin');
+drop policy if exists "admin delete flavors" on product_flavors;
 create policy "admin delete flavors"    on product_flavors for delete using (my_role_in(factory_id) = 'admin');
 
 -- BULK PRODUCTS
+drop policy if exists "members read bulks" on bulk_products;
 create policy "members read bulks"      on bulk_products for select using (factory_id in (select my_factory_ids()));
+drop policy if exists "admin write bulks" on bulk_products;
 create policy "admin write bulks"       on bulk_products for insert with check (my_role_in(factory_id) = 'admin');
+drop policy if exists "admin update bulks" on bulk_products;
 create policy "admin update bulks"      on bulk_products for update using (my_role_in(factory_id) = 'admin');
+drop policy if exists "admin delete bulks" on bulk_products;
 create policy "admin delete bulks"      on bulk_products for delete using (my_role_in(factory_id) = 'admin');
 
 -- BUSINESS DOCUMENTS
+drop policy if exists "members read docs" on business_documents;
 create policy "members read docs"       on business_documents for select using (factory_id in (select my_factory_ids()));
+drop policy if exists "staff insert docs" on business_documents;
 create policy "staff insert docs"       on business_documents for insert with check (factory_id in (select my_factory_ids()) and my_role_in(factory_id) in ('admin','employee'));
+drop policy if exists "staff update docs" on business_documents;
 create policy "staff update docs"       on business_documents for update using (factory_id in (select my_factory_ids()) and my_role_in(factory_id) in ('admin','employee'));
+drop policy if exists "admin delete docs" on business_documents;
 create policy "admin delete docs"       on business_documents for delete using (my_role_in(factory_id) = 'admin');

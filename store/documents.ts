@@ -1,11 +1,22 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system/legacy';
+import { decode } from 'base64-arraybuffer';
 import { BusinessDocument } from '../types';
 import { getFactoryId, generateId } from './context';
 import { supabase } from '../lib/supabase';
 
 function cacheKey() { return `${getFactoryId()}_documents`; }
 const DOCS_DIR = (FileSystem.documentDirectory ?? '') + 'sol_docs/';
+const BUCKET = 'business-documents';
+
+// Signed URLs (bucket is private) so the file is viewable from any device,
+// not just the one that originally uploaded it. Short-lived by design —
+// callers should fetch a fresh one right before displaying/opening a file.
+export const getSignedDocumentUrl = async (storagePath: string): Promise<string | null> => {
+  const { data, error } = await supabase.storage.from(BUCKET).createSignedUrl(storagePath, 3600);
+  if (error || !data) return null;
+  return data.signedUrl;
+};
 
 export const getDocuments = async (): Promise<BusinessDocument[]> => {
   const data = await AsyncStorage.getItem(cacheKey());
@@ -33,6 +44,7 @@ export const syncDocumentsFromSupabase = async (): Promise<void> => {
     title: r.title,
     category: r.category,
     fileUri: existingById[r.id]?.fileUri ?? r.file_uri,
+    storagePath: r.storage_path ?? undefined,
     fileType: r.file_type,
     notes: r.notes,
     dateAdded: r.date_added,
@@ -43,25 +55,42 @@ export const syncDocumentsFromSupabase = async (): Promise<void> => {
 };
 
 export const addDocument = async (
-  doc: Omit<BusinessDocument, 'id' | 'factory_id' | 'dateAdded' | 'fileUri'>,
+  doc: Omit<BusinessDocument, 'id' | 'factory_id' | 'dateAdded' | 'fileUri' | 'storagePath'>,
   sourceUri: string
 ): Promise<BusinessDocument> => {
   const factoryId = getFactoryId();
   const id = generateId();
   let finalUri = sourceUri;
+  let storagePath: string | undefined;
 
   if (!sourceUri.startsWith('placeholder:')) {
+    const ext = doc.fileType === 'pdf' ? 'pdf' : 'jpg';
+
+    // Local copy — instant preview on this device without a network round trip.
     try {
       const dirInfo = await FileSystem.getInfoAsync(DOCS_DIR);
       if (!dirInfo.exists) {
         await FileSystem.makeDirectoryAsync(DOCS_DIR, { intermediates: true });
       }
-      const ext = doc.fileType === 'pdf' ? 'pdf' : 'jpg';
       const destUri = DOCS_DIR + id + '.' + ext;
       await FileSystem.copyAsync({ from: sourceUri, to: destUri });
       finalUri = destUri;
     } catch {
       finalUri = sourceUri;
+    }
+
+    // Real upload — this is what makes the file recoverable if this device
+    // is lost/reinstalled, and visible to every other member of the factory.
+    try {
+      const base64 = await FileSystem.readAsStringAsync(sourceUri, { encoding: 'base64' });
+      const path = `${factoryId}/${id}.${ext}`;
+      const { error } = await supabase.storage.from(BUCKET).upload(path, decode(base64), {
+        contentType: doc.fileType === 'pdf' ? 'application/pdf' : 'image/jpeg',
+      });
+      if (error) throw error;
+      storagePath = path;
+    } catch (e) {
+      console.warn('document storage upload error', e);
     }
   }
 
@@ -70,19 +99,20 @@ export const addDocument = async (
     id,
     factory_id: factoryId,
     fileUri: finalUri,
+    storagePath,
     dateAdded: new Date().toISOString(),
   };
 
   const docs = await getDocuments();
   await setCache([newDoc, ...docs]);
 
-  // Sync metadata only (files stay on device)
   supabase.from('business_documents').insert({
     id: newDoc.id,
     factory_id: factoryId,
     title: newDoc.title,
     category: newDoc.category,
     file_uri: newDoc.fileUri,
+    storage_path: newDoc.storagePath ?? null,
     file_type: newDoc.fileType,
     notes: newDoc.notes,
     date_added: newDoc.dateAdded,

@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Supplier } from '../types';
 import { getFactoryId, generateId } from './context';
 import { supabase } from '../lib/supabase';
+import { enqueueIfNetworkError } from '../lib/syncQueue';
 
 function cacheKey() { return `${getFactoryId()}_suppliers`; }
 
@@ -38,14 +39,17 @@ export const addSupplier = async (supplier: Omit<Supplier, 'id' | 'factory_id'>)
   const item: Supplier = { ...supplier, id: generateId(), factory_id: factoryId };
   const all = await getSuppliers();
   await setCache([...all, item]);
-  supabase.from('suppliers').insert({
+  const row = {
     id: item.id,
     factory_id: factoryId,
     name: item.name,
     phone: item.phone ?? null,
     product: item.product,
     notes: item.notes ?? null,
-  }).then(({ error }) => { if (error) console.warn('suppliers insert sync error', error.message); });
+  };
+  supabase.from('suppliers').insert(row).then(({ error }) => {
+    if (error) enqueueIfNetworkError(error, { table: 'suppliers', op: 'insert', values: row, label: 'fournisseur' });
+  });
   return item;
 };
 
@@ -57,13 +61,18 @@ export const updateSupplier = async (id: string, updates: Partial<Omit<Supplier,
   if (updates.phone !== undefined) row.phone = updates.phone ?? null;
   if (updates.product !== undefined) row.product = updates.product;
   if (updates.notes !== undefined) row.notes = updates.notes ?? null;
-  supabase.from('suppliers').update(row).eq('id', id).eq('factory_id', getFactoryId())
-    .then(({ error }) => { if (error) console.warn('suppliers update sync error', error.message); });
+  const factoryId = getFactoryId();
+  supabase.from('suppliers').update(row).eq('id', id).eq('factory_id', factoryId)
+    .then(({ error }) => {
+      if (error) enqueueIfNetworkError(error, { table: 'suppliers', op: 'update', values: row, match: { id, factory_id: factoryId }, label: 'fournisseur (modif.)' });
+    });
 };
 
 export const deleteSupplier = async (id: string): Promise<void> => {
   const factoryId = getFactoryId();
   const all = await getSuppliers();
   await setCache(all.filter((s) => s.id !== id));
-  supabase.from('suppliers').delete().eq('id', id).eq('factory_id', factoryId).then(({ error }) => { if (error) console.warn('suppliers delete sync error', error.message); });
+  supabase.from('suppliers').delete().eq('id', id).eq('factory_id', factoryId).then(({ error }) => {
+    if (error) enqueueIfNetworkError(error, { table: 'suppliers', op: 'delete', match: { id, factory_id: factoryId }, label: 'fournisseur (suppr.)' });
+  });
 };

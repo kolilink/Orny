@@ -1,11 +1,15 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, Linking, Alert, Platform,
 } from 'react-native';
 import { RouteProp, useRoute } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
+import * as FileSystem from 'expo-file-system/legacy';
 import { RootStackParamList, BusinessDocument } from '../../types';
+import { getSignedDocumentUrl } from '../../store/documents';
 import { formatDate } from '../../utils/format';
+import { Palette } from '../../theme/tokens';
+import { useTheme } from '../../theme/ThemeContext';
 
 type DetailRoute = RouteProp<RootStackParamList, 'DocumentDetail'>;
 
@@ -18,33 +22,55 @@ const CAT_LABELS: Record<BusinessDocument['category'], string> = {
   autre: 'Autre',
 };
 
-const CAT_COLORS: Record<BusinessDocument['category'], { bg: string; text: string }> = {
+const makeCatColors = (palette: Palette): Record<BusinessDocument['category'], { bg: string; text: string }> => ({
   contrat: { bg: '#EBF3FE', text: '#2D6BCE' },
-  facture: { bg: '#FEF4E4', text: '#B7770A' },
-  licence: { bg: '#E8F6F0', text: '#1D9E75' },
+  facture: { bg: palette.cautionSoft, text: '#B7770A' },
+  licence: { bg: palette.mossSoft, text: palette.mossDeep },
   import_export: { bg: '#E8F0FE', text: '#4A90D9' },
   investisseur: { bg: '#F3E8FE', text: '#8E44AD' },
-  autre: { bg: '#F0F0EE', text: '#6B6B66' },
-};
+  autre: { bg: palette.line, text: '#6B6B66' },
+});
 
-function expiryStyle(dateStr: string): object {
+function expiryStyle(dateStr: string, palette: Palette): object {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const expiry = new Date(dateStr);
   expiry.setHours(0, 0, 0, 0);
   const days = Math.ceil((expiry.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-  if (days < 0) return { color: '#E24B4A' };
-  if (days <= 3) return { color: '#EF9F27' };
+  if (days < 0) return { color: palette.critical };
+  if (days <= 3) return { color: palette.caution };
   return {};
 }
 
 export default function DocumentDetailScreen() {
+  const { palette } = useTheme();
+  const styles = makeStyles(palette);
+  const CAT_COLORS = makeCatColors(palette);
   const { params } = useRoute<DetailRoute>();
   const doc = params.document;
   const colors = CAT_COLORS[doc.category];
 
   const isPlaceholder = doc.fileUri.startsWith('placeholder:');
-  const placeholderColor = isPlaceholder ? doc.fileUri.replace('placeholder:', '') : '#E8E8E4';
+  const placeholderColor = isPlaceholder ? doc.fileUri.replace('placeholder:', '') : palette.line;
+
+  // The local fileUri only ever exists on the device that uploaded it. If
+  // it's missing here (a different device, or a reinstall), fall back to a
+  // freshly-signed Supabase Storage URL — everything below renders either
+  // kind of URI identically, so no other branching is needed.
+  const [displayUri, setDisplayUri] = useState(doc.fileUri);
+
+  useEffect(() => {
+    if (isPlaceholder || Platform.OS === 'web' || !doc.storagePath) return;
+    (async () => {
+      try {
+        const info = await FileSystem.getInfoAsync(doc.fileUri);
+        if (info.exists) return;
+      } catch { /* fall through to signed URL */ }
+      const signed = await getSignedDocumentUrl(doc.storagePath!);
+      if (signed) setDisplayUri(signed);
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleOpenFile = async () => {
     if (isPlaceholder) {
@@ -54,7 +80,7 @@ export default function DocumentDetailScreen() {
     try {
       if (Platform.OS === 'web') {
         // fileUri is a base64 data URL stored by the web file picker
-        const uri = doc.fileUri;
+        const uri = displayUri;
         if (uri.startsWith('data:')) {
           const [header, b64] = uri.split(',');
           const mime = header.split(':')[1].split(';')[0];
@@ -67,7 +93,7 @@ export default function DocumentDetailScreen() {
           (window as any).open(uri, '_blank');
         }
       } else {
-        await Linking.openURL(doc.fileUri);
+        await Linking.openURL(displayUri);
       }
     } catch {
       Alert.alert('Impossible d\'ouvrir', 'Le fichier n\'est plus disponible. Essayez de le ré-ajouter.');
@@ -88,10 +114,10 @@ export default function DocumentDetailScreen() {
           </Text>
         </View>
       ) : doc.fileType === 'image' ? (
-        <Image source={{ uri: doc.fileUri }} style={styles.image} resizeMode="cover" />
+        <Image source={{ uri: displayUri }} style={styles.image} resizeMode="cover" />
       ) : (
-        <View style={[styles.placeholder, { backgroundColor: '#F0F0EE' }]}>
-          <Ionicons name="document-text" size={48} color="#6B6B66" />
+        <View style={[styles.placeholder, { backgroundColor: palette.line }]}>
+          <Ionicons name="document-text" size={48} color={palette.muted} />
           <Text style={styles.pdfLabel}>Fichier PDF</Text>
         </View>
       )}
@@ -109,7 +135,7 @@ export default function DocumentDetailScreen() {
         </View>
 
         <TouchableOpacity style={styles.openBtn} onPress={handleOpenFile}>
-          <Ionicons name="open-outline" size={18} color="#FFFFFF" />
+          <Ionicons name="open-outline" size={18} color={palette.white} />
           <Text style={styles.openBtnText}>
             {doc.fileType === 'pdf' ? 'Ouvrir le PDF' : 'Ouvrir l\'image'}
           </Text>
@@ -148,7 +174,7 @@ export default function DocumentDetailScreen() {
           {!!doc.expirationDate && (
             <View style={styles.infoRow}>
               <Text style={styles.infoLabel}>Date d'expiration</Text>
-              <Text style={[styles.infoValue, expiryStyle(doc.expirationDate)]}>
+              <Text style={[styles.infoValue, expiryStyle(doc.expirationDate, palette)]}>
                 {formatDate(doc.expirationDate)}
               </Text>
             </View>
@@ -159,36 +185,36 @@ export default function DocumentDetailScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F8F8F6' },
+const makeStyles = (palette: Palette) => StyleSheet.create({
+  container: { flex: 1, backgroundColor: palette.paper },
   content: { paddingBottom: 40 },
   placeholder: {
     height: 200, alignItems: 'center', justifyContent: 'center', gap: 8,
   },
   placeholderLabel: { color: 'rgba(255,255,255,0.9)', fontSize: 14, fontWeight: '600' },
-  pdfLabel: { color: '#6B6B66', fontSize: 14, marginTop: 8 },
+  pdfLabel: { color: palette.muted, fontSize: 14, marginTop: 8 },
   image: { height: 240, width: '100%' },
   body: { padding: 20, gap: 16 },
-  title: { fontSize: 20, fontWeight: '700', color: '#1A1A18', lineHeight: 28 },
+  title: { fontSize: 20, fontWeight: '700', color: palette.ink, lineHeight: 28 },
   row: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   badge: { borderRadius: 20, paddingHorizontal: 10, paddingVertical: 5 },
   badgeText: { fontSize: 12, fontWeight: '600' },
-  date: { fontSize: 13, color: '#6B6B66' },
+  date: { fontSize: 13, color: palette.muted },
   openBtn: {
-    backgroundColor: '#1D9E75', borderRadius: 12, height: 50,
+    backgroundColor: palette.moss, borderRadius: 12, height: 50,
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
   },
-  openBtnText: { fontSize: 15, color: '#FFFFFF', fontWeight: '700' },
+  openBtnText: { fontSize: 15, color: palette.white, fontWeight: '700' },
   section: { gap: 8 },
-  sectionTitle: { fontSize: 13, fontWeight: '700', color: '#6B6B66', textTransform: 'uppercase', letterSpacing: 0.5 },
-  sectionText: { fontSize: 15, color: '#1A1A18', lineHeight: 22 },
+  sectionTitle: { fontSize: 13, fontWeight: '700', color: palette.muted, textTransform: 'uppercase', letterSpacing: 0.5 },
+  sectionText: { fontSize: 15, color: palette.ink, lineHeight: 22 },
   tagsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  tag: { backgroundColor: '#FFFFFF', borderRadius: 20, paddingHorizontal: 12, paddingVertical: 5, borderWidth: 1, borderColor: '#E8E8E4' },
-  tagText: { fontSize: 13, color: '#6B6B66' },
+  tag: { backgroundColor: palette.white, borderRadius: 20, paddingHorizontal: 12, paddingVertical: 5, borderWidth: 1, borderColor: palette.line },
+  tagText: { fontSize: 13, color: palette.muted },
   infoRow: {
     flexDirection: 'row', justifyContent: 'space-between',
-    paddingVertical: 10, borderBottomWidth: 1, borderColor: '#F0F0EE',
+    paddingVertical: 10, borderBottomWidth: 1, borderColor: palette.line,
   },
-  infoLabel: { fontSize: 14, color: '#6B6B66' },
-  infoValue: { fontSize: 14, fontWeight: '600', color: '#1A1A18' },
+  infoLabel: { fontSize: 14, color: palette.muted },
+  infoValue: { fontSize: 14, fontWeight: '600', color: palette.ink },
 });

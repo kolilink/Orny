@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Product } from '../types';
 import { getFactoryId, generateId } from './context';
 import { supabase } from '../lib/supabase';
+import { enqueueIfNetworkError } from '../lib/syncQueue';
 import { addStockItem } from './stock';
 
 function cacheKey() { return `${getFactoryId()}_products_v2`; }
@@ -26,9 +27,10 @@ export const addProduct = async (name: string, unit: string): Promise<Product> =
   // Create a stock item for this product's finished-goods tracking (id = product.id)
   await addStockItem({ id, name, unit, currentLevel: 0, alertThreshold: 0 });
 
-  supabase.from('production_products').insert({
-    id, factory_id: factoryId, name, unit, last_recipe: [], created_at: now,
-  }).then(({ error }) => { if (error) console.warn('product insert sync error', error.message); });
+  const row = { id, factory_id: factoryId, name, unit, last_recipe: [], created_at: now };
+  supabase.from('production_products').insert(row).then(({ error }) => {
+    if (error) enqueueIfNetworkError(error, { table: 'production_products', op: 'insert', values: row, label: 'produit' });
+  });
 
   return product;
 };
@@ -42,12 +44,15 @@ export const updateProduct = async (
   const updated = products.map((p) => (p.id === id ? { ...p, ...updates } : p));
   await setCache(updated);
 
-  supabase.from('production_products').update({
+  const row = {
     ...(updates.name !== undefined ? { name: updates.name } : {}),
     ...(updates.unit !== undefined ? { unit: updates.unit } : {}),
     ...(updates.lastRecipe !== undefined ? { last_recipe: updates.lastRecipe } : {}),
-  }).eq('id', id).eq('factory_id', factoryId)
-    .then(({ error }) => { if (error) console.warn('product update sync error', error.message); });
+  };
+  supabase.from('production_products').update(row).eq('id', id).eq('factory_id', factoryId)
+    .then(({ error }) => {
+      if (error) enqueueIfNetworkError(error, { table: 'production_products', op: 'update', values: row, match: { id, factory_id: factoryId }, label: 'produit (modif.)' });
+    });
 };
 
 export const deleteProduct = async (id: string): Promise<void> => {
@@ -55,7 +60,9 @@ export const deleteProduct = async (id: string): Promise<void> => {
   const products = await getProducts();
   await setCache(products.filter((p) => p.id !== id));
   supabase.from('production_products').delete().eq('id', id).eq('factory_id', factoryId)
-    .then(({ error }) => { if (error) console.warn('product delete sync error', error.message); });
+    .then(({ error }) => {
+      if (error) enqueueIfNetworkError(error, { table: 'production_products', op: 'delete', match: { id, factory_id: factoryId }, label: 'produit (suppr.)' });
+    });
 };
 
 export const syncProductsFromSupabase = async (): Promise<void> => {

@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { CustomerOrder } from '../types';
 import { getFactoryId, generateId } from './context';
 import { supabase } from '../lib/supabase';
+import { enqueueIfNetworkError } from '../lib/syncQueue';
 
 function cacheKey() { return `${getFactoryId()}_customer_orders`; }
 
@@ -50,7 +51,7 @@ export const addCustomerOrder = async (
   };
   const all = await getCustomerOrders();
   await setCache([item, ...all]);
-  supabase.from('customer_orders').insert({
+  const row = {
     id: item.id,
     factory_id: factoryId,
     client_name: item.clientName,
@@ -62,7 +63,10 @@ export const addCustomerOrder = async (
     status: item.status,
     notes: item.notes ?? null,
     created_at: item.createdAt,
-  }).then();
+  };
+  supabase.from('customer_orders').insert(row).then(({ error }) => {
+    if (error) enqueueIfNetworkError(error, { table: 'customer_orders', op: 'insert', values: row, label: 'commande client' });
+  });
   return item;
 };
 
@@ -74,12 +78,16 @@ export const updateCustomerOrderStatus = async (
   const all = await getCustomerOrders();
   const updated = all.map((o) => (o.id === id ? { ...o, status } : o));
   await setCache(updated);
-  supabase.from('customer_orders').update({ status }).eq('id', id).eq('factory_id', factoryId).then();
+  supabase.from('customer_orders').update({ status }).eq('id', id).eq('factory_id', factoryId).then(({ error }) => {
+    if (error) enqueueIfNetworkError(error, { table: 'customer_orders', op: 'update', values: { status }, match: { id, factory_id: factoryId }, label: 'commande client (modif.)' });
+  });
 };
 
 export const deleteCustomerOrder = async (id: string): Promise<void> => {
   const factoryId = getFactoryId();
   const all = await getCustomerOrders();
   await setCache(all.filter((o) => o.id !== id));
-  supabase.from('customer_orders').delete().eq('id', id).eq('factory_id', factoryId).then();
+  supabase.from('customer_orders').delete().eq('id', id).eq('factory_id', factoryId).then(({ error }) => {
+    if (error) enqueueIfNetworkError(error, { table: 'customer_orders', op: 'delete', match: { id, factory_id: factoryId }, label: 'commande client (suppr.)' });
+  });
 };

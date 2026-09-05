@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import {
   View,
   Text,
@@ -9,70 +9,97 @@ import {
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
-  Alert,
   ScrollView,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
-import * as SecureStore from 'expo-secure-store';
+import {
+  useAudioRecorder,
+  RecordingPresets,
+  requestRecordingPermissionsAsync,
+  setAudioModeAsync,
+} from 'expo-audio';
 import { useAuth } from '../../context/AuthContext';
+import { supabase } from '../../lib/supabase';
 import { getBusinessSnapshot, BusinessSnapshot } from '../../utils/businessData';
 import { buildSystemPrompt, buildBriefPrompt, buildDataContext } from '../../utils/coachPrompt';
-
-const API_KEY_STORAGE = 'anthropic_api_key';
-
-const C = {
-  primary: '#1D9E75',
-  primaryDark: '#167A5B',
-  bg: '#F8F8F6',
-  card: '#FFFFFF',
-  text: '#1A1A18',
-  muted: '#6B6B66',
-  border: '#E8E8E4',
-  red: '#E24B4A',
-  coachBg: '#E8F6F0',
-  userBg: '#1D9E75',
-};
+import { ConfirmDialog } from '../../components/ui';
+import { Palette, radius, spacing, typography } from '../../theme/tokens';
+import { useTheme } from '../../theme/ThemeContext';
+import { getProfile } from '../../store/profile';
+import { LanguageCode, resolveLocale, speak } from '../../utils/voice';
 
 interface Message {
   id: string;
-  role: 'coach' | 'user';
+  role: 'ai' | 'user';
   content: string;
   isLoading?: boolean;
 }
 
 type ApiMessage = { role: 'user' | 'assistant'; content: string };
 
-async function callClaude(
-  apiKey: string,
-  history: ApiMessage[],
-  systemPrompt: string
+// Calls the factory-chat edge function — the Groq key lives server-side only
+// (supabase/functions/factory-chat), so this is the one place the client
+// ever talks to "the model", and it's always mediated through our own backend.
+async function callFactoryChat(
+  factoryId: string,
+  systemPrompt: string,
+  history: ApiMessage[]
 ): Promise<string> {
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
+  const { data: { session } } = await supabase.auth.getSession();
+  const accessToken = session?.access_token;
+  if (!accessToken) throw new Error('Session expirée. Reconnectez-vous.');
+
+  const fnUrl = `${process.env.EXPO_PUBLIC_SUPABASE_URL}/functions/v1/factory-chat`;
+  const response = await fetch(fnUrl, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
+      Authorization: `Bearer ${accessToken}`,
     },
     body: JSON.stringify({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 1024,
-      system: systemPrompt,
+      factory_id: factoryId,
+      system_prompt: systemPrompt,
       messages: history,
     }),
   });
 
+  const body = await response.json().catch(() => ({} as any));
   if (!response.ok) {
-    const err = await response.json().catch(() => ({}));
-    throw new Error((err as any).error?.message ?? `Erreur API ${response.status}`);
+    throw new Error(body.error ?? `Erreur ${response.status}`);
   }
+  if (!body.reply) throw new Error('Réponse vide du serveur');
+  return body.reply as string;
+}
 
-  const data = await response.json();
-  const text = (data as any).content?.[0]?.text;
-  if (!text) throw new Error('Réponse vide du serveur');
-  return text as string;
+// Transcribes a recorded question via the factory-voice edge function (Groq
+// Whisper server-side, same "client never holds the key" posture as
+// callFactoryChat above). Uploads via FormData's { uri, name, type } shape —
+// not fetch(uri).blob(), which returns a 0-byte blob for file:// URIs in
+// Hermes (same gotcha documented for voice/image messages elsewhere).
+async function transcribeAudio(
+  factoryId: string,
+  fileUri: string
+): Promise<{ text: string; language: string | null }> {
+  const { data: { session } } = await supabase.auth.getSession();
+  const accessToken = session?.access_token;
+  if (!accessToken) throw new Error('Session expirée. Reconnectez-vous.');
+
+  const form = new FormData();
+  form.append('factory_id', factoryId);
+  form.append('audio', { uri: fileUri, name: 'question.m4a', type: 'audio/m4a' } as any);
+
+  const fnUrl = `${process.env.EXPO_PUBLIC_SUPABASE_URL}/functions/v1/factory-voice`;
+  const response = await fetch(fnUrl, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${accessToken}` },
+    body: form,
+  });
+
+  const body = await response.json().catch(() => ({} as any));
+  if (!response.ok) throw new Error(body.error ?? `Erreur ${response.status}`);
+  return { text: body.text ?? '', language: body.language ?? null };
 }
 
 const QUICK_PROMPTS = [
@@ -85,39 +112,54 @@ const QUICK_PROMPTS = [
 ];
 
 export default function CoachScreen() {
+  const { palette } = useTheme();
+  const styles = makeStyles(palette);
   const insets = useSafeAreaInsets();
-  const { membership } = useAuth();
+  const { membership, user } = useAuth();
+  const factoryId = membership?.factoryId;
   const factoryName = membership?.factoryName ?? 'Mon Usine';
-  const coachName = `${factoryName} Coach`;
-  const [apiKey, setApiKey] = useState<string | null>(null);
-  const [apiKeyInput, setApiKeyInput] = useState('');
-  const [showKey, setShowKey] = useState(false);
+
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [snap, setSnap] = useState<BusinessSnapshot | null>(null);
+  const [showRefreshConfirm, setShowRefreshConfirm] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
   const flatListRef = useRef<FlatList>(null);
   const apiHistory = useRef<ApiMessage[]>([]);
   const initialized = useRef(false);
-
-  useEffect(() => {
-    SecureStore.getItemAsync(API_KEY_STORAGE).then(key => {
-      if (key) setApiKey(key);
-    });
-  }, []);
+  const preferredLanguage = useRef<LanguageCode | null>(null);
+  const voiceAutoplay = useRef(false);
+  const lastDetectedLanguage = useRef<string | null>(null);
+  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
 
   useFocusEffect(
     useCallback(() => {
-      if (!apiKey || initialized.current) return;
+      if (!factoryId || initialized.current) return;
       initialized.current = true;
       generateBrief();
-    }, [apiKey])
+    }, [factoryId])
   );
 
+  useEffect(() => {
+    if (!user?.id) return;
+    getProfile(user.id).then(p => {
+      preferredLanguage.current = p.preferredLanguage;
+      voiceAutoplay.current = p.voiceAutoplay;
+    });
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (Platform.OS === 'web') return;
+    setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true }).catch(() => {});
+  }, []);
+
   async function generateBrief() {
+    if (!factoryId) return;
     setIsLoading(true);
     const loadingId = 'brief-loading';
-    setMessages([{ id: loadingId, role: 'coach', content: '', isLoading: true }]);
+    setMessages([{ id: loadingId, role: 'ai', content: '', isLoading: true }]);
     apiHistory.current = [];
 
     try {
@@ -128,16 +170,16 @@ export default function CoachScreen() {
       const systemPrompt = buildSystemPrompt(factoryName);
 
       apiHistory.current = [{ role: 'user', content: briefPrompt }];
-      const response = await callClaude(apiKey!, apiHistory.current, systemPrompt);
+      const response = await callFactoryChat(factoryId, systemPrompt, apiHistory.current);
       apiHistory.current.push({ role: 'assistant', content: response });
 
-      setMessages([{ id: loadingId, role: 'coach', content: response, isLoading: false }]);
+      setMessages([{ id: loadingId, role: 'ai', content: response, isLoading: false }]);
     } catch (err: any) {
       setMessages([
         {
           id: loadingId,
-          role: 'coach',
-          content: `❌ Impossible de contacter le coach.\n\nErreur : ${err.message ?? 'Inconnue'}\n\nVérifiez votre clé API et votre connexion internet.`,
+          role: 'ai',
+          content: `❌ Impossible de contacter Orny AI.\n\nErreur : ${err.message ?? 'Inconnue'}\n\nVérifiez votre connexion internet.`,
           isLoading: false,
         },
       ]);
@@ -146,9 +188,12 @@ export default function CoachScreen() {
     }
   }
 
-  async function sendMessage(text?: string) {
+  // Returns the assistant's reply text (or null on failure) so voice mode
+  // can speak it back immediately after a spoken question — typed-message
+  // callers simply ignore the return value.
+  async function sendMessage(text?: string): Promise<string | null> {
     const msgText = (text ?? input).trim();
-    if (!msgText || isLoading || !apiKey) return;
+    if (!msgText || isLoading || !factoryId) return null;
     setInput('');
 
     const userId = Date.now().toString();
@@ -157,14 +202,14 @@ export default function CoachScreen() {
     setMessages(prev => [
       ...prev,
       { id: userId, role: 'user', content: msgText },
-      { id: loadingId, role: 'coach', content: '', isLoading: true },
+      { id: loadingId, role: 'ai', content: '', isLoading: true },
     ]);
     setIsLoading(true);
 
     try {
       apiHistory.current.push({ role: 'user', content: msgText });
       const systemWithData = buildSystemPrompt(factoryName) + (snap ? '\n\n' + buildDataContext(snap) : '');
-      const response = await callClaude(apiKey!, apiHistory.current, systemWithData);
+      const response = await callFactoryChat(factoryId, systemWithData, apiHistory.current);
       apiHistory.current.push({ role: 'assistant', content: response });
 
       setMessages(prev =>
@@ -172,6 +217,7 @@ export default function CoachScreen() {
           m.id === loadingId ? { ...m, content: response, isLoading: false } : m
         )
       );
+      return response;
     } catch (err: any) {
       setMessages(prev =>
         prev.map(m =>
@@ -180,168 +226,115 @@ export default function CoachScreen() {
             : m
         )
       );
+      return null;
     } finally {
       setIsLoading(false);
     }
   }
 
-  function handleRefresh() {
-    Alert.alert('Rafraîchir le bilan ?', 'La conversation sera réinitialisée avec les données actuelles.', [
-      { text: 'Annuler', style: 'cancel' },
-      {
-        text: 'Rafraîchir',
-        onPress: () => {
-          initialized.current = false;
-          setMessages([]);
-          apiHistory.current = [];
-          setSnap(null);
-          initialized.current = true;
-          generateBrief();
-        },
-      },
-    ]);
+  function handleSpeak(text: string) {
+    speak(text, resolveLocale(lastDetectedLanguage.current, preferredLanguage.current));
   }
 
-  function handleResetKey() {
-    Alert.alert('Changer la clé API ?', 'La conversation sera effacée.', [
-      { text: 'Annuler', style: 'cancel' },
-      {
-        text: 'Confirmer',
-        style: 'destructive',
-        onPress: () => {
-          SecureStore.deleteItemAsync(API_KEY_STORAGE);
-          setApiKey(null);
-          setMessages([]);
-          setSnap(null);
-          apiHistory.current = [];
-          initialized.current = false;
-        },
-      },
-    ]);
+  async function startRecording() {
+    if (isRecording || isLoading || isTranscribing) return;
+    const { granted } = await requestRecordingPermissionsAsync();
+    if (!granted) return;
+    await recorder.prepareToRecordAsync();
+    recorder.record();
+    setIsRecording(true);
   }
 
-  function saveApiKey() {
-    const key = apiKeyInput.trim();
-    if (!key) return;
-    if (!key.startsWith('sk-ant-')) {
-      Alert.alert('Clé invalide', 'La clé Anthropic doit commencer par "sk-ant-".');
-      return;
+  async function stopRecordingAndSend() {
+    if (!isRecording || !factoryId) return;
+    setIsRecording(false);
+    await recorder.stop();
+    const uri = recorder.uri;
+    if (!uri) return;
+
+    setIsTranscribing(true);
+    try {
+      const { text, language } = await transcribeAudio(factoryId, uri);
+      lastDetectedLanguage.current = language;
+      if (!text) return;
+      const reply = await sendMessage(text);
+      // A spoken question always gets a spoken answer, regardless of the
+      // voiceAutoplay setting — that toggle is about auto-reading TYPED
+      // messages too; a voice question implies voice is already how this
+      // person wants to use the app.
+      if (reply) handleSpeak(reply);
+    } catch (err: any) {
+      setMessages(prev => [
+        ...prev,
+        { id: Date.now().toString(), role: 'ai', content: `❌ ${err.message ?? 'Transcription impossible.'}` },
+      ]);
+    } finally {
+      setIsTranscribing(false);
     }
-    SecureStore.setItemAsync(API_KEY_STORAGE, key);
-    setApiKey(key);
-    setApiKeyInput('');
+  }
+
+  async function handleTypedSend(text?: string) {
+    const reply = await sendMessage(text);
+    if (reply && voiceAutoplay.current) handleSpeak(reply);
+  }
+
+  function doRefresh() {
+    setShowRefreshConfirm(false);
+    initialized.current = false;
+    setMessages([]);
+    apiHistory.current = [];
+    setSnap(null);
+    initialized.current = true;
+    generateBrief();
   }
 
   const renderMessage = ({ item }: { item: Message }) => {
-    const isCoach = item.role === 'coach';
+    const isAi = item.role === 'ai';
     return (
-      <View style={[styles.msgRow, isCoach ? styles.msgRowCoach : styles.msgRowUser]}>
-        {isCoach && (
+      <View style={[styles.msgRow, isAi ? styles.msgRowAi : styles.msgRowUser]}>
+        {isAi && (
           <View style={styles.avatar}>
-            <Text style={styles.avatarEmoji}>🧠</Text>
+            <Ionicons name="sparkles" size={16} color={palette.moss} />
           </View>
         )}
-        <View
-          style={[
-            styles.bubble,
-            isCoach ? styles.bubbleCoach : styles.bubbleUser,
-            item.isLoading && styles.bubbleLoading,
-          ]}
-        >
+        <View style={[styles.bubble, isAi ? styles.bubbleAi : styles.bubbleUser, item.isLoading && styles.bubbleLoading]}>
           {item.isLoading ? (
             <View style={styles.loadingRow}>
-              <ActivityIndicator size="small" color={C.primary} />
-              <Text style={styles.loadingText}>{coachName} analyse...</Text>
+              <ActivityIndicator size="small" color={palette.moss} />
+              <Text style={styles.loadingText}>Orny AI réfléchit...</Text>
             </View>
           ) : (
-            <Text style={isCoach ? styles.textCoach : styles.textUser}>{item.content}</Text>
+            <>
+              <Text style={isAi ? styles.textAi : styles.textUser}>{item.content}</Text>
+              {isAi && (
+                <TouchableOpacity onPress={() => handleSpeak(item.content)} style={styles.speakBtn} hitSlop={8}>
+                  <Ionicons name="volume-medium-outline" size={16} color={palette.muted} />
+                </TouchableOpacity>
+              )}
+            </>
           )}
         </View>
       </View>
     );
   };
 
-  // ── API Key setup ──────────────────────────────────────────────
-  if (!apiKey) {
-    return (
-      <View style={[styles.container, { paddingTop: insets.top }]}>
-        <View style={styles.setupHeader}>
-          <View style={styles.setupIcon}>
-            <Text style={{ fontSize: 36 }}>🧠</Text>
-          </View>
-          <Text style={styles.setupTitle}>{coachName}</Text>
-          <Text style={styles.setupTagline}>Hormozi · Goldratt · Claude</Text>
-          <Text style={styles.setupDesc}>
-            Votre coach IA analyse les données de l'usine en temps réel et vous dit exactement quoi faire pour améliorer vos résultats.
-          </Text>
-        </View>
-
-        <View style={styles.setupCard}>
-          <Text style={styles.setupLabel}>Clé API Anthropic</Text>
-          <Text style={styles.setupHint}>
-            Entrez votre clé API (sk-ant-…). Elle est stockée uniquement sur cet appareil.
-          </Text>
-          <View style={styles.apiInputRow}>
-            <TextInput
-              style={styles.apiInput}
-              placeholder="sk-ant-api03-..."
-              placeholderTextColor={C.muted}
-              value={apiKeyInput}
-              onChangeText={setApiKeyInput}
-              secureTextEntry={!showKey}
-              autoCapitalize="none"
-              autoCorrect={false}
-            />
-            <TouchableOpacity onPress={() => setShowKey(v => !v)} style={styles.eyeBtn}>
-              <Ionicons name={showKey ? 'eye-off-outline' : 'eye-outline'} size={20} color={C.muted} />
-            </TouchableOpacity>
-          </View>
-          <View style={styles.disclosureBox}>
-            <Ionicons name="information-circle-outline" size={14} color={C.muted} style={{ marginTop: 1 }} />
-            <Text style={styles.disclosureText}>
-              En activant le coach, les données financières de votre usine (ventes, clients, production) sont transmises à l'API Anthropic pour analyse. Ces données quittent cet appareil.
-            </Text>
-          </View>
-          <TouchableOpacity
-            style={[styles.activateBtn, !apiKeyInput.trim() && { opacity: 0.45 }]}
-            onPress={saveApiKey}
-            disabled={!apiKeyInput.trim()}
-          >
-            <Ionicons name="flash" size={18} color="#FFF" style={{ marginRight: 6 }} />
-            <Text style={styles.activateBtnText}>Activer {coachName}</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-    );
-  }
-
-  // ── Main coach chat ────────────────────────────────────────────
   return (
     <KeyboardAvoidingView
       style={[styles.container, { paddingTop: insets.top }]}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
     >
-      {/* Header */}
       <View style={styles.header}>
         <View style={styles.headerLeft}>
-          <Text style={styles.headerTitle}>{coachName}</Text>
+          <Text style={styles.headerTitle}>Orny AI</Text>
           <Text style={styles.headerSub}>
-            {snap
-              ? `Données du ${new Date(snap.generatedAt).toLocaleDateString('fr-FR')}`
-              : 'Chargement...'}
+            {snap ? `Données du ${new Date(snap.generatedAt).toLocaleDateString('fr-FR')}` : 'Chargement...'}
           </Text>
         </View>
-        <View style={styles.headerActions}>
-          <TouchableOpacity onPress={handleRefresh} style={styles.headerBtn} disabled={isLoading}>
-            <Ionicons name="refresh" size={20} color={isLoading ? C.border : C.primary} />
-          </TouchableOpacity>
-          <TouchableOpacity onPress={handleResetKey} style={styles.headerBtn}>
-            <Ionicons name="key-outline" size={20} color={C.muted} />
-          </TouchableOpacity>
-        </View>
+        <TouchableOpacity onPress={() => setShowRefreshConfirm(true)} style={styles.headerBtn} disabled={isLoading}>
+          <Ionicons name="refresh" size={20} color={isLoading ? palette.line : palette.moss} />
+        </TouchableOpacity>
       </View>
 
-      {/* Messages */}
       <FlatList
         ref={flatListRef}
         data={messages}
@@ -352,13 +345,12 @@ export default function CoachScreen() {
         onLayout={() => flatListRef.current?.scrollToEnd({ animated: false })}
         ListEmptyComponent={
           <View style={styles.empty}>
-            <ActivityIndicator size="large" color={C.primary} />
+            <ActivityIndicator size="large" color={palette.moss} />
             <Text style={styles.emptyText}>Chargement du bilan quotidien...</Text>
           </View>
         }
       />
 
-      {/* Quick prompts */}
       {messages.length > 0 && !isLoading && (
         <ScrollView
           horizontal
@@ -367,142 +359,131 @@ export default function CoachScreen() {
           contentContainerStyle={styles.quickContent}
         >
           {QUICK_PROMPTS.map(prompt => (
-            <TouchableOpacity
-              key={prompt}
-              style={styles.chip}
-              onPress={() => sendMessage(prompt)}
-            >
+            <TouchableOpacity key={prompt} style={styles.chip} onPress={() => handleTypedSend(prompt)}>
               <Text style={styles.chipText}>{prompt}</Text>
             </TouchableOpacity>
           ))}
         </ScrollView>
       )}
 
-      {/* Input */}
       <View style={[styles.inputBar, { paddingBottom: insets.bottom + 8 }]}>
+        {Platform.OS !== 'web' && (
+          <TouchableOpacity
+            style={[styles.micBtn, isRecording && styles.micBtnActive]}
+            onPress={isRecording ? stopRecordingAndSend : startRecording}
+            disabled={isLoading || isTranscribing}
+          >
+            {isTranscribing ? (
+              <ActivityIndicator size="small" color={isRecording ? palette.white : palette.moss} />
+            ) : (
+              <Ionicons
+                name={isRecording ? 'stop' : 'mic-outline'}
+                size={20}
+                color={isRecording ? palette.white : palette.moss}
+              />
+            )}
+          </TouchableOpacity>
+        )}
         <TextInput
           style={styles.textInput}
-          placeholder="Posez votre question..."
-          placeholderTextColor={C.muted}
+          placeholder={isRecording ? "Parlez à Orny AI..." : "Posez votre question..."}
+          placeholderTextColor={palette.muted}
           value={input}
           onChangeText={setInput}
           multiline
           maxLength={500}
           returnKeyType="send"
           blurOnSubmit
-          onSubmitEditing={() => sendMessage()}
+          onSubmitEditing={() => handleTypedSend()}
+          editable={!isRecording}
         />
         <TouchableOpacity
           style={[styles.sendBtn, (!input.trim() || isLoading) && { opacity: 0.35 }]}
-          onPress={() => sendMessage()}
+          onPress={() => handleTypedSend()}
           disabled={!input.trim() || isLoading}
         >
-          <Ionicons name="send" size={18} color="#FFFFFF" />
+          <Ionicons name="send" size={18} color={palette.white} />
         </TouchableOpacity>
       </View>
+
+      <ConfirmDialog
+        visible={showRefreshConfirm}
+        onClose={() => setShowRefreshConfirm(false)}
+        onConfirm={doRefresh}
+        title="Rafraîchir le bilan ?"
+        message="La conversation sera réinitialisée avec les données actuelles."
+        confirmLabel="Rafraîchir"
+        cancelLabel="Annuler"
+        icon="refresh"
+      />
     </KeyboardAvoidingView>
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: C.bg },
+const makeStyles = (palette: Palette) => StyleSheet.create({
+  container: { flex: 1, backgroundColor: palette.paper },
 
-  // ── Setup ─────────────────────────────────────────────────────
-  setupHeader: { alignItems: 'center', paddingHorizontal: 24, paddingTop: 48, paddingBottom: 24 },
-  setupIcon: {
-    width: 80, height: 80, borderRadius: 24,
-    backgroundColor: C.coachBg, alignItems: 'center', justifyContent: 'center', marginBottom: 16,
-  },
-  setupTitle: { fontSize: 26, fontWeight: '800', color: C.text, marginBottom: 4 },
-  setupTagline: { fontSize: 13, color: C.primary, fontWeight: '600', marginBottom: 12, letterSpacing: 0.5 },
-  setupDesc: { fontSize: 14, color: C.muted, textAlign: 'center', lineHeight: 20 },
-  setupCard: {
-    margin: 16, backgroundColor: C.card, borderRadius: 20,
-    borderWidth: 1, borderColor: C.border, padding: 20,
-  },
-  setupLabel: { fontSize: 14, fontWeight: '700', color: C.text, marginBottom: 4 },
-  setupHint: { fontSize: 12, color: C.muted, marginBottom: 14, lineHeight: 18 },
-  apiInputRow: {
-    flexDirection: 'row', alignItems: 'center',
-    borderWidth: 1, borderColor: C.border, borderRadius: 12,
-    backgroundColor: C.bg, marginBottom: 16, paddingHorizontal: 14,
-  },
-  apiInput: { flex: 1, paddingVertical: 14, fontSize: 14, color: C.text },
-  eyeBtn: { padding: 4 },
-  disclosureBox: {
-    flexDirection: 'row', alignItems: 'flex-start', gap: 6,
-    backgroundColor: '#FFF8E8', borderRadius: 8, padding: 10, marginBottom: 14,
-    borderWidth: 1, borderColor: '#F0E0A0',
-  },
-  disclosureText: { flex: 1, fontSize: 11, color: C.muted, lineHeight: 16 },
-  activateBtn: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    backgroundColor: C.primary, borderRadius: 14, paddingVertical: 16,
-  },
-  activateBtnText: { fontSize: 16, fontWeight: '700', color: '#FFF' },
-
-  // ── Header ────────────────────────────────────────────────────
   header: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 16, paddingVertical: 12,
-    backgroundColor: C.card, borderBottomWidth: 1, borderColor: C.border,
+    paddingHorizontal: spacing.lg, paddingVertical: spacing.md,
+    backgroundColor: palette.card, borderBottomWidth: 1, borderColor: palette.line,
   },
   headerLeft: {},
-  headerTitle: { fontSize: 20, fontWeight: '800', color: C.text },
-  headerSub: { fontSize: 11, color: C.muted, marginTop: 1 },
-  headerActions: { flexDirection: 'row', gap: 4 },
-  headerBtn: { padding: 8, borderRadius: 10 },
+  headerTitle: { ...typography.screenTitle, color: palette.ink },
+  headerSub: { ...typography.caption, color: palette.muted, marginTop: 1 },
+  headerBtn: { padding: spacing.sm, borderRadius: radius.sm },
 
-  // ── Messages ──────────────────────────────────────────────────
-  messageList: { padding: 12, paddingBottom: 8 },
-  msgRow: { flexDirection: 'row', marginBottom: 12, alignItems: 'flex-end' },
-  msgRowCoach: { justifyContent: 'flex-start' },
+  messageList: { padding: spacing.md, paddingBottom: spacing.sm },
+  msgRow: { flexDirection: 'row', marginBottom: spacing.md, alignItems: 'flex-end' },
+  msgRowAi: { justifyContent: 'flex-start' },
   msgRowUser: { justifyContent: 'flex-end' },
   avatar: {
-    width: 32, height: 32, borderRadius: 10,
-    backgroundColor: C.coachBg, alignItems: 'center', justifyContent: 'center',
-    marginRight: 8, flexShrink: 0,
+    width: 32, height: 32, borderRadius: radius.sm,
+    backgroundColor: palette.mossSoft, alignItems: 'center', justifyContent: 'center',
+    marginRight: spacing.sm, flexShrink: 0,
   },
-  avatarEmoji: { fontSize: 16 },
-  bubble: { maxWidth: '80%', borderRadius: 18, paddingHorizontal: 14, paddingVertical: 10 },
-  bubbleCoach: { backgroundColor: C.card, borderWidth: 1, borderColor: C.border, borderBottomLeftRadius: 4 },
-  bubbleUser: { backgroundColor: C.userBg, borderBottomRightRadius: 4 },
-  bubbleLoading: { paddingVertical: 12 },
-  loadingRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  loadingText: { fontSize: 13, color: C.muted, fontStyle: 'italic' },
-  textCoach: { fontSize: 14, color: C.text, lineHeight: 21 },
-  textUser: { fontSize: 14, color: '#FFFFFF', lineHeight: 21 },
+  bubble: { maxWidth: '80%', borderRadius: radius.lg, paddingHorizontal: spacing.md, paddingVertical: spacing.sm },
+  bubbleAi: { backgroundColor: palette.card, borderWidth: 1, borderColor: palette.line, borderBottomLeftRadius: 4 },
+  bubbleUser: { backgroundColor: palette.moss, borderBottomRightRadius: 4 },
+  bubbleLoading: { paddingVertical: spacing.md },
+  loadingRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  loadingText: { fontSize: 13, color: palette.muted, fontStyle: 'italic' },
+  textAi: { fontSize: 14, color: palette.ink, lineHeight: 21 },
+  textUser: { fontSize: 14, color: palette.white, lineHeight: 21 },
+  speakBtn: { marginTop: spacing.xs, alignSelf: 'flex-start', padding: 2 },
 
-  // ── Empty ─────────────────────────────────────────────────────
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 60 },
-  emptyText: { marginTop: 14, fontSize: 14, color: C.muted },
+  emptyText: { marginTop: spacing.md, fontSize: 14, color: palette.muted },
 
-  // ── Quick prompts ─────────────────────────────────────────────
-  quickScroll: { maxHeight: 44, flexGrow: 0, backgroundColor: C.bg },
-  quickContent: { paddingHorizontal: 12, gap: 8, paddingVertical: 6 },
+  quickScroll: { maxHeight: 44, flexGrow: 0, backgroundColor: palette.paper },
+  quickContent: { paddingHorizontal: spacing.md, gap: spacing.sm, paddingVertical: spacing.sm },
   chip: {
-    paddingHorizontal: 14, paddingVertical: 7,
-    backgroundColor: C.coachBg, borderRadius: 20,
-    borderWidth: 1, borderColor: '#B8E4D4',
+    paddingHorizontal: spacing.md, paddingVertical: 7,
+    backgroundColor: palette.mossSoft, borderRadius: radius.pill,
+    borderWidth: 1, borderColor: palette.moss + '40',
   },
-  chipText: { fontSize: 12, color: C.primaryDark, fontWeight: '600' },
+  chipText: { fontSize: 12, color: palette.mossDeep, fontWeight: '600' },
 
-  // ── Input bar ─────────────────────────────────────────────────
   inputBar: {
     flexDirection: 'row', alignItems: 'flex-end',
-    paddingHorizontal: 12, paddingTop: 10,
-    backgroundColor: C.card, borderTopWidth: 1, borderColor: C.border,
-    gap: 8,
+    paddingHorizontal: spacing.md, paddingTop: spacing.sm,
+    backgroundColor: palette.card, borderTopWidth: 1, borderColor: palette.line,
+    gap: spacing.sm,
   },
   textInput: {
     flex: 1, minHeight: 40, maxHeight: 120,
-    backgroundColor: C.bg, borderRadius: 20,
-    paddingHorizontal: 16, paddingVertical: 10,
-    fontSize: 14, color: C.text,
-    borderWidth: 1, borderColor: C.border,
+    backgroundColor: palette.paper, borderRadius: radius.pill,
+    paddingHorizontal: spacing.lg, paddingVertical: spacing.sm,
+    fontSize: 14, color: palette.ink,
+    borderWidth: 1, borderColor: palette.line,
   },
   sendBtn: {
     width: 40, height: 40, borderRadius: 20,
-    backgroundColor: C.primary, alignItems: 'center', justifyContent: 'center',
+    backgroundColor: palette.moss, alignItems: 'center', justifyContent: 'center',
   },
+  micBtn: {
+    width: 40, height: 40, borderRadius: 20,
+    backgroundColor: palette.mossSoft, alignItems: 'center', justifyContent: 'center',
+  },
+  micBtnActive: { backgroundColor: palette.critical },
 });

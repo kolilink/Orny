@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Batch } from '../types';
 import { getFactoryId, generateId } from './context';
 import { supabase } from '../lib/supabase';
+import { enqueueIfNetworkError } from '../lib/syncQueue';
 import { toDateString } from '../utils/dates';
 
 function cacheKey() { return `${getFactoryId()}_batches_v2`; }
@@ -24,7 +25,7 @@ export const addBatch = async (
   const batches = await getBatches();
   await setCache([newBatch, ...batches]);
 
-  supabase.from('production_batches_v2').insert({
+  const row = {
     id: newBatch.id,
     factory_id: factoryId,
     date: newBatch.date,
@@ -36,7 +37,10 @@ export const addBatch = async (
     hours_worked: newBatch.hoursWorked ?? null,
     notes: newBatch.notes ?? null,
     created_at: now,
-  }).then(({ error }) => { if (error) console.warn('batch insert sync error', error.message); });
+  };
+  supabase.from('production_batches_v2').insert(row).then(({ error }) => {
+    if (error) enqueueIfNetworkError(error, { table: 'production_batches_v2', op: 'insert', values: row, label: 'lot de production' });
+  });
 
   return newBatch;
 };

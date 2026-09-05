@@ -2,6 +2,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { BulkProduct } from '../types';
 import { getFactoryId, generateId } from './context';
 import { supabase } from '../lib/supabase';
+import { enqueueIfNetworkError } from '../lib/syncQueue';
+import { ensureStockItem } from './stock';
 
 function cacheKey() { return `${getFactoryId()}_bulks`; }
 
@@ -40,14 +42,24 @@ export const addBulk = async (
   const bulks = await getBulks();
   await setCache([newBulk, ...bulks]);
 
-  supabase.from('bulk_products').insert({
+  // A bulk tied to a flavor (a case of N bags of that flavor) has no stock
+  // of its own — selling it deducts bagCount×qty from the flavor's stock.
+  // A standalone bulk (no flavorId) needs its own finished-goods stock row.
+  if (!newBulk.flavorId) {
+    await ensureStockItem(newBulk.id, newBulk.name, 'unité');
+  }
+
+  const row = {
     id: newBulk.id,
     factory_id: factoryId,
     name: newBulk.name,
     flavor_id: newBulk.flavorId ?? null,
     bag_count: newBulk.bagCount,
     unit_price: newBulk.unitPrice,
-  }).then(({ error }) => { if (error) console.warn('bulks insert sync error', error.message); });
+  };
+  supabase.from('bulk_products').insert(row).then(({ error }) => {
+    if (error) enqueueIfNetworkError(error, { table: 'bulk_products', op: 'insert', values: row, label: 'lot' });
+  });
 
   return newBulk;
 };
@@ -65,15 +77,21 @@ export const updateBulk = async (
   if (updates.bagCount !== undefined) row.bag_count = updates.bagCount;
   if (updates.unitPrice !== undefined) row.unit_price = updates.unitPrice;
 
-  supabase.from('bulk_products').update(row).eq('id', id).eq('factory_id', getFactoryId())
-    .then(({ error }) => { if (error) console.warn('bulks update sync error', error.message); });
+  const factoryId = getFactoryId();
+  supabase.from('bulk_products').update(row).eq('id', id).eq('factory_id', factoryId)
+    .then(({ error }) => {
+      if (error) enqueueIfNetworkError(error, { table: 'bulk_products', op: 'update', values: row, match: { id, factory_id: factoryId }, label: 'lot (modif.)' });
+    });
 };
 
 export const deleteBulk = async (id: string): Promise<void> => {
   const bulks = await getBulks();
   await setCache(bulks.filter((b) => b.id !== id));
-  supabase.from('bulk_products').delete().eq('id', id).eq('factory_id', getFactoryId())
-    .then(({ error }) => { if (error) console.warn('bulks delete sync error', error.message); });
+  const factoryId = getFactoryId();
+  supabase.from('bulk_products').delete().eq('id', id).eq('factory_id', factoryId)
+    .then(({ error }) => {
+      if (error) enqueueIfNetworkError(error, { table: 'bulk_products', op: 'delete', match: { id, factory_id: factoryId }, label: 'lot (suppr.)' });
+    });
 };
 
 export const setBulks = async (bulks: BulkProduct[]): Promise<void> => {

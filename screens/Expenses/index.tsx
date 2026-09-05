@@ -3,7 +3,6 @@ import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView,
   TextInput, Modal, SectionList,
 } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -17,11 +16,9 @@ import { getPurchases, syncPurchasesFromSupabase } from '../../store/purchases';
 import { getCustomCategories, addCustomCategory, deleteCustomCategory } from '../../store/customCategories';
 import { getFactoryId } from '../../store/context';
 import { formatGNF } from '../../utils/format';
-
-const C = {
-  primary: '#1D9E75', red: '#E24B4A', orange: '#EF9F27',
-  bg: '#F8F8F6', card: '#FFFFFF', text: '#1A1A18', muted: '#6B6B66', border: '#E8E8E4',
-};
+import { Palette } from '../../theme/tokens';
+import { useTheme } from '../../theme/ThemeContext';
+import { AppModal, Button, ConfirmDialog } from '../../components/ui';
 
 const BUILT_IN: CustomCategory[] = [
   { key: 'loyer', label: 'Loyer', icon: '🏠' },
@@ -70,7 +67,8 @@ function lineTotal(line: LineItemRow): number {
 }
 
 export default function ExpensesScreen() {
-  const insets = useSafeAreaInsets();
+  const { palette } = useTheme();
+  const styles = makeStyles(palette);
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [deletedExpenses, setDeletedExpenses] = useState<Expense[]>([]);
   const [purchases, setPurchases] = useState<Purchase[]>([]);
@@ -326,9 +324,8 @@ export default function ExpensesScreen() {
   const { label: catLabel, icon: catIcon } = catInfo(category, allCats);
 
   return (
-    <View style={[styles.container, { paddingTop: insets.top }]}>
-      <View style={styles.header}>
-        <Text style={styles.title}>Dépenses</Text>
+    <View style={styles.container}>
+      <View style={styles.summaryRow}>
         <View style={styles.summaryPill}>
           <Text style={styles.summaryText}>Ce mois : {formatGNF(monthTotal)}</Text>
         </View>
@@ -349,14 +346,14 @@ export default function ExpensesScreen() {
         <ScrollView contentContainerStyle={styles.form} keyboardShouldPersistTaps="handled">
           {!!lastSavedAmount && !editingId && (
             <View style={styles.successBanner}>
-              <Ionicons name="checkmark-circle" size={16} color={C.primary} />
+              <Ionicons name="checkmark-circle" size={16} color={palette.moss} />
               <Text style={styles.successText}>{formatGNF(lastSavedAmount)} enregistré — ajoutez une autre dépense à la même date</Text>
             </View>
           )}
 
           {!!editingId && (
             <View style={styles.editBanner}>
-              <Ionicons name="pencil" size={14} color={C.orange} />
+              <Ionicons name="pencil" size={14} color={palette.caution} />
               <Text style={styles.editBannerText}>Mode modification</Text>
               <TouchableOpacity onPress={() => clearForm()}>
                 <Text style={styles.editCancelText}>Annuler</Text>
@@ -371,7 +368,7 @@ export default function ExpensesScreen() {
           <Text style={styles.label}>Catégorie</Text>
           <TouchableOpacity style={styles.picker} onPress={() => setCatModal(true)}>
             <Text style={styles.pickerText}>{catIcon}  {catLabel}</Text>
-            <Ionicons name="chevron-down" size={18} color={C.muted} />
+            <Ionicons name="chevron-down" size={18} color={palette.muted} />
           </TouchableOpacity>
 
           {/* Title */}
@@ -379,7 +376,7 @@ export default function ExpensesScreen() {
           <TextInput
             style={styles.input}
             placeholder="Ex: Achats du marché, Loyer mai…"
-            placeholderTextColor={C.muted}
+            placeholderTextColor={palette.muted}
             value={description}
             onChangeText={setDescription}
           />
@@ -388,14 +385,14 @@ export default function ExpensesScreen() {
           <View style={styles.lineHeader}>
             <Text style={styles.label}>Articles / Lignes</Text>
             <TouchableOpacity style={styles.addLineBtn} onPress={() => setLineItems(prev => [...prev, makeLine()])}>
-              <Ionicons name="add-circle-outline" size={20} color={C.primary} />
+              <Ionicons name="add-circle-outline" size={20} color={palette.moss} />
               <Text style={styles.addLineTxt}>Ajouter</Text>
             </TouchableOpacity>
           </View>
 
           {lineItems.length === 0 && (
             <TouchableOpacity style={styles.emptyLines} onPress={() => setLineItems([makeLine()])}>
-              <Ionicons name="receipt-outline" size={20} color={C.muted} />
+              <Ionicons name="receipt-outline" size={20} color={palette.muted} />
               <Text style={styles.emptyLinesTxt}>Ajouter les articles d'un reçu</Text>
             </TouchableOpacity>
           )}
@@ -407,12 +404,12 @@ export default function ExpensesScreen() {
                 <TextInput
                   style={[styles.input, styles.lineName]}
                   placeholder="Article…"
-                  placeholderTextColor={C.muted}
+                  placeholderTextColor={palette.muted}
                   value={line.name}
                   onChangeText={v => updateLine(line.id, 'name', v)}
                 />
                 <TouchableOpacity onPress={() => removeLine(line.id)} style={styles.lineDelete}>
-                  <Ionicons name="close-circle" size={20} color={C.red} />
+                  <Ionicons name="close-circle" size={20} color={palette.critical} />
                 </TouchableOpacity>
               </View>
               <View style={styles.lineAmtRow}>
@@ -421,7 +418,7 @@ export default function ExpensesScreen() {
                   <TextInput
                     style={[styles.input, styles.qtyInput]}
                     placeholder="—"
-                    placeholderTextColor={C.muted}
+                    placeholderTextColor={palette.muted}
                     keyboardType="numeric"
                     value={line.qty}
                     onChangeText={v => updateLine(line.id, 'qty', v)}
@@ -433,7 +430,7 @@ export default function ExpensesScreen() {
                   <TextInput
                     style={[styles.input, styles.lineAmt]}
                     placeholder="0"
-                    placeholderTextColor={C.muted}
+                    placeholderTextColor={palette.muted}
                     keyboardType="numeric"
                     value={line.amount}
                     onChangeText={v => updateLine(line.id, 'amount', v)}
@@ -458,7 +455,7 @@ export default function ExpensesScreen() {
               <TextInput
                 style={styles.input}
                 placeholder="Ex: 50 000"
-                placeholderTextColor={C.muted}
+                placeholderTextColor={palette.muted}
                 keyboardType="numeric"
                 value={amount}
                 onChangeText={setAmount}
@@ -491,7 +488,7 @@ export default function ExpensesScreen() {
                 </Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.addAnotherBtn} onPress={() => handleSave(true)}>
-                <Ionicons name="add-circle-outline" size={18} color={C.primary} />
+                <Ionicons name="add-circle-outline" size={18} color={palette.moss} />
                 <Text style={styles.addAnotherText}>
                   Enregistrer et ajouter une autre (même date)
                 </Text>
@@ -574,10 +571,10 @@ export default function ExpensesScreen() {
                       <View style={styles.expenseRight}>
                         <Text style={styles.expenseAmount}>{formatGNF(item.amount)}</Text>
                         <TouchableOpacity onPress={() => openEdit(item)} style={{ padding: 4 }}>
-                          <Ionicons name="pencil-outline" size={16} color={C.primary} />
+                          <Ionicons name="pencil-outline" size={16} color={palette.moss} />
                         </TouchableOpacity>
                         <TouchableOpacity onPress={() => setDeleteConfirmId(item.id)} style={{ padding: 4 }}>
-                          <Ionicons name="trash-outline" size={16} color={C.red} />
+                          <Ionicons name="trash-outline" size={16} color={palette.critical} />
                         </TouchableOpacity>
                       </View>
                     </View>
@@ -594,7 +591,7 @@ export default function ExpensesScreen() {
                 deletedExpenses.length > 0 ? (
                   <View style={styles.trashSection}>
                     <View style={styles.trashHeader}>
-                      <Ionicons name="trash-outline" size={16} color={C.muted} />
+                      <Ionicons name="trash-outline" size={16} color={palette.muted} />
                       <Text style={styles.trashTitle}>Corbeille ({deletedExpenses.length}) — supprimé pendant 30 jours</Text>
                     </View>
                     {deletedExpenses.map(e => {
@@ -611,7 +608,7 @@ export default function ExpensesScreen() {
                             <Text style={styles.restoreText}>Restaurer</Text>
                           </TouchableOpacity>
                           <TouchableOpacity onPress={() => setPurgeConfirmId(e.id)} style={{ padding: 4 }}>
-                            <Ionicons name="close-circle" size={18} color={C.red} />
+                            <Ionicons name="close-circle" size={18} color={palette.critical} />
                           </TouchableOpacity>
                         </View>
                       );
@@ -657,7 +654,7 @@ export default function ExpensesScreen() {
                 } else {
                   const p = row.data;
                   return (
-                    <View style={[styles.expenseCard, { borderLeftWidth: 3, borderLeftColor: C.orange }]}>
+                    <View style={[styles.expenseCard, { borderLeftWidth: 3, borderLeftColor: palette.caution }]}>
                       <View style={styles.expenseMain}>
                         <Text style={styles.expenseIcon}>🛒</Text>
                         <View style={{ flex: 1 }}>
@@ -681,224 +678,187 @@ export default function ExpensesScreen() {
       )}
 
       {/* ── Category picker ── */}
-      <Modal visible={catModal} transparent animationType="slide">
-        <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={() => setCatModal(false)} />
-        <View style={styles.sheet}>
-          <View style={styles.sheetHeader}>
-            <Text style={styles.sheetTitle}>Catégorie</Text>
-            <TouchableOpacity onPress={() => setAddCatModal(true)} style={styles.addCatBtn}>
-              <Ionicons name="add" size={20} color={C.primary} />
-              <Text style={styles.addCatText}>Nouvelle</Text>
+      <AppModal visible={catModal} onClose={() => setCatModal(false)} title="Catégorie">
+        <TouchableOpacity onPress={() => setAddCatModal(true)} style={styles.addCatBtn}>
+          <Ionicons name="add" size={20} color={palette.moss} />
+          <Text style={styles.addCatText}>Nouvelle catégorie</Text>
+        </TouchableOpacity>
+        <ScrollView style={{ maxHeight: 400 }}>
+          {allCats.map(c => (
+            <TouchableOpacity
+              key={c.key}
+              style={[styles.sheetRow, category === c.key && styles.sheetRowActive]}
+              onPress={() => { setCategory(c.key); setCatModal(false); }}
+            >
+              <Text style={styles.sheetIcon}>{c.icon}</Text>
+              <Text style={styles.sheetLabel}>{c.label}</Text>
+              {category === c.key && <Ionicons name="checkmark" size={18} color={palette.moss} />}
+              {!BUILT_IN.find(b => b.key === c.key) && (
+                <TouchableOpacity onPress={() => handleDeleteCat(c.key)} style={{ padding: 4, marginLeft: 4 }}>
+                  <Ionicons name="trash-outline" size={16} color={palette.critical} />
+                </TouchableOpacity>
+              )}
             </TouchableOpacity>
-          </View>
-          <ScrollView style={{ maxHeight: 400 }}>
-            {allCats.map(c => (
-              <TouchableOpacity
-                key={c.key}
-                style={[styles.sheetRow, category === c.key && styles.sheetRowActive]}
-                onPress={() => { setCategory(c.key); setCatModal(false); }}
-              >
-                <Text style={styles.sheetIcon}>{c.icon}</Text>
-                <Text style={styles.sheetLabel}>{c.label}</Text>
-                {category === c.key && <Ionicons name="checkmark" size={18} color={C.primary} />}
-                {!BUILT_IN.find(b => b.key === c.key) && (
-                  <TouchableOpacity onPress={() => handleDeleteCat(c.key)} style={{ padding: 4, marginLeft: 4 }}>
-                    <Ionicons name="trash-outline" size={16} color={C.red} />
-                  </TouchableOpacity>
-                )}
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
-        </View>
-      </Modal>
+          ))}
+        </ScrollView>
+      </AppModal>
 
       {/* ── Add custom category ── */}
-      <Modal visible={addCatModal} transparent animationType="fade">
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalBox}>
-            <Text style={styles.modalTitle}>Nouvelle catégorie</Text>
-            <Text style={styles.fieldLabel}>Nom</Text>
-            <TextInput style={styles.input} placeholder="Ex: Marketing, Eau…" placeholderTextColor={C.muted} value={newCatLabel} onChangeText={setNewCatLabel} />
-            <Text style={styles.fieldLabel}>Emoji</Text>
-            <TextInput style={[styles.input, styles.emojiInput]} placeholder="🏷️" value={newCatEmoji} onChangeText={v => setNewCatEmoji(v.slice(-2))} maxLength={2} />
-            <View style={styles.emojiGrid}>
-              {EMOJI_GRID.map(e => (
-                <TouchableOpacity key={e} style={[styles.emojiCell, newCatEmoji === e && styles.emojiCellActive]} onPress={() => setNewCatEmoji(e)}>
-                  <Text style={styles.emojiCellText}>{e}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-            <TouchableOpacity style={styles.confirmBtn} onPress={handleAddCategory}>
-              <Text style={styles.confirmBtnText}>Créer la catégorie</Text>
+      <AppModal visible={addCatModal} onClose={() => { setAddCatModal(false); setNewCatLabel(''); setNewCatEmoji(''); }} title="Nouvelle catégorie">
+        <Text style={styles.fieldLabel}>Nom</Text>
+        <TextInput style={styles.input} placeholder="Ex: Marketing, Eau…" placeholderTextColor={palette.muted} value={newCatLabel} onChangeText={setNewCatLabel} />
+        <Text style={styles.fieldLabel}>Emoji</Text>
+        <TextInput style={[styles.input, styles.emojiInput]} placeholder="🏷️" value={newCatEmoji} onChangeText={v => setNewCatEmoji(v.slice(-2))} maxLength={2} />
+        <View style={styles.emojiGrid}>
+          {EMOJI_GRID.map(e => (
+            <TouchableOpacity key={e} style={[styles.emojiCell, newCatEmoji === e && styles.emojiCellActive]} onPress={() => setNewCatEmoji(e)}>
+              <Text style={styles.emojiCellText}>{e}</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.cancelBtn} onPress={() => { setAddCatModal(false); setNewCatLabel(''); setNewCatEmoji(''); }}>
-              <Text style={styles.cancelBtnText}>Annuler</Text>
-            </TouchableOpacity>
-          </View>
+          ))}
         </View>
-      </Modal>
+        <Button label="Créer" onPress={handleAddCategory} fullWidth style={{ marginTop: 20 }} />
+        <Button
+          label="Annuler"
+          variant="ghost"
+          onPress={() => { setAddCatModal(false); setNewCatLabel(''); setNewCatEmoji(''); }}
+          fullWidth
+          style={{ marginTop: 10 }}
+        />
+      </AppModal>
 
       {/* ── Delete confirm (soft) ── */}
-      <Modal visible={!!deleteConfirmId} transparent animationType="fade">
-        <View style={styles.confirmOverlay}>
-          <View style={styles.confirmBox}>
-            <Ionicons name="trash-outline" size={32} color={C.red} style={{ alignSelf: 'center', marginBottom: 12 }} />
-            <Text style={styles.confirmTitle}>Supprimer cette dépense ?</Text>
-            <Text style={styles.confirmSub}>Elle sera conservée dans la corbeille pendant 30 jours, puis supprimée définitivement.</Text>
-            <TouchableOpacity style={styles.confirmBtnRed} onPress={confirmDelete}>
-              <Text style={styles.confirmBtnText}>Supprimer</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.cancelBtn} onPress={() => setDeleteConfirmId(null)}>
-              <Text style={styles.cancelBtnText}>Annuler</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
+      <ConfirmDialog
+        visible={!!deleteConfirmId}
+        onClose={() => setDeleteConfirmId(null)}
+        onConfirm={confirmDelete}
+        title="Supprimer cette dépense ?"
+        message="Elle sera conservée dans la corbeille pendant 30 jours, puis supprimée définitivement."
+        confirmLabel="Supprimer"
+        icon="trash-outline"
+        tone="danger"
+      />
 
       {/* ── Purge confirm (permanent) ── */}
-      <Modal visible={!!purgeConfirmId} transparent animationType="fade">
-        <View style={styles.confirmOverlay}>
-          <View style={styles.confirmBox}>
-            <Ionicons name="warning-outline" size={32} color={C.red} style={{ alignSelf: 'center', marginBottom: 12 }} />
-            <Text style={styles.confirmTitle}>Supprimer définitivement ?</Text>
-            <Text style={styles.confirmSub}>Cette action est irréversible. La dépense sera définitivement effacée.</Text>
-            <TouchableOpacity style={styles.confirmBtnRed} onPress={confirmPurge}>
-              <Text style={styles.confirmBtnText}>Supprimer définitivement</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.cancelBtn} onPress={() => setPurgeConfirmId(null)}>
-              <Text style={styles.cancelBtnText}>Annuler</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
+      <ConfirmDialog
+        visible={!!purgeConfirmId}
+        onClose={() => setPurgeConfirmId(null)}
+        onConfirm={confirmPurge}
+        title="Supprimer définitivement ?"
+        message="Cette action est irréversible. La dépense sera définitivement effacée."
+        confirmLabel="Supprimer définitivement"
+        icon="warning-outline"
+        tone="danger"
+      />
     </View>
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: C.bg },
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16, paddingBottom: 8 },
-  title: { fontSize: 22, fontWeight: '700', color: C.text },
-  summaryPill: { backgroundColor: '#E8F6F0', borderRadius: 20, paddingHorizontal: 12, paddingVertical: 6 },
-  summaryText: { fontSize: 13, fontWeight: '600', color: C.primary },
-  tabs: { flexDirection: 'row', marginHorizontal: 16, marginBottom: 12, backgroundColor: '#EDEDEB', borderRadius: 12, padding: 4 },
+const makeStyles = (palette: Palette) => StyleSheet.create({
+  container: { flex: 1, backgroundColor: palette.paper },
+  summaryRow: { flexDirection: 'row', justifyContent: 'flex-end', padding: 16, paddingBottom: 8 },
+  summaryPill: { backgroundColor: palette.mossSoft, borderRadius: 20, paddingHorizontal: 12, paddingVertical: 6 },
+  summaryText: { fontSize: 13, fontWeight: '600', color: palette.moss },
+  tabs: { flexDirection: 'row', marginHorizontal: 16, marginBottom: 12, backgroundColor: palette.paper, borderRadius: 12, padding: 4 },
   tab: { flex: 1, paddingVertical: 8, borderRadius: 10, alignItems: 'center' },
-  tabActive: { backgroundColor: C.card },
-  tabText: { fontSize: 14, color: C.muted, fontWeight: '500' },
-  tabTextActive: { color: C.text, fontWeight: '700' },
+  tabActive: { backgroundColor: palette.card },
+  tabText: { fontSize: 14, color: palette.muted, fontWeight: '500' },
+  tabTextActive: { color: palette.ink, fontWeight: '700' },
   form: { padding: 16, paddingBottom: 40 },
-  label: { fontSize: 13, fontWeight: '600', color: C.muted, marginBottom: 6, marginTop: 14 },
-  input: { backgroundColor: C.card, borderRadius: 12, padding: 14, fontSize: 15, color: C.text, borderWidth: 1, borderColor: C.border },
-  picker: { backgroundColor: C.card, borderRadius: 12, padding: 14, borderWidth: 1, borderColor: C.border, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  pickerText: { fontSize: 16, color: C.text },
+  label: { fontSize: 13, fontWeight: '600', color: palette.muted, marginBottom: 6, marginTop: 14 },
+  input: { backgroundColor: palette.card, borderRadius: 12, padding: 14, fontSize: 15, color: palette.ink, borderWidth: 1, borderColor: palette.line },
+  picker: { backgroundColor: palette.card, borderRadius: 12, padding: 14, borderWidth: 1, borderColor: palette.line, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  pickerText: { fontSize: 16, color: palette.ink },
   // banners
-  successBanner: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#E8F6F0', borderRadius: 10, padding: 12, marginBottom: 4 },
-  successText: { flex: 1, fontSize: 13, color: C.primary, fontWeight: '500' },
-  editBanner: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#FEF4E4', borderRadius: 10, padding: 12, marginBottom: 4 },
-  editBannerText: { flex: 1, fontSize: 13, color: C.orange, fontWeight: '500' },
-  editCancelText: { fontSize: 13, color: C.red, fontWeight: '600' },
+  successBanner: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: palette.mossSoft, borderRadius: 10, padding: 12, marginBottom: 4 },
+  successText: { flex: 1, fontSize: 13, color: palette.moss, fontWeight: '500' },
+  editBanner: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: palette.cautionSoft, borderRadius: 10, padding: 12, marginBottom: 4 },
+  editBannerText: { flex: 1, fontSize: 13, color: palette.caution, fontWeight: '500' },
+  editCancelText: { fontSize: 13, color: palette.critical, fontWeight: '600' },
   // line items
   lineHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 14, marginBottom: 6 },
   addLineBtn: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  addLineTxt: { fontSize: 14, fontWeight: '600', color: C.primary },
-  emptyLines: { flexDirection: 'row', alignItems: 'center', gap: 8, borderWidth: 1, borderColor: C.border, borderStyle: 'dashed', borderRadius: 12, padding: 14, justifyContent: 'center' },
-  emptyLinesTxt: { fontSize: 14, color: C.muted },
-  lineBlock: { marginBottom: 10, backgroundColor: C.card, borderRadius: 12, borderWidth: 1, borderColor: C.border, padding: 10, gap: 8 },
+  addLineTxt: { fontSize: 14, fontWeight: '600', color: palette.moss },
+  emptyLines: { flexDirection: 'row', alignItems: 'center', gap: 8, borderWidth: 1, borderColor: palette.line, borderStyle: 'dashed', borderRadius: 12, padding: 14, justifyContent: 'center' },
+  emptyLinesTxt: { fontSize: 14, color: palette.muted },
+  lineBlock: { marginBottom: 10, backgroundColor: palette.card, borderRadius: 12, borderWidth: 1, borderColor: palette.line, padding: 10, gap: 8 },
   lineRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  lineNum: { fontSize: 13, color: C.muted, width: 18, textAlign: 'center' },
+  lineNum: { fontSize: 13, color: palette.muted, width: 18, textAlign: 'center' },
   lineName: { flex: 1, marginBottom: 0, paddingVertical: 10 },
   lineDelete: { padding: 4 },
   lineAmtRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 8 },
   qtyWrap: { alignItems: 'center', width: 56 },
-  qtyLabel: { fontSize: 10, color: C.muted, marginBottom: 4 },
+  qtyLabel: { fontSize: 10, color: palette.muted, marginBottom: 4 },
   qtyInput: { width: 56, paddingVertical: 10, textAlign: 'center', marginBottom: 0 },
-  qtyX: { fontSize: 18, color: C.muted, marginBottom: 8 },
+  qtyX: { fontSize: 18, color: palette.muted, marginBottom: 8 },
   priceWrap: { flex: 1, alignItems: 'flex-start' },
   lineAmt: { width: '100%', marginBottom: 0, paddingVertical: 10 },
   lineTotalWrap: { alignItems: 'flex-end', minWidth: 72 },
-  lineTotalVal: { fontSize: 13, fontWeight: '700', color: C.primary, marginBottom: 8 },
-  totalRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderColor: C.border },
-  totalLabel: { fontSize: 15, fontWeight: '700', color: C.text },
-  totalValue: { fontSize: 18, fontWeight: '800', color: C.primary },
+  lineTotalVal: { fontSize: 13, fontWeight: '700', color: palette.moss, marginBottom: 8 },
+  totalRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderColor: palette.line },
+  totalLabel: { fontSize: 15, fontWeight: '700', color: palette.ink },
+  totalValue: { fontSize: 18, fontWeight: '800', color: palette.moss },
   row: { flexDirection: 'row', gap: 10 },
-  methodBtn: { flex: 1, padding: 14, borderRadius: 12, borderWidth: 1, borderColor: C.border, backgroundColor: C.card, alignItems: 'center' },
-  methodBtnActive: { borderColor: C.primary, backgroundColor: '#E8F6F0' },
-  methodText: { fontSize: 14, color: C.muted, fontWeight: '500' },
-  methodTextActive: { color: C.primary, fontWeight: '700' },
-  addBtn: { marginTop: 24, backgroundColor: C.primary, borderRadius: 14, padding: 16, alignItems: 'center' },
-  addBtnText: { color: '#FFF', fontSize: 16, fontWeight: '700' },
-  addAnotherBtn: { marginTop: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderWidth: 1.5, borderColor: C.primary, borderRadius: 14, padding: 14 },
-  addAnotherText: { color: C.primary, fontSize: 14, fontWeight: '600' },
+  methodBtn: { flex: 1, padding: 14, borderRadius: 12, borderWidth: 1, borderColor: palette.line, backgroundColor: palette.card, alignItems: 'center' },
+  methodBtnActive: { borderColor: palette.moss, backgroundColor: palette.mossSoft },
+  methodText: { fontSize: 14, color: palette.muted, fontWeight: '500' },
+  methodTextActive: { color: palette.moss, fontWeight: '700' },
+  addBtn: { marginTop: 24, backgroundColor: palette.moss, borderRadius: 14, padding: 16, alignItems: 'center' },
+  addBtnText: { color: palette.white, fontSize: 16, fontWeight: '700' },
+  addAnotherBtn: { marginTop: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderWidth: 1.5, borderColor: palette.moss, borderRadius: 14, padding: 14 },
+  addAnotherText: { color: palette.moss, fontSize: 14, fontWeight: '600' },
   discardBtn: { marginTop: 12, alignItems: 'center', padding: 10 },
-  discardTxt: { fontSize: 13, color: C.muted },
+  discardTxt: { fontSize: 13, color: palette.muted },
   // history view toggle
-  historyToggleBar: { flexDirection: 'row', marginHorizontal: 16, marginBottom: 8, backgroundColor: '#EDEDEB', borderRadius: 10, padding: 3 },
+  historyToggleBar: { flexDirection: 'row', marginHorizontal: 16, marginBottom: 8, backgroundColor: palette.paper, borderRadius: 10, padding: 3 },
   historyToggleBtn: { flex: 1, paddingVertical: 7, borderRadius: 8, alignItems: 'center' },
-  historyToggleBtnActive: { backgroundColor: C.card },
-  historyToggleText: { fontSize: 12, color: C.muted, fontWeight: '500' },
-  historyToggleTextActive: { color: C.text, fontWeight: '700' },
-  allSpendingSummary: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginHorizontal: 16, marginBottom: 8, backgroundColor: '#FFF3E6', borderRadius: 10, padding: 12 },
-  allSpendingLabel: { fontSize: 13, color: C.orange, fontWeight: '600' },
-  allSpendingValue: { fontSize: 14, color: C.orange, fontWeight: '700' },
+  historyToggleBtnActive: { backgroundColor: palette.card },
+  historyToggleText: { fontSize: 12, color: palette.muted, fontWeight: '500' },
+  historyToggleTextActive: { color: palette.ink, fontWeight: '700' },
+  allSpendingSummary: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginHorizontal: 16, marginBottom: 8, backgroundColor: palette.cautionSoft, borderRadius: 10, padding: 12 },
+  allSpendingLabel: { fontSize: 13, color: palette.caution, fontWeight: '600' },
+  allSpendingValue: { fontSize: 14, color: palette.caution, fontWeight: '700' },
   // history list
   sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 10, paddingHorizontal: 4 },
-  sectionTitle: { fontSize: 14, fontWeight: '700', color: C.text },
-  sectionTotal: { fontSize: 14, fontWeight: '700', color: C.red },
-  expenseCard: { backgroundColor: C.card, borderRadius: 12, borderWidth: 1, borderColor: C.border, overflow: 'hidden' },
-  expenseCardEditing: { borderColor: C.orange, borderWidth: 2 },
+  sectionTitle: { fontSize: 14, fontWeight: '700', color: palette.ink },
+  sectionTotal: { fontSize: 14, fontWeight: '700', color: palette.critical },
+  expenseCard: { backgroundColor: palette.card, borderRadius: 12, borderWidth: 1, borderColor: palette.line, overflow: 'hidden' },
+  expenseCardEditing: { borderColor: palette.caution, borderWidth: 2 },
   expenseMain: { flexDirection: 'row', alignItems: 'center', padding: 14, gap: 12 },
   expenseIcon: { fontSize: 28 },
-  expenseDesc: { fontSize: 15, fontWeight: '600', color: C.text },
-  expenseMeta: { fontSize: 12, color: C.muted, marginTop: 2 },
+  expenseDesc: { fontSize: 15, fontWeight: '600', color: palette.ink },
+  expenseMeta: { fontSize: 12, color: palette.muted, marginTop: 2 },
   expenseRight: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  expenseAmount: { fontSize: 15, fontWeight: '700', color: C.red },
-  lineItemRow: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 58, paddingVertical: 7, borderTopWidth: 1, borderColor: C.border, backgroundColor: '#FAFAF8' },
-  lineItemName: { fontSize: 13, color: C.muted, flex: 1 },
-  lineItemAmt: { fontSize: 13, fontWeight: '600', color: C.text },
-  empty: { textAlign: 'center', color: C.muted, marginTop: 40, fontSize: 15 },
+  expenseAmount: { fontSize: 15, fontWeight: '700', color: palette.critical },
+  lineItemRow: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 58, paddingVertical: 7, borderTopWidth: 1, borderColor: palette.line, backgroundColor: palette.paper },
+  lineItemName: { fontSize: 13, color: palette.muted, flex: 1 },
+  lineItemAmt: { fontSize: 13, fontWeight: '600', color: palette.ink },
+  empty: { textAlign: 'center', color: palette.muted, marginTop: 40, fontSize: 15 },
   // tags
-  tagDep: { backgroundColor: '#E8F6F0', borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
-  tagAchat: { backgroundColor: '#FFF3E6', borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
-  tagText: { fontSize: 10, fontWeight: '700', color: C.muted },
+  tagDep: { backgroundColor: palette.mossSoft, borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
+  tagAchat: { backgroundColor: palette.cautionSoft, borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
+  tagText: { fontSize: 10, fontWeight: '700', color: palette.muted },
   // trash
   trashSection: { marginTop: 24 },
   trashHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 10 },
-  trashTitle: { fontSize: 13, color: C.muted, fontWeight: '600' },
-  trashCard: { backgroundColor: '#F8F0F0', borderRadius: 10, borderWidth: 1, borderColor: '#F0D8D8', padding: 12, flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 6 },
+  trashTitle: { fontSize: 13, color: palette.muted, fontWeight: '600' },
+  trashCard: { backgroundColor: palette.criticalSoft, borderRadius: 10, borderWidth: 1, borderColor: palette.critical + '30', padding: 12, flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 6 },
   trashIcon: { fontSize: 24 },
-  trashDesc: { fontSize: 14, fontWeight: '600', color: C.muted },
-  trashMeta: { fontSize: 12, color: C.muted, marginTop: 2 },
-  restoreBtn: { backgroundColor: '#E8F6F0', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6 },
-  restoreText: { fontSize: 12, color: C.primary, fontWeight: '700' },
+  trashDesc: { fontSize: 14, fontWeight: '600', color: palette.muted },
+  trashMeta: { fontSize: 12, color: palette.muted, marginTop: 2 },
+  restoreBtn: { backgroundColor: palette.mossSoft, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6 },
+  restoreText: { fontSize: 12, color: palette.moss, fontWeight: '700' },
   // category sheet
-  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.3)' },
-  sheet: { backgroundColor: C.card, borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, paddingBottom: 40 },
-  sheetHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 },
-  sheetTitle: { fontSize: 17, fontWeight: '700', color: C.text },
-  addCatBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 20, backgroundColor: '#E8F6F0' },
-  addCatText: { fontSize: 13, fontWeight: '600', color: C.primary },
+  addCatBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 20, backgroundColor: palette.mossSoft, alignSelf: 'flex-start', marginBottom: 12 },
+  addCatText: { fontSize: 13, fontWeight: '600', color: palette.moss },
   sheetRow: { flexDirection: 'row', alignItems: 'center', padding: 14, borderRadius: 12, marginBottom: 4 },
-  sheetRowActive: { backgroundColor: '#E8F6F0' },
+  sheetRowActive: { backgroundColor: palette.mossSoft },
   sheetIcon: { fontSize: 24, marginRight: 14 },
-  sheetLabel: { flex: 1, fontSize: 16, color: C.text },
+  sheetLabel: { flex: 1, fontSize: 16, color: palette.ink },
   // add category modal
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', padding: 20 },
-  modalBox: { backgroundColor: C.card, borderRadius: 20, padding: 20 },
-  modalTitle: { fontSize: 17, fontWeight: '700', color: C.text, marginBottom: 16 },
-  fieldLabel: { fontSize: 13, fontWeight: '600', color: C.muted, marginBottom: 6, marginTop: 12 },
+  fieldLabel: { fontSize: 13, fontWeight: '600', color: palette.muted, marginBottom: 6, marginTop: 12 },
   emojiInput: { fontSize: 28, textAlign: 'center', paddingVertical: 10 },
   emojiGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 10, marginBottom: 4 },
-  emojiCell: { width: 44, height: 44, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: C.bg },
-  emojiCellActive: { backgroundColor: '#E8F6F0', borderWidth: 2, borderColor: C.primary },
+  emojiCell: { width: 44, height: 44, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: palette.paper },
+  emojiCellActive: { backgroundColor: palette.mossSoft, borderWidth: 2, borderColor: palette.moss },
   emojiCellText: { fontSize: 22 },
-  confirmBtn: { marginTop: 20, backgroundColor: C.primary, borderRadius: 12, padding: 14, alignItems: 'center' },
-  confirmBtnText: { color: '#fff', fontWeight: '700', fontSize: 15 },
-  cancelBtn: { marginTop: 10, borderRadius: 12, padding: 14, alignItems: 'center', borderWidth: 1, borderColor: C.border },
-  cancelBtnText: { color: C.muted, fontWeight: '600', fontSize: 15 },
-  // confirm modals
-  confirmOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', padding: 24 },
-  confirmBox: { backgroundColor: C.card, borderRadius: 20, padding: 24 },
-  confirmTitle: { fontSize: 17, fontWeight: '700', color: C.text, textAlign: 'center', marginBottom: 8 },
-  confirmSub: { fontSize: 14, color: C.muted, textAlign: 'center', marginBottom: 4, lineHeight: 20 },
-  confirmBtnRed: { marginTop: 16, backgroundColor: C.red, borderRadius: 12, padding: 14, alignItems: 'center' },
 });

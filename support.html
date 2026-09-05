@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Support — Orny</title>
+<style>
+  :root {
+    --ink: #1C1B17;
+    --paper: #F6F4EF;
+    --card: #FFFFFF;
+    --line: #E4E1D8;
+    --muted: #706B5F;
+    --moss: #1D9E75;
+    --mossSoft: #E3F3ED;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.65;
+  }
+  .wrap {
+    max-width: 620px;
+    margin: 0 auto;
+    padding: 56px 24px 96px;
+    text-align: center;
+  }
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--moss);
+    background: var(--mossSoft);
+    padding: 5px 12px;
+    border-radius: 100px;
+    margin-bottom: 22px;
+  }
+  h1 {
+    font-size: 30px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    margin: 0 0 14px;
+  }
+  p.lead {
+    font-size: 16.5px;
+    color: var(--muted);
+    max-width: 46ch;
+    margin: 0 auto 36px;
+  }
+  .contact-card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 28px 24px;
+    margin-bottom: 16px;
+  }
+  .contact-label {
+    font-size: 12.5px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 8px;
+  }
+  .contact-value {
+    font-size: 19px;
+    font-weight: 700;
+    color: var(--moss);
+  }
+  .placeholder {
+    background: #FDF0E4;
+    color: #A6661C;
+    padding: 2px 8px;
+    border-radius: 6px;
+    font-weight: 700;
+    font-size: 16px;
+  }
+  .faq {
+    text-align: left;
+    margin-top: 44px;
+  }
+  .faq h2 {
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 14px;
+  }
+  .faq-item {
+    border-top: 1px solid var(--line);
+    padding: 16px 0;
+  }
+  .faq-item:last-child { border-bottom: 1px solid var(--line); }
+  .faq-q { font-weight: 700; font-size: 15px; margin-bottom: 6px; }
+  .faq-a { font-size: 14.5px; color: var(--muted); margin: 0; }
+  footer {
+    margin-top: 56px;
+    font-size: 13px;
+    color: var(--muted);
+  }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <span class="badge">Orny · SOL Chips</span>
+    <h1>Besoin d'aide ?</h1>
+    <p class="lead">Que ce soit une question sur votre compte, un problème technique, ou une suggestion pour améliorer Orny, nous sommes là.</p>
+
+    <div class="contact-card">
+      <div class="contact-label">Nous contacter</div>
+      <div class="contact-value"><a href="https://wa.me/12672421843" style="color:#1D9E75;text-decoration:none;">+1 267 242 1843 (WhatsApp)</a></div>
+    </div>
+
+    <div class="faq">
+      <h2>Questions fréquentes</h2>
+      <div class="faq-item">
+        <p class="faq-q">Comment supprimer mon compte ?</p>
+        <p class="faq-a">Directement dans l'application : Menu → Compte → Supprimer mon compte. C'est une action immédiate et définitive. Vous pouvez aussi nous écrire si vous préférez qu'on s'en charge.</p>
+      </div>
+      <div class="faq-item">
+        <p class="faq-q">J'ai un problème pour me connecter</p>
+        <p class="faq-a">Vérifiez que vous utilisez bien la même méthode de connexion qu'à la création de votre compte (email, Google, ou Apple). En cas de doute, contactez-nous avec votre adresse email.</p>
+      </div>
+      <div class="faq-item">
+        <p class="faq-q">Comment fonctionne Orny AI ?</p>
+        <p class="faq-a">Orny AI répond à vos questions à partir des vraies données de votre usine — ventes, stock, dépenses. Voir notre <a href="./privacy.html" style="color:#1D9E75;font-weight:600;">politique de confidentialité</a> pour savoir comment ces données sont utilisées.</p>
+      </div>
+    </div>
+
+    <footer>Orny — une application Kolilink.</footer>
+  </div>
+</body>
+</html>

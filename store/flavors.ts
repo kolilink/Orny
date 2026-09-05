@@ -2,6 +2,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ProductFlavor } from '../types';
 import { getFactoryId, generateId } from './context';
 import { supabase } from '../lib/supabase';
+import { enqueueIfNetworkError } from '../lib/syncQueue';
+import { ensureStockItem } from './stock';
 
 function cacheKey() { return `${getFactoryId()}_flavors`; }
 
@@ -39,13 +41,20 @@ export const addFlavor = async (
   const flavors = await getFlavors();
   await setCache([newFlavor, ...flavors]);
 
-  supabase.from('product_flavors').insert({
+  // Every sellable flavor gets its own finished-goods stock row, so a sale
+  // of it has something real to deduct from (see store/sales.ts deduction).
+  await ensureStockItem(newFlavor.id, newFlavor.label, 'sachet');
+
+  const row = {
     id: newFlavor.id,
     factory_id: factoryId,
     label: newFlavor.label,
     weight_g: newFlavor.weightG,
     default_price: newFlavor.defaultPrice,
-  }).then(({ error }) => { if (error) console.warn('flavors insert sync error', error.message); });
+  };
+  supabase.from('product_flavors').insert(row).then(({ error }) => {
+    if (error) enqueueIfNetworkError(error, { table: 'product_flavors', op: 'insert', values: row, label: 'saveur' });
+  });
 
   return newFlavor;
 };
@@ -62,15 +71,21 @@ export const updateFlavor = async (
   if (updates.weightG !== undefined) row.weight_g = updates.weightG;
   if (updates.defaultPrice !== undefined) row.default_price = updates.defaultPrice;
 
-  supabase.from('product_flavors').update(row).eq('id', id).eq('factory_id', getFactoryId())
-    .then(({ error }) => { if (error) console.warn('flavors update sync error', error.message); });
+  const factoryId = getFactoryId();
+  supabase.from('product_flavors').update(row).eq('id', id).eq('factory_id', factoryId)
+    .then(({ error }) => {
+      if (error) enqueueIfNetworkError(error, { table: 'product_flavors', op: 'update', values: row, match: { id, factory_id: factoryId }, label: 'saveur (modif.)' });
+    });
 };
 
 export const deleteFlavor = async (id: string): Promise<void> => {
   const flavors = await getFlavors();
   await setCache(flavors.filter((f) => f.id !== id));
-  supabase.from('product_flavors').delete().eq('id', id).eq('factory_id', getFactoryId())
-    .then(({ error }) => { if (error) console.warn('flavors delete sync error', error.message); });
+  const factoryId = getFactoryId();
+  supabase.from('product_flavors').delete().eq('id', id).eq('factory_id', factoryId)
+    .then(({ error }) => {
+      if (error) enqueueIfNetworkError(error, { table: 'product_flavors', op: 'delete', match: { id, factory_id: factoryId }, label: 'saveur (suppr.)' });
+    });
 };
 
 export const setFlavors = async (flavors: ProductFlavor[]): Promise<void> => {

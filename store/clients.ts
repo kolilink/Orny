@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Client } from '../types';
 import { getFactoryId, generateId } from './context';
 import { supabase } from '../lib/supabase';
+import { enqueueIfNetworkError } from '../lib/syncQueue';
 
 function cacheKey() { return `${getFactoryId()}_clients`; }
 
@@ -53,14 +54,17 @@ export const upsertClient = async (
   const newClient: Client = { id: generateId(), factory_id: factoryId, name, location, type, phone };
   await setCache([newClient, ...clients]);
 
-  supabase.from('clients').insert({
+  const row = {
     id: newClient.id,
     factory_id: factoryId,
     name,
     phone: phone ?? null,
     location: location ?? null,
     type: type ?? null,
-  }).then(({ error }) => { if (error) console.warn('clients insert sync error', error.message); });
+  };
+  supabase.from('clients').insert(row).then(({ error }) => {
+    if (error) enqueueIfNetworkError(error, { table: 'clients', op: 'insert', values: row, label: 'client' });
+  });
 
   return newClient;
 };
@@ -71,15 +75,21 @@ export const updateClient = async (
 ): Promise<void> => {
   const clients = await getClients();
   await setCache(clients.map((c) => (c.id === id ? { ...c, ...updates } : c)));
-  supabase.from('clients').update(updates).eq('id', id).eq('factory_id', getFactoryId())
-    .then(({ error }) => { if (error) console.warn('clients update sync error', error.message); });
+  const factoryId = getFactoryId();
+  supabase.from('clients').update(updates).eq('id', id).eq('factory_id', factoryId)
+    .then(({ error }) => {
+      if (error) enqueueIfNetworkError(error, { table: 'clients', op: 'update', values: updates as Record<string, unknown>, match: { id, factory_id: factoryId }, label: 'client (modif.)' });
+    });
 };
 
 export const deleteClient = async (id: string): Promise<void> => {
   const clients = await getClients();
   await setCache(clients.filter((c) => c.id !== id));
-  supabase.from('clients').delete().eq('id', id).eq('factory_id', getFactoryId())
-    .then(({ error }) => { if (error) console.warn('clients delete sync error', error.message); });
+  const factoryId = getFactoryId();
+  supabase.from('clients').delete().eq('id', id).eq('factory_id', factoryId)
+    .then(({ error }) => {
+      if (error) enqueueIfNetworkError(error, { table: 'clients', op: 'delete', match: { id, factory_id: factoryId }, label: 'client (suppr.)' });
+    });
 };
 
 export const setClients = async (clients: Client[]): Promise<void> => {

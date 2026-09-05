@@ -52,7 +52,7 @@ create table if not exists factory_members (
   factory_id  uuid not null references factories(id) on delete cascade,
   user_id     uuid not null references auth.users(id) on delete cascade,
   role        text not null default 'employee'
-                check (role in ('admin', 'employee', 'investor')),
+                check (role in ('admin', 'employee', 'investor', 'vendeur')),
   created_at  timestamptz not null default now(),
   unique(factory_id, user_id)
 );
@@ -71,7 +71,7 @@ create table if not exists join_requests (
   user_email    text not null,
   status        text not null default 'pending'
                   check (status in ('pending', 'approved', 'rejected')),
-  assigned_role text check (assigned_role in ('admin', 'employee', 'investor')),
+  assigned_role text check (assigned_role in ('admin', 'employee', 'investor', 'vendeur')),
   created_at    timestamptz not null default now(),
   unique(factory_id, user_id)
 );
@@ -176,6 +176,7 @@ create table if not exists business_documents (
   title           text not null,
   category        text not null check (category in ('contrat','facture','licence','import_export','investisseur','autre')),
   file_uri        text not null,
+  storage_path    text,
   file_type       text not null check (file_type in ('image','pdf')),
   notes           text not null default '',
   date_added      text not null,
@@ -183,6 +184,13 @@ create table if not exists business_documents (
   expiration_date text,
   created_at      timestamptz not null default now()
 );
+
+-- Private bucket backing business_documents.storage_path — the actual file,
+-- not just its local:// URI, so it survives a lost/reinstalled device and is
+-- readable by every member of the factory, not just whoever uploaded it.
+insert into storage.buckets (id, name, public)
+values ('business-documents', 'business-documents', false)
+on conflict (id) do nothing;
 
 create table if not exists expenses (
   id             uuid primary key default gen_random_uuid(),
@@ -214,6 +222,7 @@ create table if not exists purchases (
   supplier_name  text not null,
   date           text not null,
   product        text not null,
+  stock_item_id  text,
   quantity       numeric not null,
   unit           text not null,
   unit_price     integer not null,
@@ -271,6 +280,18 @@ create table if not exists production_batches_v2 (
   created_at     timestamptz not null default now()
 );
 
+-- Capital PAID OUT to an investor — distinct from investment_entries,
+-- which is capital paid IN. Previously there was no way to record a payout.
+create table if not exists investor_distributions (
+  id          uuid primary key default gen_random_uuid(),
+  factory_id  uuid not null references factories(id) on delete cascade,
+  investor_id uuid not null references investors(id) on delete cascade,
+  amount      integer not null check (amount > 0),
+  date        text not null,
+  notes       text,
+  created_at  timestamptz not null default now()
+);
+
 create index if not exists production_products_factory_idx on production_products(factory_id);
 create index if not exists production_batches_v2_factory_idx on production_batches_v2(factory_id);
 create index if not exists production_batches_v2_product_idx on production_batches_v2(product_id);
@@ -307,6 +328,7 @@ alter table purchases          enable row level security;
 alter table customer_orders    enable row level security;
 alter table production_products   enable row level security;
 alter table production_batches_v2 enable row level security;
+alter table investor_distributions enable row level security;
 
 
 -- ════════════════════════════════════════════════════════════
@@ -526,10 +548,10 @@ create policy "members read sales"
   on sales for select using (factory_id in (select my_factory_ids()));
 create policy "staff insert sales"
   on sales for insert with check (
-    factory_id in (select my_factory_ids()) and my_role_in(factory_id) in ('admin','employee'));
+    factory_id in (select my_factory_ids()) and my_role_in(factory_id) in ('admin','employee','vendeur'));
 create policy "staff update sales"
   on sales for update using (
-    factory_id in (select my_factory_ids()) and my_role_in(factory_id) in ('admin','employee'));
+    factory_id in (select my_factory_ids()) and my_role_in(factory_id) in ('admin','employee','vendeur'));
 create policy "admin delete sales"
   on sales for delete using (my_role_in(factory_id) = 'admin');
 
@@ -577,10 +599,10 @@ create policy "members read clients"
   on clients for select using (factory_id in (select my_factory_ids()));
 create policy "staff insert clients"
   on clients for insert with check (
-    factory_id in (select my_factory_ids()) and my_role_in(factory_id) in ('admin','employee'));
+    factory_id in (select my_factory_ids()) and my_role_in(factory_id) in ('admin','employee','vendeur'));
 create policy "staff update clients"
   on clients for update using (
-    factory_id in (select my_factory_ids()) and my_role_in(factory_id) in ('admin','employee'));
+    factory_id in (select my_factory_ids()) and my_role_in(factory_id) in ('admin','employee','vendeur'));
 create policy "admin delete clients"
   on clients for delete using (my_role_in(factory_id) = 'admin');
 
@@ -760,3 +782,47 @@ create policy "staff insert batches v2"
     factory_id in (select my_factory_ids()) and my_role_in(factory_id) in ('admin','employee'));
 create policy "admin delete batches v2"
   on production_batches_v2 for delete using (my_role_in(factory_id) = 'admin');
+
+-- ── INVESTOR DISTRIBUTIONS ────────────────────────────────────
+drop policy if exists "read distributions"  on investor_distributions;
+drop policy if exists "admin write distributions"  on investor_distributions;
+drop policy if exists "admin update distributions" on investor_distributions;
+drop policy if exists "admin delete distributions" on investor_distributions;
+
+create policy "read distributions"
+  on investor_distributions for select using (
+    investor_id in (select id from investors where user_id = auth.uid())
+    or my_role_in(factory_id) in ('admin','employee'));
+create policy "admin write distributions"
+  on investor_distributions for insert with check (my_role_in(factory_id) = 'admin');
+create policy "admin update distributions"
+  on investor_distributions for update using (my_role_in(factory_id) = 'admin');
+create policy "admin delete distributions"
+  on investor_distributions for delete using (my_role_in(factory_id) = 'admin');
+
+-- ── BUSINESS DOCUMENTS STORAGE ────────────────────────────────
+-- Objects live at "<factory_id>/<document_id>.<ext>" — the first path
+-- segment is the factory id, reusing the same membership/role helpers.
+drop policy if exists "members read business documents" on storage.objects;
+drop policy if exists "staff upload business documents" on storage.objects;
+drop policy if exists "staff update business documents" on storage.objects;
+drop policy if exists "admin delete business documents" on storage.objects;
+
+create policy "members read business documents"
+  on storage.objects for select using (
+    bucket_id = 'business-documents'
+    and (storage.foldername(name))[1]::uuid in (select my_factory_ids()));
+create policy "staff upload business documents"
+  on storage.objects for insert with check (
+    bucket_id = 'business-documents'
+    and (storage.foldername(name))[1]::uuid in (select my_factory_ids())
+    and my_role_in((storage.foldername(name))[1]::uuid) in ('admin','employee'));
+create policy "staff update business documents"
+  on storage.objects for update using (
+    bucket_id = 'business-documents'
+    and (storage.foldername(name))[1]::uuid in (select my_factory_ids())
+    and my_role_in((storage.foldername(name))[1]::uuid) in ('admin','employee'));
+create policy "admin delete business documents"
+  on storage.objects for delete using (
+    bucket_id = 'business-documents'
+    and my_role_in((storage.foldername(name))[1]::uuid) = 'admin');

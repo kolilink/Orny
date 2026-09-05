@@ -5,21 +5,16 @@ import {
 } from 'react-native';
 import { useAuth } from '../../context/AuthContext';
 import { toFrench } from '../../utils/errors';
-
-const C = {
-  primary: '#1D9E75',
-  bg: '#F8F8F6',
-  card: '#FFFFFF',
-  muted: '#6B6B66',
-  border: '#E8E8E4',
-  red: '#E24B4A',
-};
+import { Palette } from '../../theme/tokens';
+import { useTheme } from '../../theme/ThemeContext';
 
 interface Props {
   onNavigateLogin: () => void;
 }
 
 export default function RegisterScreen({ onNavigateLogin }: Props) {
+  const { palette } = useTheme();
+  const styles = makeStyles(palette);
   const { signUp, signIn } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -73,7 +68,7 @@ export default function RegisterScreen({ onNavigateLogin }: Props) {
             value={email}
             onChangeText={setEmail}
             placeholder="vous@exemple.com"
-            placeholderTextColor={C.muted}
+            placeholderTextColor={palette.muted}
             keyboardType="email-address"
             autoCapitalize="none"
             autoCorrect={false}
@@ -85,7 +80,7 @@ export default function RegisterScreen({ onNavigateLogin }: Props) {
             value={password}
             onChangeText={setPassword}
             placeholder="Min. 6 caractères"
-            placeholderTextColor={C.muted}
+            placeholderTextColor={palette.muted}
             secureTextEntry
           />
 
@@ -95,13 +90,13 @@ export default function RegisterScreen({ onNavigateLogin }: Props) {
             value={confirm}
             onChangeText={setConfirm}
             placeholder="••••••••"
-            placeholderTextColor={C.muted}
+            placeholderTextColor={palette.muted}
             secureTextEntry
           />
 
           <TouchableOpacity style={styles.btn} onPress={handleRegister} disabled={loading}>
             {loading
-              ? <ActivityIndicator color="#fff" />
+              ? <ActivityIndicator color={palette.white} />
               : <Text style={styles.btnText}>Créer mon compte</Text>}
           </TouchableOpacity>
         </View>
@@ -114,22 +109,22 @@ export default function RegisterScreen({ onNavigateLogin }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
-  flex: { flex: 1, backgroundColor: C.bg },
+const makeStyles = (palette: Palette) => StyleSheet.create({
+  flex: { flex: 1, backgroundColor: palette.paper },
   container: { flexGrow: 1, justifyContent: 'center', padding: 24 },
   header: { alignItems: 'center', marginBottom: 40 },
-  logo: { fontSize: 36, fontWeight: '800', color: C.primary },
-  subtitle: { fontSize: 15, color: C.muted, marginTop: 4 },
-  card: { backgroundColor: C.card, borderRadius: 16, padding: 24, marginBottom: 20 },
-  title: { fontSize: 22, fontWeight: '700', color: '#1A1A18', marginBottom: 24 },
-  label: { fontSize: 13, fontWeight: '600', color: C.muted, marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.5 },
+  logo: { fontSize: 36, fontWeight: '800', color: palette.moss },
+  subtitle: { fontSize: 15, color: palette.muted, marginTop: 4 },
+  card: { backgroundColor: palette.card, borderRadius: 16, padding: 24, marginBottom: 20 },
+  title: { fontSize: 22, fontWeight: '700', color: palette.ink, marginBottom: 24 },
+  label: { fontSize: 13, fontWeight: '600', color: palette.muted, marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.5 },
   input: {
-    borderWidth: 1, borderColor: C.border, borderRadius: 10,
-    padding: 14, fontSize: 15, color: '#1A1A18', backgroundColor: C.bg, marginBottom: 16,
+    borderWidth: 1, borderColor: palette.line, borderRadius: 10,
+    padding: 14, fontSize: 15, color: palette.ink, backgroundColor: palette.paper, marginBottom: 16,
   },
-  btn: { backgroundColor: C.primary, borderRadius: 12, padding: 16, alignItems: 'center', marginTop: 8 },
-  btnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
+  btn: { backgroundColor: palette.moss, borderRadius: 12, padding: 16, alignItems: 'center', marginTop: 8 },
+  btnText: { color: palette.white, fontSize: 16, fontWeight: '700' },
   link: { alignItems: 'center' },
-  linkText: { color: C.muted, fontSize: 14 },
-  linkBold: { color: C.primary, fontWeight: '700' },
+  linkText: { color: palette.muted, fontSize: 14 },
+  linkBold: { color: palette.moss, fontWeight: '700' },
 });

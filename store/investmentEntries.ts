@@ -1,7 +1,8 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { InvestmentEntry } from '../types';
+import { InvestmentEntry, EditHistoryEntry } from '../types';
 import { getFactoryId, generateId } from './context';
 import { supabase } from '../lib/supabase';
+import { enqueueIfNetworkError } from '../lib/syncQueue';
 
 function cacheKey() { return `${getFactoryId()}_investment_entries`; }
 
@@ -48,7 +49,7 @@ export const addInvestmentEntry = async (
   const entries = await getInvestmentEntries();
   await setCache([newEntry, ...entries]);
 
-  supabase.from('investment_entries').insert({
+  const row = {
     id: newEntry.id,
     factory_id: factoryId,
     investor_id: newEntry.investorId,
@@ -56,7 +57,10 @@ export const addInvestmentEntry = async (
     date: newEntry.date,
     notes: newEntry.notes ?? null,
     created_at: now,
-  }).then(({ error }) => { if (error) console.warn('investment_entries insert sync error', error.message); });
+  };
+  supabase.from('investment_entries').insert(row).then(({ error }) => {
+    if (error) enqueueIfNetworkError(error, { table: 'investment_entries', op: 'insert', values: row, label: 'versement investisseur' });
+  });
 
   return newEntry;
 };
@@ -71,17 +75,40 @@ export const updateInvestmentEntry = async (
   if (updates.amount !== undefined) row.amount = updates.amount;
   if (updates.date !== undefined) row.date = updates.date;
   if (updates.notes !== undefined) row.notes = updates.notes ?? null;
-  supabase.from('investment_entries').update(row).eq('id', id).eq('factory_id', getFactoryId())
-    .then(({ error }) => { if (error) console.warn('investment_entries update sync error', error.message); });
+  const factoryId = getFactoryId();
+  supabase.from('investment_entries').update(row).eq('id', id).eq('factory_id', factoryId)
+    .then(({ error }) => {
+      if (error) enqueueIfNetworkError(error, { table: 'investment_entries', op: 'update', values: row, match: { id, factory_id: factoryId }, label: 'versement investisseur (modif.)' });
+    });
 };
 
 export const deleteInvestmentEntry = async (id: string): Promise<void> => {
   const entries = await getInvestmentEntries();
   await setCache(entries.filter((e) => e.id !== id));
-  supabase.from('investment_entries').delete().eq('id', id).eq('factory_id', getFactoryId())
-    .then(({ error }) => { if (error) console.warn('investment_entries delete sync error', error.message); });
+  const factoryId = getFactoryId();
+  const { error } = await supabase.from('investment_entries').delete().eq('id', id).eq('factory_id', factoryId);
+  if (error) await enqueueIfNetworkError(error, { table: 'investment_entries', op: 'delete', match: { id, factory_id: factoryId }, label: 'versement investisseur (suppr.)' });
 };
 
 export const setInvestmentEntries = async (entries: InvestmentEntry[]): Promise<void> => {
   await setCache(entries);
+};
+
+// Append-only edit history, written automatically by a DB trigger on every
+// UPDATE to this entry — see db/update15.sql. Always reads live (no local
+// cache): this is meant to be trustworthy, not fast.
+export const getEntryEditHistory = async (entryId: string): Promise<EditHistoryEntry<Partial<InvestmentEntry>>[]> => {
+  const { data, error } = await supabase
+    .from('investment_entry_edits')
+    .select('*')
+    .eq('entry_id', entryId)
+    .order('edited_at', { ascending: false });
+  if (error || !data) return [];
+  return data.map((r) => ({
+    id: r.id,
+    editedBy: r.edited_by ?? undefined,
+    editedAt: r.edited_at,
+    before: r.before,
+    after: r.after,
+  }));
 };

@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView,
-  Modal, Animated,
+  Modal, Animated, TextInput, KeyboardAvoidingView, Platform,
 } from 'react-native';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -10,13 +10,15 @@ import { Ionicons } from '@expo/vector-icons';
 import { RootStackParamList } from '../../types';
 import { useAuth, UserRole, FactoryMembership } from '../../context/AuthContext';
 import { getProfile, UserProfile } from '../../store/profile';
+import { supabase } from '../../lib/supabase';
+import { toFrench } from '../../utils/errors';
+import { Palette } from '../../theme/tokens';
+import { useTheme } from '../../theme/ThemeContext';
+import { ConfirmDialog } from '../../components/ui';
+
+const DELETE_CONFIRM_WORD = 'SUPPRIMER';
 
 type PlusNav = NativeStackNavigationProp<RootStackParamList>;
-
-const C = {
-  primary: '#1D9E75', red: '#E24B4A', bg: '#F8F8F6',
-  card: '#FFFFFF', text: '#1A1A18', muted: '#6B6B66', border: '#E8E8E4',
-};
 
 type MenuItem = {
   label: string;
@@ -28,22 +30,29 @@ type MenuItem = {
 
 type Section = { title: string; items: MenuItem[] };
 
+// Reorganized from the original 5 sections (Finance / Gestion / Produits /
+// Analyses / Usine) into 3 meaningful buckets — Clients, Fournisseurs,
+// Produits — plus one Administration catch-all for what doesn't fit any of
+// the three, matching the same simplification pass already done on Patron.
+// Créances is gone as its own menu entry: its aging/mark-paid/partial-
+// payment functionality was ported directly into the Clients screen's own
+// "Créances" tab (screens/Clients/index.tsx) instead, so seeing who owes
+// what — and acting on it — no longer needs a separate screen. Notifications
+// is dropped entirely for now (no other screen links to it either, so this
+// makes the route fully unreachable via UI, on purpose).
 const ALL_SECTIONS: Section[] = [
   {
-    title: 'Finance',
+    title: 'Clients',
     items: [
-      { label: 'Dépenses', icon: 'receipt-outline', route: 'Expenses', hint: 'Loyer, salaires, charges...', roles: ['admin'] },
-      { label: 'Créances', icon: 'alarm-outline', route: 'Creances', hint: 'Clients à relancer', roles: ['admin'] },
-      { label: 'Investisseurs', icon: 'trending-up', route: 'Investors', hint: 'Capital & versements', roles: ['admin', 'investor'] },
+      { label: 'Clients', icon: 'people', route: 'Clients', hint: 'Annuaire & créances', roles: ['admin', 'employee', 'vendeur'] },
+      { label: 'Commandes clients', icon: 'clipboard-outline', route: 'CustomerOrders', hint: 'Suivre les commandes en cours', roles: ['admin', 'employee'] },
     ],
   },
   {
-    title: 'Gestion',
+    title: 'Fournisseurs',
     items: [
-      { label: 'Commandes clients', icon: 'clipboard-outline', route: 'CustomerOrders', hint: 'Suivre les commandes en cours', roles: ['admin', 'employee'] },
       { label: 'Fournisseurs & Achats', icon: 'cube-outline', route: 'Suppliers', hint: 'Fournisseurs & historique achats', roles: ['admin'] },
-      { label: 'Clients', icon: 'people', route: 'Clients', hint: 'Annuaire clients', roles: ['admin', 'employee'] },
-      { label: 'Documents', icon: 'document-text', route: 'Documents', hint: 'Contrats & licences', roles: ['admin'] },
+      { label: 'Investisseurs', icon: 'trending-up', route: 'Investors', hint: 'Capital & versements', roles: ['admin', 'investor'] },
     ],
   },
   {
@@ -51,19 +60,17 @@ const ALL_SECTIONS: Section[] = [
     items: [
       { label: 'Saveurs', icon: 'color-palette', route: 'Flavors', hint: 'Créer & gérer les saveurs', roles: ['admin', 'employee'] },
       { label: 'Vrac / Lots', icon: 'layers', route: 'Bulks', hint: 'Créer & gérer les lots', roles: ['admin', 'employee'] },
+      { label: 'Machines', icon: 'hardware-chip-outline', route: 'Machines', hint: 'Équipement, capacité & statut', roles: ['admin', 'employee'] },
     ],
   },
   {
-    title: 'Analyses',
+    title: 'Administration',
     items: [
-      { label: 'Coach IA', icon: 'bulb', route: 'Coach', hint: 'Bilan · Goulot · Action prioritaire', roles: ['admin', 'investor'] },
-      { label: 'Rapports', icon: 'bar-chart', route: 'Reports', hint: 'Statistiques & tendances', roles: ['admin', 'investor'] },
-    ],
-  },
-  {
-    title: 'Usine',
-    items: [
-      { label: 'Paramètres usine', icon: 'settings', route: 'FactorySettings', hint: 'Membres, invitations & rôles', roles: ['admin'] },
+      { label: 'Dépenses', icon: 'receipt-outline', route: 'Expenses', hint: 'Loyer, salaires, charges...', roles: ['admin'] },
+      { label: 'Documents', icon: 'document-text', route: 'Documents', hint: 'Contrats & licences', roles: ['admin', 'inspecteur'] },
+      { label: 'Bilan', icon: 'bar-chart', route: 'Reports', hint: 'Statistiques & tendances', roles: ['admin', 'investor', 'inspecteur'] },
+      { label: 'Orny AI', icon: 'bulb', route: 'Coach', hint: 'Bilan · Goulot · Action prioritaire', roles: ['admin', 'investor'] },
+      { label: 'Paramètres', icon: 'settings', route: 'FactorySettings', hint: 'Membres, invitations & rôles', roles: ['admin'] },
     ],
   },
 ];
@@ -72,26 +79,61 @@ const ROLE_LABELS: Record<UserRole, string> = {
   admin: 'Administrateur',
   employee: 'Employé',
   investor: 'Investisseur',
+  vendeur: 'Vendeur',
+  inspecteur: 'Inspecteur',
 };
 
-const ROLE_COLORS: Record<UserRole, string> = {
-  admin: '#1D9E75',
+// admin tracks the live brand accent (palette.moss) — the other four are
+// deliberately distinct fixed hues outside the main palette, since a role
+// badge needs more distinguishable colors than the app's 1-accent design
+// otherwise provides, and those don't clash with the cool-neutral scheme.
+const makeRoleColors = (palette: Palette): Record<UserRole, string> => ({
+  admin: palette.moss,
   employee: '#5B8AF5',
   investor: '#EF9F27',
-};
+  vendeur: '#8E44AD',
+  inspecteur: '#3E5C76',
+});
 
 export default function PlusScreen() {
+  const { palette } = useTheme();
+  const styles = makeStyles(palette);
+  const ROLE_COLORS = makeRoleColors(palette);
   const navigation = useNavigation<PlusNav>();
   const insets = useSafeAreaInsets();
   const { membership, allMemberships, switchFactory, signOut, user } = useAuth();
   const role = membership?.role ?? 'employee';
 
-  const [profile, setProfile] = useState<UserProfile>({ displayName: '', avatarUri: null });
+  const [profile, setProfile] = useState<UserProfile>({
+    displayName: '', avatarUri: null, preferredLanguage: null, voiceAutoplay: false,
+  });
   const [profileLoaded, setProfileLoaded] = useState(false);
   const [imageLoaded, setImageLoaded] = useState(false);
   const imageOpacity = useRef(new Animated.Value(0)).current;
   const prevAvatarUri = useRef<string | null>(null);
   const [logoutModal, setLogoutModal] = useState(false);
+  const [deleteModal, setDeleteModal] = useState(false);
+  const [deleteConfirmText, setDeleteConfirmText] = useState('');
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  async function handleDeleteAccount() {
+    setDeleting(true);
+    setDeleteError(null);
+    const { error } = await supabase.rpc('delete_my_account');
+    if (error) {
+      setDeleting(false);
+      // Postgres RAISE EXCEPTION surfaces as SQLSTATE P0001 — that message
+      // is already real French copy written for the user (see
+      // db/update16.sql); anything else goes through toFrench() the same
+      // way every other Supabase error in this app already does.
+      setDeleteError((error as { code?: string }).code === 'P0001' ? error.message : toFrench(error.message));
+      return;
+    }
+    // The account (and its session) no longer exists server-side — clear
+    // the local session the same way a normal logout does.
+    await signOut();
+  }
 
   // Reset image state when the avatar URI actually changes
   useEffect(() => {
@@ -171,7 +213,7 @@ export default function PlusScreen() {
             </View>
           </View>
         </View>
-        <Ionicons name="chevron-forward" size={18} color="#BABAB6" />
+        <Ionicons name="chevron-forward" size={18} color={palette.muted} />
       </TouchableOpacity>
 
       {filteredSections.map((section) => (
@@ -185,13 +227,10 @@ export default function PlusScreen() {
                 onPress={() => navigation.navigate(item.route as 'Documents')}
               >
                 <View style={styles.iconWrap}>
-                  <Ionicons name={item.icon} size={22} color={C.primary} />
+                  <Ionicons name={item.icon} size={20} color={palette.ink} />
                 </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.rowLabel}>{item.label}</Text>
-                  {!!item.hint && <Text style={styles.rowHint}>{item.hint}</Text>}
-                </View>
-                <Ionicons name="chevron-forward" size={18} color="#BABAB6" />
+                <Text style={styles.rowLabel}>{item.label}</Text>
+                <Ionicons name="chevron-forward" size={18} color={palette.muted} />
               </TouchableOpacity>
             ))}
           </View>
@@ -209,60 +248,117 @@ export default function PlusScreen() {
                 style={[styles.row, idx === allMemberships.length - 1 && { borderBottomWidth: 0 }]}
                 onPress={() => switchFactory(m.factoryId)}
               >
-                <View style={[styles.iconWrap, membership?.factoryId === m.factoryId && { backgroundColor: '#E8F6F0' }]}>
-                  <Ionicons name="business" size={20} color={membership?.factoryId === m.factoryId ? C.primary : C.muted} />
+                <View style={[styles.iconWrap, membership?.factoryId === m.factoryId && { backgroundColor: palette.mossSoft }]}>
+                  <Ionicons name="business" size={20} color={membership?.factoryId === m.factoryId ? palette.moss : palette.muted} />
                 </View>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.rowLabel}>{m.factoryName}</Text>
                   <Text style={styles.rowHint}>{ROLE_LABELS[m.role]}</Text>
                 </View>
-                {membership?.factoryId === m.factoryId && <Ionicons name="checkmark-circle" size={20} color={C.primary} />}
+                {membership?.factoryId === m.factoryId && <Ionicons name="checkmark-circle" size={20} color={palette.moss} />}
               </TouchableOpacity>
             ))}
           </View>
         </View>
       )}
 
-      <Modal visible={logoutModal} transparent animationType="fade" onRequestClose={() => setLogoutModal(false)}>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalBox}>
-            <Text style={styles.modalTitle}>Se déconnecter ?</Text>
-            <Text style={styles.modalSub}>Vous devrez vous reconnecter pour accéder à l'application.</Text>
-            <TouchableOpacity style={styles.modalLogout} onPress={signOut}>
-              <Text style={styles.modalLogoutText}>Se déconnecter</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.modalCancel} onPress={() => setLogoutModal(false)}>
-              <Text style={styles.modalCancelText}>Annuler</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
+      <ConfirmDialog
+        visible={logoutModal}
+        onClose={() => setLogoutModal(false)}
+        onConfirm={signOut}
+        title="Se déconnecter ?"
+        message="Vous devrez vous reconnecter pour accéder à l'application."
+        confirmLabel="Se déconnecter"
+        icon="log-out-outline"
+        tone="danger"
+      />
 
       {/* Logout */}
       <View style={styles.dangerSection}>
         <Text style={styles.dangerTitle}>Compte</Text>
         <TouchableOpacity style={styles.logoutRow} onPress={() => setLogoutModal(true)}>
-          <View style={[styles.iconWrap, { backgroundColor: '#FDECEA' }]}>
-            <Ionicons name="log-out-outline" size={22} color={C.red} />
+          <View style={[styles.iconWrap, { backgroundColor: palette.criticalSoft }]}>
+            <Ionicons name="log-out-outline" size={22} color={palette.critical} />
           </View>
           <View style={{ flex: 1 }}>
-            <Text style={[styles.rowLabel, { color: C.red }]}>Se déconnecter</Text>
-            <Text style={[styles.rowHint, { color: C.red }]}>{membership?.role === 'admin' ? membership?.factoryName : ''}</Text>
+            <Text style={[styles.rowLabel, { color: palette.critical }]}>Se déconnecter</Text>
+            <Text style={[styles.rowHint, { color: palette.critical }]}>{membership?.role === 'admin' ? membership?.factoryName : ''}</Text>
           </View>
-          <Ionicons name="chevron-forward" size={18} color={C.red} />
+          <Ionicons name="chevron-forward" size={18} color={palette.critical} />
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.logoutRow, { marginTop: 10 }]}
+          onPress={() => { setDeleteConfirmText(''); setDeleteError(null); setDeleteModal(true); }}
+        >
+          <View style={[styles.iconWrap, { backgroundColor: palette.criticalSoft }]}>
+            <Ionicons name="trash-outline" size={22} color={palette.critical} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.rowLabel, { color: palette.critical }]}>Supprimer mon compte</Text>
+            <Text style={[styles.rowHint, { color: palette.critical }]}>Action définitive</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={18} color={palette.critical} />
         </TouchableOpacity>
       </View>
+
+      {/* Delete account confirmation — deliberately higher friction than
+          logout: typing the confirmation word, not just a Yes/No tap, since
+          this is irreversible and (for a sole admin) takes an entire
+          factory's data with it. */}
+      <Modal visible={deleteModal} transparent animationType="fade" onRequestClose={() => setDeleteModal(false)}>
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalBox}>
+              <Text style={styles.modalTitle}>Supprimer votre compte ?</Text>
+              <Text style={styles.modalSub}>
+                Cette action est définitive. Si vous êtes administrateur d'une usine où vous êtes seul, l'usine et toutes ses données (ventes, stock, dépenses…) seront supprimées avec votre compte.
+              </Text>
+              <Text style={[styles.modalSub, { marginTop: 4 }]}>
+                Tapez <Text style={{ fontWeight: '800', color: palette.ink }}>{DELETE_CONFIRM_WORD}</Text> pour confirmer.
+              </Text>
+              <TextInput
+                style={styles.deleteInput}
+                value={deleteConfirmText}
+                onChangeText={setDeleteConfirmText}
+                placeholder={DELETE_CONFIRM_WORD}
+                placeholderTextColor={palette.muted}
+                autoCapitalize="characters"
+                autoCorrect={false}
+              />
+              {!!deleteError && <Text style={styles.deleteErrorText}>{deleteError}</Text>}
+              <TouchableOpacity
+                style={[
+                  styles.modalLogout,
+                  (deleteConfirmText.trim().toUpperCase() !== DELETE_CONFIRM_WORD || deleting) && { opacity: 0.5 },
+                ]}
+                onPress={handleDeleteAccount}
+                disabled={deleteConfirmText.trim().toUpperCase() !== DELETE_CONFIRM_WORD || deleting}
+              >
+                <Text style={styles.modalLogoutText}>{deleting ? 'Suppression…' : 'Supprimer définitivement'}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.modalCancel} onPress={() => setDeleteModal(false)} disabled={deleting}>
+                <Text style={styles.modalCancelText}>Annuler</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </ScrollView>
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: C.bg },
+const makeStyles = (palette: Palette) => StyleSheet.create({
+  container: { flex: 1, backgroundColor: palette.paper },
   content: { padding: 16, paddingBottom: 40 },
+  // No border — palette.card is deliberately a distinct fill from
+  // palette.paper now (not just a shadow-carrying near-duplicate), so the
+  // surface itself reads as "raised" without needing an outline stacked on
+  // top of it. A bordered box announces itself as a canvas; a plain
+  // color-shift doesn't.
   profileCard: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    backgroundColor: C.card, borderRadius: 16, padding: 14,
-    borderWidth: 1, borderColor: C.border, marginBottom: 20,
+    backgroundColor: palette.card, borderRadius: 16, padding: 14,
+    marginBottom: 20,
   },
   profileLeft: { flexDirection: 'row', alignItems: 'center', flex: 1 },
   avatarContainer: {
@@ -270,32 +366,47 @@ const styles = StyleSheet.create({
     overflow: 'hidden', marginRight: 12,
   },
   avatarPlaceholder: {
-    backgroundColor: C.primary,
+    backgroundColor: palette.moss,
     alignItems: 'center', justifyContent: 'center',
   },
   avatarImage: { borderRadius: 26 },
-  avatarInitials: { fontSize: 20, fontWeight: '800', color: '#FFF' },
+  avatarInitials: { fontSize: 20, fontWeight: '800', color: palette.white },
   profileInfo: { flex: 1 },
-  profileName: { fontSize: 16, fontWeight: '700', color: C.text, marginBottom: 4 },
+  profileName: { fontSize: 16, fontWeight: '700', color: palette.ink, marginBottom: 4 },
   profileMeta: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap' },
   rolePill: { borderRadius: 8, paddingHorizontal: 8, paddingVertical: 2, marginRight: 4 },
   rolePillText: { fontSize: 11, fontWeight: '700' },
-  factoryLabel: { fontSize: 12, color: C.muted, flex: 1 },
-  sectionTitle: { fontSize: 12, fontWeight: '700', color: C.muted, textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 8, marginTop: 16 },
-  list: { backgroundColor: C.card, borderRadius: 16, borderWidth: 1, borderColor: C.border, overflow: 'hidden' },
-  row: { flexDirection: 'row', alignItems: 'center', padding: 16, borderBottomWidth: 1, borderColor: '#F0F0EE' },
-  iconWrap: { width: 36, height: 36, borderRadius: 10, backgroundColor: '#E8F6F0', alignItems: 'center', justifyContent: 'center', marginRight: 14 },
-  rowLabel: { fontSize: 16, color: C.text, fontWeight: '500' },
-  rowHint: { fontSize: 12, color: C.muted, marginTop: 1 },
+  factoryLabel: { fontSize: 12, color: palette.muted, flex: 1 },
+  sectionTitle: { fontSize: 12, fontWeight: '700', color: palette.muted, textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 8, marginTop: 16 },
+  list: { backgroundColor: palette.card, borderRadius: 16, overflow: 'hidden' },
+  row: { flexDirection: 'row', alignItems: 'center', padding: 16, borderBottomWidth: 1, borderColor: palette.line },
+  // Neutral by default — color is spent on real signals elsewhere (the
+  // factory switcher's selected state, the danger section), not stamped on
+  // every single menu icon out of habit. A wall of green icons made none of
+  // them mean anything; a quiet gray icon here makes the moss accent
+  // actually stand out where it's still used.
+  iconWrap: { width: 36, height: 36, borderRadius: 10, backgroundColor: palette.line, alignItems: 'center', justifyContent: 'center', marginRight: 14 },
+  rowLabel: { fontSize: 16, color: palette.ink, fontWeight: '500', flex: 1 },
+  rowHint: { fontSize: 12, color: palette.muted, marginTop: 1 },
   dangerSection: { marginTop: 28 },
-  dangerTitle: { fontSize: 12, fontWeight: '700', color: C.muted, marginBottom: 10, textTransform: 'uppercase', letterSpacing: 0.6 },
-  logoutRow: { flexDirection: 'row', alignItems: 'center', padding: 16, backgroundColor: C.card, borderRadius: 16, borderWidth: 1, borderColor: '#FDECEA' },
+  dangerTitle: { fontSize: 12, fontWeight: '700', color: palette.muted, marginBottom: 10, textTransform: 'uppercase', letterSpacing: 0.6 },
+  // No special background at all, and no border — the red icon-wrap and
+  // red label text (set inline where this style is used) already carry
+  // the "destructive" signal on their own; tinting the whole row too would
+  // just be decorating a signal that's already there.
+  logoutRow: { flexDirection: 'row', alignItems: 'center', padding: 16, backgroundColor: palette.card, borderRadius: 16 },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', alignItems: 'center', padding: 24 },
-  modalBox: { backgroundColor: '#fff', borderRadius: 16, padding: 24, width: '100%' },
-  modalTitle: { fontSize: 17, fontWeight: '700', color: C.text, marginBottom: 6 },
-  modalSub: { fontSize: 14, color: C.muted, marginBottom: 20 },
-  modalLogout: { backgroundColor: C.red, borderRadius: 10, padding: 14, alignItems: 'center', marginBottom: 10 },
-  modalLogoutText: { color: '#fff', fontWeight: '700', fontSize: 15 },
-  modalCancel: { borderWidth: 1, borderColor: C.border, borderRadius: 10, padding: 14, alignItems: 'center' },
-  modalCancelText: { color: C.muted, fontWeight: '600', fontSize: 15 },
+  modalBox: { backgroundColor: palette.card, borderRadius: 16, padding: 24, width: '100%' },
+  modalTitle: { fontSize: 17, fontWeight: '700', color: palette.ink, marginBottom: 6 },
+  modalSub: { fontSize: 14, color: palette.muted, marginBottom: 20 },
+  deleteInput: {
+    borderWidth: 1, borderColor: palette.line, borderRadius: 10, padding: 14,
+    fontSize: 16, fontWeight: '700', color: palette.ink, backgroundColor: palette.paper,
+    marginBottom: 12, letterSpacing: 1,
+  },
+  deleteErrorText: { fontSize: 13, color: palette.critical, marginBottom: 12, lineHeight: 18 },
+  modalLogout: { backgroundColor: palette.critical, borderRadius: 10, padding: 14, alignItems: 'center', marginBottom: 10 },
+  modalLogoutText: { color: palette.white, fontWeight: '700', fontSize: 15 },
+  modalCancel: { borderWidth: 1, borderColor: palette.line, borderRadius: 10, padding: 14, alignItems: 'center' },
+  modalCancelText: { color: palette.muted, fontWeight: '600', fontSize: 15 },
 });

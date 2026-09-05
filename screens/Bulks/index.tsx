@@ -1,32 +1,24 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useLayoutEffect } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity,
   Modal, TextInput, Alert, KeyboardAvoidingView, Platform, ScrollView,
 } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useFocusEffect } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { getBulks, addBulk, updateBulk, deleteBulk, syncBulksFromSupabase } from '../../store/bulks';
 import { getFlavors, syncFlavorsFromSupabase } from '../../store/flavors';
 import { BulkProduct, ProductFlavor } from '../../types';
 import { formatGNF } from '../../utils/format';
-
-const C = {
-  primary: '#1D9E75',
-  red: '#E24B4A',
-  orange: '#EF9F27',
-  bg: '#F8F8F6',
-  card: '#FFFFFF',
-  text: '#1A1A18',
-  muted: '#6B6B66',
-  border: '#E8E8E4',
-};
+import { Palette } from '../../theme/tokens';
+import { useTheme } from '../../theme/ThemeContext';
 
 type FormState = { name: string; flavorId: string; bagCount: string; unitPrice: string };
 const EMPTY_FORM: FormState = { name: '', flavorId: '', bagCount: '15', unitPrice: '' };
 
 export default function BulksScreen() {
-  const insets = useSafeAreaInsets();
+  const { palette } = useTheme();
+  const styles = makeStyles(palette);
+  const navigation = useNavigation();
   const [bulks, setBulksState] = useState<BulkProduct[]>([]);
   const [flavors, setFlavorsState] = useState<ProductFlavor[]>([]);
   const [showModal, setShowModal] = useState(false);
@@ -103,21 +95,31 @@ export default function BulksScreen() {
     setDeleteTarget(b);
   };
 
-  return (
-    <View style={[styles.container, { paddingTop: insets.top }]}>
-      <View style={styles.header}>
-        <View>
-          <Text style={styles.title}>Vrac / Lots</Text>
-          <Text style={styles.subtitle}>{bulks.length} lot{bulks.length !== 1 ? 's' : ''}</Text>
+  // Title + count and the "+" both live in the native header (this screen
+  // has one — see the rule in navigation/index.tsx), not duplicated below.
+  useLayoutEffect(() => {
+    navigation.setOptions({
+      headerTitle: () => (
+        <View style={{ alignItems: 'center' }}>
+          <Text style={styles.headerTitle}>Vrac / Lots</Text>
+          <Text style={styles.headerCount}>{bulks.length} lot{bulks.length !== 1 ? 's' : ''}</Text>
         </View>
-        <TouchableOpacity style={styles.addBtn} onPress={openAdd}>
-          <Ionicons name="add" size={24} color="#FFFFFF" />
+      ),
+      headerRight: () => (
+        <TouchableOpacity onPress={openAdd} hitSlop={8}>
+          <Ionicons name="add" size={26} color={palette.moss} />
         </TouchableOpacity>
-      </View>
+      ),
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [navigation, bulks.length, palette.moss]);
+
+  return (
+    <View style={styles.container}>
 
       {flavors.length === 0 && (
         <View style={styles.warningBanner}>
-          <Ionicons name="information-circle-outline" size={16} color={C.orange} />
+          <Ionicons name="information-circle-outline" size={16} color={palette.caution} />
           <Text style={styles.warningText}>Créez d'abord des saveurs dans Menu &gt; Saveurs</Text>
         </View>
       )}
@@ -128,7 +130,7 @@ export default function BulksScreen() {
         contentContainerStyle={styles.list}
         ListEmptyComponent={
           <View style={styles.emptyWrap}>
-            <Ionicons name="layers-outline" size={48} color={C.muted} />
+            <Ionicons name="layers-outline" size={48} color={palette.muted} />
             <Text style={styles.emptyText}>Aucun lot défini</Text>
             <Text style={styles.emptyHint}>Créez un lot pour vendre en vrac</Text>
           </View>
@@ -137,7 +139,7 @@ export default function BulksScreen() {
           <View style={styles.card}>
             <View style={styles.cardTop}>
               <View style={styles.iconBox}>
-                <Ionicons name="layers" size={22} color={C.primary} />
+                <Ionicons name="layers" size={22} color={palette.moss} />
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={styles.bulkName}>{item.name}</Text>
@@ -147,10 +149,10 @@ export default function BulksScreen() {
               </View>
               <View style={styles.actions}>
                 <TouchableOpacity style={styles.actionBtn} onPress={() => openEdit(item)}>
-                  <Ionicons name="pencil-outline" size={18} color={C.primary} />
+                  <Ionicons name="pencil-outline" size={18} color={palette.moss} />
                 </TouchableOpacity>
                 <TouchableOpacity style={styles.actionBtn} onPress={() => handleDelete(item)}>
-                  <Ionicons name="trash-outline" size={18} color={C.red} />
+                  <Ionicons name="trash-outline" size={18} color={palette.critical} />
                 </TouchableOpacity>
               </View>
             </View>
@@ -169,7 +171,7 @@ export default function BulksScreen() {
       <Modal visible={!!deleteTarget} transparent animationType="fade" onRequestClose={() => setDeleteTarget(null)}>
         <View style={styles.confirmOverlay}>
           <View style={styles.confirmBox}>
-            <Ionicons name="trash-outline" size={32} color={C.red} style={{ alignSelf: 'center', marginBottom: 12 }} />
+            <Ionicons name="trash-outline" size={32} color={palette.critical} style={{ alignSelf: 'center', marginBottom: 12 }} />
             <Text style={styles.confirmTitle}>Supprimer ce vrac ?</Text>
             <Text style={styles.confirmSub}>
               {deleteTarget ? `"${deleteTarget.name}" sera supprimé.` : ''}
@@ -223,7 +225,7 @@ export default function BulksScreen() {
                       >
                         <Text style={[
                           styles.flavorPillText,
-                          form.flavorId === fl.id && { color: '#fff' },
+                          form.flavorId === fl.id && { color: palette.white },
                         ]}>
                           {fl.label}
                         </Text>
@@ -275,91 +277,82 @@ export default function BulksScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: C.bg },
-  header: {
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    paddingHorizontal: 16, paddingVertical: 12,
-    backgroundColor: C.card, borderBottomWidth: 1, borderColor: C.border,
-  },
-  title: { fontSize: 22, fontWeight: '700', color: C.text },
-  subtitle: { fontSize: 13, color: C.muted, marginTop: 2 },
-  addBtn: {
-    width: 44, height: 44, borderRadius: 22,
-    backgroundColor: C.primary, alignItems: 'center', justifyContent: 'center',
-  },
+const makeStyles = (palette: Palette) => StyleSheet.create({
+  container: { flex: 1, backgroundColor: palette.paper },
+  headerTitle: { fontSize: 17, fontWeight: '700', color: palette.ink },
+  headerCount: { fontSize: 12, color: palette.muted, marginTop: 1 },
   warningBanner: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
-    backgroundColor: '#FEF4E4', padding: 12, margin: 16, borderRadius: 10,
-    borderWidth: 1, borderColor: '#F5D78E',
+    backgroundColor: palette.cautionSoft, padding: 12, margin: 16, borderRadius: 10,
+    borderWidth: 1, borderColor: palette.caution + '40',
   },
-  warningText: { fontSize: 13, color: C.orange, flex: 1 },
+  warningText: { fontSize: 13, color: palette.caution, flex: 1 },
   list: { padding: 16, paddingBottom: 40, gap: 10 },
   emptyWrap: { alignItems: 'center', paddingTop: 60, gap: 8 },
-  emptyText: { fontSize: 16, fontWeight: '600', color: C.muted },
-  emptyHint: { fontSize: 13, color: C.muted, textAlign: 'center' },
+  emptyText: { fontSize: 16, fontWeight: '600', color: palette.muted },
+  emptyHint: { fontSize: 13, color: palette.muted, textAlign: 'center' },
   card: {
-    backgroundColor: C.card, borderRadius: 12, padding: 14,
-    borderWidth: 1, borderColor: C.border,
+    backgroundColor: palette.card, borderRadius: 12, padding: 14,
+    borderWidth: 1, borderColor: palette.line,
     shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 4, elevation: 1,
     gap: 10,
   },
   cardTop: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   iconBox: {
     width: 44, height: 44, borderRadius: 10,
-    backgroundColor: '#E8F6F0', alignItems: 'center', justifyContent: 'center',
+    backgroundColor: palette.mossSoft, alignItems: 'center', justifyContent: 'center',
   },
-  bulkName: { fontSize: 16, fontWeight: '600', color: C.text },
-  bulkMeta: { fontSize: 13, color: C.muted, marginTop: 2 },
+  bulkName: { fontSize: 16, fontWeight: '600', color: palette.ink },
+  bulkMeta: { fontSize: 13, color: palette.muted, marginTop: 2 },
   actions: { flexDirection: 'row', gap: 4 },
   actionBtn: { width: 36, height: 36, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
-  priceRow: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: C.bg, borderRadius: 8, padding: 10 },
-  priceLabel: { fontSize: 12, color: C.muted },
-  priceValue: { fontSize: 15, fontWeight: '700', color: C.primary, flex: 1 },
-  perBagText: { fontSize: 12, color: C.muted },
+  priceRow: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: palette.paper, borderRadius: 8, padding: 10 },
+  priceLabel: { fontSize: 12, color: palette.muted },
+  priceValue: { fontSize: 15, fontWeight: '700', color: palette.moss, flex: 1 },
+  perBagText: { fontSize: 12, color: palette.muted },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
   modalCard: {
-    backgroundColor: C.card, borderTopLeftRadius: 20, borderTopRightRadius: 20,
+    backgroundColor: palette.card, borderTopLeftRadius: 20, borderTopRightRadius: 20,
     padding: 24, paddingBottom: 40, maxHeight: '90%',
   },
-  modalTitle: { fontSize: 18, fontWeight: '700', color: C.text, marginBottom: 16 },
-  fieldLabel: { fontSize: 14, fontWeight: '600', color: C.text, marginTop: 12, marginBottom: 4 },
+  modalTitle: { fontSize: 18, fontWeight: '700', color: palette.ink, marginBottom: 16 },
+  fieldLabel: { fontSize: 14, fontWeight: '600', color: palette.ink, marginTop: 12, marginBottom: 4 },
   input: {
-    backgroundColor: C.bg, borderRadius: 12, borderWidth: 1,
-    borderColor: C.border, padding: 14, fontSize: 16, color: C.text,
+    backgroundColor: palette.paper, borderRadius: 12, borderWidth: 1,
+    borderColor: palette.line, padding: 14, fontSize: 16, color: palette.ink,
   },
   flavorPill: {
     paddingHorizontal: 14, paddingVertical: 10, borderRadius: 20,
-    backgroundColor: C.bg, borderWidth: 1, borderColor: C.border,
+    backgroundColor: palette.paper, borderWidth: 1, borderColor: palette.line,
   },
-  flavorPillActive: { backgroundColor: C.primary, borderColor: C.primary },
-  flavorPillText: { fontSize: 14, color: C.text, fontWeight: '500' },
-  perBagCalc: { fontSize: 13, color: C.primary, marginTop: 6, fontWeight: '600' },
+  flavorPillActive: { backgroundColor: palette.moss, borderColor: palette.moss },
+  flavorPillText: { fontSize: 14, color: palette.ink, fontWeight: '500' },
+  perBagCalc: { fontSize: 13, color: palette.moss, marginTop: 6, fontWeight: '600' },
   modalActions: { flexDirection: 'row', gap: 10, marginTop: 20 },
   cancelBtn: {
-    flex: 1, height: 52, borderRadius: 12, backgroundColor: C.bg,
-    borderWidth: 1, borderColor: C.border, alignItems: 'center', justifyContent: 'center',
+    flex: 1, height: 52, borderRadius: 12, backgroundColor: palette.paper,
+    borderWidth: 1, borderColor: palette.line, alignItems: 'center', justifyContent: 'center',
   },
-  cancelText: { fontSize: 16, color: C.muted, fontWeight: '600' },
+  cancelText: { fontSize: 16, color: palette.muted, fontWeight: '600' },
   confirmBtn: {
-    flex: 1, height: 52, borderRadius: 12, backgroundColor: C.primary,
+    flex: 1, height: 52, borderRadius: 12, backgroundColor: palette.moss,
     alignItems: 'center', justifyContent: 'center',
   },
-  confirmText: { fontSize: 16, color: '#FFFFFF', fontWeight: '700' },
+  confirmText: { fontSize: 16, color: palette.white, fontWeight: '700' },
   confirmOverlay: {
     flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', padding: 24,
   },
-  confirmBox: { backgroundColor: C.card, borderRadius: 16, padding: 24 },
-  confirmTitle: { fontSize: 17, fontWeight: '700', color: C.text, textAlign: 'center', marginBottom: 6 },
-  confirmSub: { fontSize: 14, color: C.muted, textAlign: 'center', marginBottom: 20 },
+  confirmBox: { backgroundColor: palette.card, borderRadius: 16, padding: 24 },
+  confirmTitle: { fontSize: 17, fontWeight: '700', color: palette.ink, textAlign: 'center', marginBottom: 6 },
+  confirmSub: { fontSize: 14, color: palette.muted, textAlign: 'center', marginBottom: 20 },
   confirmDeleteBtn: {
-    backgroundColor: C.red, borderRadius: 12, height: 52,
+    backgroundColor: palette.critical, borderRadius: 12, height: 52,
     alignItems: 'center', justifyContent: 'center', marginBottom: 10,
   },
-  confirmDeleteText: { color: '#FFFFFF', fontSize: 16, fontWeight: '700' },
+  confirmDeleteText: { color: palette.white, fontSize: 16, fontWeight: '700' },
   confirmCancelBtn: {
-    borderRadius: 12, height: 52, borderWidth: 1, borderColor: C.border,
+    borderRadius: 12, height: 52, borderWidth: 1, borderColor: palette.line,
     alignItems: 'center', justifyContent: 'center',
   },
-  confirmCancelText: { fontSize: 16, color: C.muted, fontWeight: '600' },
+  confirmCancelText: { fontSize: 16, color: palette.muted, fontWeight: '600' },
 });

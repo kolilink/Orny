@@ -1,13 +1,12 @@
-import React, { useState, useCallback, useRef, useEffect } from 'react';
+import React, { useState, useCallback, useRef, useEffect, useLayoutEffect } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, FlatList,
   TextInput, Alert, Modal, ScrollView,
 } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useFocusEffect } from '@react-navigation/native';
+import { RouteProp, useFocusEffect, useNavigation, useRoute } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { CustomerOrder } from '../../types';
+import { CustomerOrder, RootStackParamList } from '../../types';
 import DatePickerField from '../../components/DatePickerField';
 import {
   getCustomerOrders, addCustomerOrder, updateCustomerOrderStatus,
@@ -15,18 +14,16 @@ import {
 } from '../../store/customerOrders';
 import { formatGNF } from '../../utils/format';
 import { getFactoryId } from '../../store/context';
+import { Palette } from '../../theme/tokens';
+import { useTheme } from '../../theme/ThemeContext';
+import { ConfirmDialog } from '../../components/ui';
 
-const C = {
-  primary: '#1D9E75', red: '#E24B4A', orange: '#EF9F27',
-  bg: '#F8F8F6', card: '#FFFFFF', text: '#1A1A18', muted: '#6B6B66', border: '#E8E8E4',
-};
-
-const STATUS_CONFIG: Record<CustomerOrder['status'], { label: string; color: string; icon: string }> = {
-  pending:   { label: 'En attente', color: C.orange,  icon: 'time-outline' },
-  ready:     { label: 'Prêt',       color: C.primary, icon: 'checkmark-circle-outline' },
-  delivered: { label: 'Livré',      color: '#6B6B66', icon: 'archive-outline' },
-  cancelled: { label: 'Annulé',     color: C.red,     icon: 'close-circle-outline' },
-};
+const makeStatusConfig = (palette: Palette): Record<CustomerOrder['status'], { label: string; color: string; icon: string }> => ({
+  pending:   { label: 'En attente', color: palette.caution,  icon: 'time-outline' },
+  ready:     { label: 'Prêt',       color: palette.moss, icon: 'checkmark-circle-outline' },
+  delivered: { label: 'Livré',      color: palette.muted, icon: 'archive-outline' },
+  cancelled: { label: 'Annulé',     color: palette.critical,     icon: 'close-circle-outline' },
+});
 
 function toDateStr(d: Date) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -40,11 +37,18 @@ function daysUntil(dateStr: string): number {
   return Math.round((target.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
 }
 
+type OrdersRoute = RouteProp<RootStackParamList, 'CustomerOrders'>;
+
 export default function CustomerOrdersScreen() {
-  const insets = useSafeAreaInsets();
+  const { palette } = useTheme();
+  const styles = makeStyles(palette);
+  const STATUS_CONFIG = makeStatusConfig(palette);
+  const navigation = useNavigation();
+  const { params } = useRoute<OrdersRoute>();
   const [orders, setOrders] = useState<CustomerOrder[]>([]);
   const [tab, setTab] = useState<'active' | 'history'>('active');
   const [addModal, setAddModal] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
 
   const [clientName, setClientName] = useState('');
   const [product, setProduct] = useState('');
@@ -57,7 +61,17 @@ export default function CustomerOrdersScreen() {
   const draftKey = `customer_order_draft_${getFactoryId() ?? 'default'}`;
   const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Coming from a client's "add order" shortcut (Clients screen) takes
+  // priority over a stale draft — a deliberate deep-link intent for THIS
+  // client shouldn't be silently overwritten by an old abandoned draft for
+  // a different one, so the draft is skipped entirely in that case rather
+  // than loaded and then partially overwritten.
   useEffect(() => {
+    if (params?.initialClientName) {
+      setClientName(params.initialClientName);
+      setAddModal(true);
+      return;
+    }
     AsyncStorage.getItem(draftKey).then((raw) => {
       if (!raw) return;
       try {
@@ -120,16 +134,8 @@ export default function CustomerOrdersScreen() {
     setOrders((prev) => prev.map((o) => o.id === order.id ? { ...o, status: newStatus } : o));
   }
 
-  async function handleDelete(id: string) {
-    Alert.alert('Supprimer la commande ?', undefined, [
-      { text: 'Annuler', style: 'cancel' },
-      {
-        text: 'Supprimer', style: 'destructive', onPress: async () => {
-          await deleteCustomerOrder(id);
-          setOrders((prev) => prev.filter((o) => o.id !== id));
-        },
-      },
-    ]);
+  function handleDelete(id: string) {
+    setDeleteTarget(id);
   }
 
   const activeOrders = orders.filter((o) => o.status === 'pending' || o.status === 'ready');
@@ -138,14 +144,20 @@ export default function CustomerOrdersScreen() {
 
   const pendingValue = activeOrders.reduce((sum, o) => sum + o.totalAmount, 0);
 
-  return (
-    <View style={[styles.container, { paddingTop: insets.top }]}>
-      <View style={styles.header}>
-        <Text style={styles.title}>Commandes clients</Text>
-        <TouchableOpacity style={styles.addBtn} onPress={() => setAddModal(true)}>
-          <Ionicons name="add" size={22} color="#FFF" />
+  // "+" lives in the native header (this screen has one — see the rule in
+  // navigation/index.tsx), not duplicated as its own row below it.
+  useLayoutEffect(() => {
+    navigation.setOptions({
+      headerRight: () => (
+        <TouchableOpacity onPress={() => setAddModal(true)} hitSlop={8}>
+          <Ionicons name="add" size={26} color={palette.moss} />
         </TouchableOpacity>
-      </View>
+      ),
+    });
+  }, [navigation, palette.moss]);
+
+  return (
+    <View style={styles.container}>
 
       {activeOrders.length > 0 && (
         <View style={styles.summaryRow}>
@@ -196,7 +208,7 @@ export default function CustomerOrdersScreen() {
                   <Ionicons name={cfg.icon as any} size={13} color={cfg.color} />
                   <Text style={[styles.statusText, { color: cfg.color }]}>{cfg.label}</Text>
                 </View>
-                <Text style={[styles.deliveryDate, isLate && { color: C.red }, isToday && { color: C.orange }]}>
+                <Text style={[styles.deliveryDate, isLate && { color: palette.critical }, isToday && { color: palette.caution }]}>
                   Livraison : {isLate ? `${Math.abs(days)}j de retard` : isToday ? "Aujourd'hui" : item.deliveryDate}
                 </Text>
               </View>
@@ -206,22 +218,22 @@ export default function CustomerOrdersScreen() {
               {(item.status === 'pending' || item.status === 'ready') && (
                 <View style={styles.actions}>
                   {item.status === 'pending' && (
-                    <TouchableOpacity style={[styles.actionBtn, { borderColor: C.primary }]} onPress={() => handleStatusChange(item, 'ready')}>
-                      <Text style={[styles.actionText, { color: C.primary }]}>Prêt ✓</Text>
+                    <TouchableOpacity style={[styles.actionBtn, { borderColor: palette.moss }]} onPress={() => handleStatusChange(item, 'ready')}>
+                      <Text style={[styles.actionText, { color: palette.moss }]}>Prêt ✓</Text>
                     </TouchableOpacity>
                   )}
-                  <TouchableOpacity style={[styles.actionBtn, { borderColor: C.muted }]} onPress={() => handleStatusChange(item, 'delivered')}>
-                    <Text style={[styles.actionText, { color: C.muted }]}>Livré</Text>
+                  <TouchableOpacity style={[styles.actionBtn, { borderColor: palette.muted }]} onPress={() => handleStatusChange(item, 'delivered')}>
+                    <Text style={[styles.actionText, { color: palette.muted }]}>Livré</Text>
                   </TouchableOpacity>
-                  <TouchableOpacity style={[styles.actionBtn, { borderColor: C.red }]} onPress={() => handleStatusChange(item, 'cancelled')}>
-                    <Text style={[styles.actionText, { color: C.red }]}>Annuler</Text>
+                  <TouchableOpacity style={[styles.actionBtn, { borderColor: palette.critical }]} onPress={() => handleStatusChange(item, 'cancelled')}>
+                    <Text style={[styles.actionText, { color: palette.critical }]}>Annuler</Text>
                   </TouchableOpacity>
                 </View>
               )}
 
               {(item.status === 'delivered' || item.status === 'cancelled') && (
                 <TouchableOpacity style={styles.deleteBtn} onPress={() => handleDelete(item.id)}>
-                  <Ionicons name="trash-outline" size={15} color={C.red} />
+                  <Ionicons name="trash-outline" size={15} color={palette.critical} />
                   <Text style={styles.deleteBtnText}>Supprimer</Text>
                 </TouchableOpacity>
               )}
@@ -230,23 +242,40 @@ export default function CustomerOrdersScreen() {
         }}
       />
 
+      {/* Delete confirm */}
+      <ConfirmDialog
+        visible={!!deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={async () => {
+          if (!deleteTarget) return;
+          await deleteCustomerOrder(deleteTarget);
+          setOrders((prev) => prev.filter((o) => o.id !== deleteTarget));
+          setDeleteTarget(null);
+        }}
+        title="Supprimer la commande ?"
+        message="Cette action est irréversible."
+        confirmLabel="Supprimer"
+        icon="trash-outline"
+        tone="danger"
+      />
+
       <Modal visible={addModal} transparent animationType="slide">
         <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={() => setAddModal(false)} />
         <View style={styles.sheet}>
           <Text style={styles.sheetTitle}>Nouvelle commande</Text>
           <ScrollView keyboardShouldPersistTaps="handled">
             <Text style={styles.fieldLabel}>Client *</Text>
-            <TextInput style={styles.input} value={clientName} onChangeText={setClientName} placeholder="Nom du client" placeholderTextColor={C.muted} />
+            <TextInput style={styles.input} value={clientName} onChangeText={setClientName} placeholder="Nom du client" placeholderTextColor={palette.muted} />
             <Text style={styles.fieldLabel}>Produit *</Text>
-            <TextInput style={styles.input} value={product} onChangeText={setProduct} placeholder="Ex: Produit A, Lot x10..." placeholderTextColor={C.muted} />
+            <TextInput style={styles.input} value={product} onChangeText={setProduct} placeholder="Ex: Produit A, Lot x10..." placeholderTextColor={palette.muted} />
             <View style={{ flexDirection: 'row', gap: 10 }}>
               <View style={{ flex: 1 }}>
                 <Text style={styles.fieldLabel}>Quantité *</Text>
-                <TextInput style={styles.input} value={qty} onChangeText={setQty} placeholder="100" placeholderTextColor={C.muted} keyboardType="numeric" />
+                <TextInput style={styles.input} value={qty} onChangeText={setQty} placeholder="100" placeholderTextColor={palette.muted} keyboardType="numeric" />
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={styles.fieldLabel}>Prix unitaire *</Text>
-                <TextInput style={styles.input} value={unitPrice} onChangeText={setUnitPrice} placeholder="GNF" placeholderTextColor={C.muted} keyboardType="numeric" />
+                <TextInput style={styles.input} value={unitPrice} onChangeText={setUnitPrice} placeholder="GNF" placeholderTextColor={palette.muted} keyboardType="numeric" />
               </View>
             </View>
             {qty && unitPrice ? (
@@ -254,7 +283,7 @@ export default function CustomerOrdersScreen() {
             ) : null}
             <DatePickerField label="Date de livraison *" value={deliveryDate} onChange={setDeliveryDate} />
             <Text style={styles.fieldLabel}>Notes</Text>
-            <TextInput style={styles.input} value={notes} onChangeText={setNotes} placeholder="Optionnel" placeholderTextColor={C.muted} />
+            <TextInput style={styles.input} value={notes} onChangeText={setNotes} placeholder="Optionnel" placeholderTextColor={palette.muted} />
             <TouchableOpacity style={styles.confirmBtn} onPress={handleAdd}>
               <Text style={styles.confirmBtnText}>Créer la commande</Text>
             </TouchableOpacity>
@@ -265,41 +294,38 @@ export default function CustomerOrdersScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: C.bg },
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16, paddingBottom: 8 },
-  title: { fontSize: 22, fontWeight: '700', color: C.text },
-  addBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: C.primary, alignItems: 'center', justifyContent: 'center' },
-  summaryRow: { marginHorizontal: 16, marginBottom: 8, backgroundColor: '#E8F6F0', borderRadius: 10, padding: 10 },
-  summaryText: { fontSize: 13, fontWeight: '600', color: C.primary, textAlign: 'center' },
-  tabs: { flexDirection: 'row', marginHorizontal: 16, marginBottom: 12, backgroundColor: '#EDEDEB', borderRadius: 12, padding: 4 },
+const makeStyles = (palette: Palette) => StyleSheet.create({
+  container: { flex: 1, backgroundColor: palette.paper },
+  summaryRow: { marginHorizontal: 16, marginBottom: 8, backgroundColor: palette.mossSoft, borderRadius: 10, padding: 10 },
+  summaryText: { fontSize: 13, fontWeight: '600', color: palette.moss, textAlign: 'center' },
+  tabs: { flexDirection: 'row', marginHorizontal: 16, marginBottom: 12, backgroundColor: palette.paper, borderRadius: 12, padding: 4 },
   tab: { flex: 1, paddingVertical: 8, borderRadius: 10, alignItems: 'center' },
-  tabActive: { backgroundColor: C.card },
-  tabText: { fontSize: 13, color: C.muted, fontWeight: '500' },
-  tabTextActive: { color: C.text, fontWeight: '700' },
-  card: { backgroundColor: C.card, borderRadius: 14, padding: 14, borderWidth: 1, borderColor: C.border },
-  cardLate: { borderColor: C.red, borderWidth: 1.5 },
+  tabActive: { backgroundColor: palette.card },
+  tabText: { fontSize: 13, color: palette.muted, fontWeight: '500' },
+  tabTextActive: { color: palette.ink, fontWeight: '700' },
+  card: { backgroundColor: palette.card, borderRadius: 14, padding: 14, borderWidth: 1, borderColor: palette.line },
+  cardLate: { borderColor: palette.critical, borderWidth: 1.5 },
   cardTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 },
-  clientName: { fontSize: 16, fontWeight: '700', color: C.text },
-  product: { fontSize: 13, color: C.muted, marginTop: 2 },
-  amount: { fontSize: 16, fontWeight: '700', color: C.text },
+  clientName: { fontSize: 16, fontWeight: '700', color: palette.ink },
+  product: { fontSize: 13, color: palette.muted, marginTop: 2 },
+  amount: { fontSize: 16, fontWeight: '700', color: palette.ink },
   cardMid: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
   statusPill: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 20 },
   statusText: { fontSize: 12, fontWeight: '700' },
-  deliveryDate: { fontSize: 12, color: C.muted },
-  notes: { fontSize: 12, color: C.muted, fontStyle: 'italic', marginBottom: 8 },
+  deliveryDate: { fontSize: 12, color: palette.muted },
+  notes: { fontSize: 12, color: palette.muted, fontStyle: 'italic', marginBottom: 8 },
   actions: { flexDirection: 'row', gap: 8, marginTop: 6 },
   actionBtn: { flex: 1, paddingVertical: 8, borderRadius: 10, borderWidth: 1, alignItems: 'center' },
   actionText: { fontSize: 13, fontWeight: '600' },
   deleteBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 6, justifyContent: 'flex-end' },
-  deleteBtnText: { fontSize: 13, color: C.red },
-  empty: { textAlign: 'center', color: C.muted, marginTop: 40, fontSize: 15, lineHeight: 24 },
+  deleteBtnText: { fontSize: 13, color: palette.critical },
+  empty: { textAlign: 'center', color: palette.muted, marginTop: 40, fontSize: 15, lineHeight: 24 },
   overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.3)' },
-  sheet: { backgroundColor: C.card, borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, paddingBottom: 40 },
-  sheetTitle: { fontSize: 17, fontWeight: '700', color: C.text, marginBottom: 16 },
-  fieldLabel: { fontSize: 13, fontWeight: '600', color: C.muted, marginBottom: 6, marginTop: 12 },
-  input: { backgroundColor: '#F8F8F6', borderRadius: 12, padding: 14, fontSize: 16, color: C.text, borderWidth: 1, borderColor: C.border },
-  totalPreview: { fontSize: 14, fontWeight: '700', color: C.primary, marginTop: 6, textAlign: 'right' },
-  confirmBtn: { marginTop: 20, backgroundColor: C.primary, borderRadius: 14, padding: 16, alignItems: 'center' },
-  confirmBtnText: { color: '#FFF', fontSize: 16, fontWeight: '700' },
+  sheet: { backgroundColor: palette.card, borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, paddingBottom: 40 },
+  sheetTitle: { fontSize: 17, fontWeight: '700', color: palette.ink, marginBottom: 16 },
+  fieldLabel: { fontSize: 13, fontWeight: '600', color: palette.muted, marginBottom: 6, marginTop: 12 },
+  input: { backgroundColor: palette.paper, borderRadius: 12, padding: 14, fontSize: 16, color: palette.ink, borderWidth: 1, borderColor: palette.line },
+  totalPreview: { fontSize: 14, fontWeight: '700', color: palette.moss, marginTop: 6, textAlign: 'right' },
+  confirmBtn: { marginTop: 20, backgroundColor: palette.moss, borderRadius: 14, padding: 16, alignItems: 'center' },
+  confirmBtnText: { color: palette.white, fontSize: 16, fontWeight: '700' },
 });

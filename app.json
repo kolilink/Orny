@@ -4,27 +4,40 @@
     "slug": "orny",
     "scheme": "corning",
     "version": "1.0.0",
+    "runtimeVersion": {
+      "policy": "fingerprint"
+    },
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
+      "backgroundColor": "#10B981"
     },
     "ios": {
       "supportsTablet": true,
+      "bundleIdentifier": "com.kolilink.orny",
       "infoPlist": {
-        "NSUserNotificationUsageDescription": "Alertes de stock bas et commandes en retard."
-      }
+        "NSUserNotificationUsageDescription": "Alertes de stock bas et commandes en retard.",
+        "NSCameraUsageDescription": "Utilisée pour photographier des documents (contrats, licences, factures) et prendre votre photo de profil.",
+        "NSPhotoLibraryUsageDescription": "Utilisée pour choisir une photo de document (contrats, licences, factures) ou votre photo de profil depuis votre galerie.",
+        "ITSAppUsesNonExemptEncryption": false
+      },
+      "buildNumber": "3"
     },
     "android": {
+      "package": "com.kolilink.orny",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#ffffff"
+        "backgroundColor": "#10B981"
       },
-      "edgeToEdgeEnabled": true
+      "edgeToEdgeEnabled": true,
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -32,14 +45,43 @@
     "plugins": [
       "expo-secure-store",
       "expo-web-browser",
+      "expo-apple-authentication",
       [
         "expo-notifications",
         {
-          "icon": "./assets/icon.png",
-          "color": "#1D9E75"
+          "icon": "./assets/adaptive-icon.png",
+          "color": "#10B981",
+          "sounds": [
+            "./assets/notification.wav"
+          ]
         }
       ],
-      "@react-native-community/datetimepicker"
-    ]
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Utilisée pour choisir une photo de document ou votre photo de profil depuis votre galerie.",
+          "cameraPermission": "Utilisée pour photographier des documents et prendre votre photo de profil."
+        }
+      ],
+      "@react-native-community/datetimepicker",
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Utilisée pour enregistrer votre question vocale pour Orny AI."
+        }
+      ]
+    ],
+    "updates": {
+      "url": "https://u.expo.dev/0476844a-02e0-49ce-848e-5f09affd0a72",
+      "enabled": true,
+      "checkAutomatically": "ON_LOAD",
+      "fallbackToCacheTimeout": 0
+    },
+    "extra": {
+      "eas": {
+        "projectId": "0476844a-02e0-49ce-848e-5f09affd0a72"
+      }
+    },
+    "owner": "krispyup"
   }
 }

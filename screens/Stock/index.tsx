@@ -8,18 +8,8 @@ import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { getStock, updateStock, addStockItem, deleteStockItem } from '../../store/stock';
 import { StockItem } from '../../types';
-import { formatDate } from '../../utils/format';
-
-const C = {
-  primary: '#1D9E75',
-  red: '#E24B4A',
-  orange: '#EF9F27',
-  bg: '#F8F8F6',
-  card: '#FFFFFF',
-  text: '#1A1A18',
-  muted: '#6B6B66',
-  border: '#E8E8E4',
-};
+import { Palette } from '../../theme/tokens';
+import { useTheme } from '../../theme/ThemeContext';
 
 type StockStatus = 'CRITIQUE' | 'FAIBLE' | 'OK';
 
@@ -29,17 +19,20 @@ const getStatus = (item: StockItem): StockStatus => {
   return 'OK';
 };
 
-const STATUS_COLORS: Record<StockStatus, { bg: string; text: string }> = {
-  CRITIQUE: { bg: '#FDECEA', text: C.red },
-  FAIBLE: { bg: '#FEF4E4', text: C.orange },
-  OK: { bg: '#E8F6F0', text: C.primary },
-};
+const makeStatusColors = (palette: Palette): Record<StockStatus, { bg: string; text: string }> => ({
+  CRITIQUE: { bg: palette.criticalSoft, text: palette.critical },
+  FAIBLE: { bg: palette.cautionSoft, text: palette.caution },
+  OK: { bg: palette.mossSoft, text: palette.moss },
+});
 
 type NewItemForm = { name: string; unit: string; currentLevel: string; alertThreshold: string };
 const EMPTY_ITEM: NewItemForm = { name: '', unit: '', currentLevel: '0', alertThreshold: '0' };
 
 export default function StockScreen() {
   const insets = useSafeAreaInsets();
+  const { palette } = useTheme();
+  const styles = makeStyles(palette);
+  const STATUS_COLORS = makeStatusColors(palette);
   const [stock, setStockState] = useState<StockItem[]>([]);
   const [showUpdateModal, setShowUpdateModal] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
@@ -110,52 +103,53 @@ export default function StockScreen() {
       <View style={styles.header}>
         <Text style={styles.title}>Stock</Text>
         <TouchableOpacity style={styles.addBtn} onPress={() => setShowAddModal(true)}>
-          <Ionicons name="add" size={24} color="#FFFFFF" />
+          <Ionicons name="add" size={24} color={palette.white} />
         </TouchableOpacity>
       </View>
 
       <ScrollView contentContainerStyle={styles.content}>
         {criticalItems.length > 0 && (
           <View style={styles.alertBanner}>
+            <Ionicons name="alert-circle" size={16} color={palette.white} />
             <Text style={styles.alertText}>
-              ⚠ {criticalItems.length} article{criticalItems.length > 1 ? 's' : ''} en stock critique
+              {criticalItems.length} article{criticalItems.length > 1 ? 's' : ''} en stock critique
             </Text>
           </View>
         )}
 
-        {stock.map((item) => {
-          const status = getStatus(item);
-          const colors = STATUS_COLORS[status];
-          return (
-            <View key={item.id} style={styles.card}>
-              <View style={styles.cardHeader}>
-                <Text style={styles.itemName}>{item.name}</Text>
-                <View style={styles.cardHeaderRight}>
-                  <View style={[styles.badge, { backgroundColor: colors.bg }]}>
-                    <Text style={[styles.badgeText, { color: colors.text }]}>{status}</Text>
+        {stock.length > 0 && (
+          <View style={styles.list}>
+            {stock.map((item, idx) => {
+              const status = getStatus(item);
+              const needsAttention = status !== 'OK';
+              const colors = STATUS_COLORS[status];
+              return (
+                <View key={item.id} style={[styles.row, idx === stock.length - 1 && { borderBottomWidth: 0 }]}>
+                  <View style={{ flex: 1 }}>
+                    <View style={styles.rowTop}>
+                      <Text style={styles.itemName} numberOfLines={1}>{item.name}</Text>
+                      <Text style={styles.levelText}>
+                        {item.currentLevel} <Text style={styles.levelUnit}>{item.unit}</Text>
+                      </Text>
+                    </View>
+                    <Text style={[styles.caption, needsAttention && { color: colors.text, fontWeight: '700' }]}>
+                      {needsAttention
+                        ? (status === 'CRITIQUE' ? 'Stock critique' : 'Stock faible')
+                        : `Seuil : ${item.alertThreshold} ${item.unit}`}
+                    </Text>
                   </View>
                   <TouchableOpacity onPress={() => handleDeleteItem(item)} style={styles.deleteBtn}>
-                    <Ionicons name="trash-outline" size={16} color={C.muted} />
+                    <Ionicons name="trash-outline" size={16} color={palette.muted} />
                   </TouchableOpacity>
                 </View>
-              </View>
-              <Text style={styles.levelText}>
-                <Text style={styles.levelNum}>{item.currentLevel}</Text>
-                {' '}{item.unit}
-              </Text>
-              <Text style={styles.thresholdText}>
-                Seuil d'alerte : {item.alertThreshold} {item.unit}
-              </Text>
-              <Text style={styles.updatedText}>
-                Mis à jour le {formatDate(item.lastUpdated.split('T')[0])}
-              </Text>
-            </View>
-          );
-        })}
+              );
+            })}
+          </View>
+        )}
 
         {stock.length === 0 && (
           <View style={styles.emptyWrap}>
-            <Ionicons name="cube-outline" size={48} color={C.muted} />
+            <Ionicons name="cube-outline" size={48} color={palette.muted} />
             <Text style={styles.emptyText}>Aucun article en stock</Text>
             <Text style={styles.emptyHint}>Appuyez sur + pour ajouter un article</Text>
           </View>
@@ -206,7 +200,7 @@ export default function StockScreen() {
       <Modal visible={!!deleteTarget} transparent animationType="fade" onRequestClose={() => setDeleteTarget(null)}>
         <View style={styles.confirmOverlay}>
           <View style={styles.confirmBox}>
-            <Ionicons name="trash-outline" size={32} color={C.red} style={{ alignSelf: 'center', marginBottom: 12 }} />
+            <Ionicons name="trash-outline" size={32} color={palette.critical} style={{ alignSelf: 'center', marginBottom: 12 }} />
             <Text style={styles.confirmTitle}>Supprimer cet article ?</Text>
             <Text style={styles.confirmSub}>
               {deleteTarget ? `Supprimer "${deleteTarget.name}" du stock ?` : ''}
@@ -286,87 +280,91 @@ export default function StockScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: C.bg },
+const makeStyles = (palette: Palette) => StyleSheet.create({
+  container: { flex: 1, backgroundColor: palette.paper },
   header: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
     paddingHorizontal: 16, paddingVertical: 12,
-    backgroundColor: C.card, borderBottomWidth: 1, borderColor: C.border,
+    backgroundColor: palette.card, borderBottomWidth: 1, borderColor: palette.line,
   },
-  title: { fontSize: 22, fontWeight: '700', color: C.text },
+  title: { fontSize: 22, fontWeight: '700', color: palette.ink },
   addBtn: {
     width: 44, height: 44, borderRadius: 22,
-    backgroundColor: C.primary, alignItems: 'center', justifyContent: 'center',
+    backgroundColor: palette.moss, alignItems: 'center', justifyContent: 'center',
   },
   content: { padding: 16, paddingBottom: 100, gap: 12 },
-  alertBanner: { backgroundColor: C.red, borderRadius: 10, padding: 12 },
-  alertText: { color: '#FFFFFF', fontWeight: '600', fontSize: 14 },
-  card: {
-    backgroundColor: C.card, borderRadius: 12, padding: 16,
-    borderWidth: 1, borderColor: C.border,
-    shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 4, elevation: 2,
-    gap: 4,
+  alertBanner: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    backgroundColor: palette.critical, borderRadius: 10, padding: 12,
   },
-  cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  cardHeaderRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  itemName: { fontSize: 16, fontWeight: '600', color: C.text, flex: 1 },
-  badge: { borderRadius: 20, paddingHorizontal: 10, paddingVertical: 4 },
-  badgeText: { fontSize: 11, fontWeight: '700' },
+  alertText: { color: palette.white, fontWeight: '600', fontSize: 14, flex: 1 },
+  // One quiet list container with hairline dividers, not a separately
+  // shadowed card per item — a shelf of ten items doesn't need ten cards
+  // shouting for attention, only the ones that actually need it (see
+  // `needsAttention` above, which is the only thing that still gets color).
+  list: {
+    backgroundColor: palette.card, borderRadius: 12, overflow: 'hidden',
+  },
+  row: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    padding: 14, borderBottomWidth: 1, borderColor: palette.line,
+  },
+  rowTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', gap: 8 },
+  itemName: { fontSize: 15, fontWeight: '600', color: palette.ink, flex: 1 },
   deleteBtn: { padding: 4 },
-  levelText: { fontSize: 28, fontWeight: '500', color: C.text, marginTop: 4 },
-  levelNum: { fontWeight: '700' },
-  thresholdText: { fontSize: 12, color: C.muted },
-  updatedText: { fontSize: 11, color: '#BABAB6' },
+  levelText: { fontSize: 16, fontWeight: '700', color: palette.ink },
+  levelUnit: { fontSize: 12, fontWeight: '500', color: palette.muted },
+  caption: { fontSize: 12.5, color: palette.muted, marginTop: 2 },
   emptyWrap: { alignItems: 'center', paddingTop: 60, gap: 8 },
-  emptyText: { fontSize: 16, fontWeight: '600', color: C.muted },
-  emptyHint: { fontSize: 13, color: C.muted },
+  emptyText: { fontSize: 16, fontWeight: '600', color: palette.muted },
+  emptyHint: { fontSize: 13, color: palette.muted },
   footer: {
     position: 'absolute', bottom: 0, left: 0, right: 0,
-    padding: 16, backgroundColor: C.bg,
-    borderTopWidth: 1, borderColor: C.border,
+    padding: 16, backgroundColor: palette.paper,
+    borderTopWidth: 1, borderColor: palette.line,
   },
   updateBtn: {
-    backgroundColor: C.primary, borderRadius: 12, height: 52,
+    backgroundColor: palette.moss, borderRadius: 12, height: 52,
     alignItems: 'center', justifyContent: 'center',
   },
-  updateBtnText: { color: '#FFFFFF', fontSize: 16, fontWeight: '700' },
+  updateBtnText: { color: palette.white, fontSize: 16, fontWeight: '700' },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
   modalCard: {
-    backgroundColor: C.card, borderTopLeftRadius: 20, borderTopRightRadius: 20,
+    backgroundColor: palette.card, borderTopLeftRadius: 20, borderTopRightRadius: 20,
     padding: 24, paddingBottom: 40, maxHeight: '85%',
   },
-  modalTitle: { fontSize: 18, fontWeight: '700', color: C.text, marginBottom: 16 },
+  modalTitle: { fontSize: 18, fontWeight: '700', color: palette.ink, marginBottom: 16 },
   editRow: { marginBottom: 14 },
-  editLabel: { fontSize: 14, color: C.muted, marginBottom: 6 },
+  editLabel: { fontSize: 14, color: palette.muted, marginBottom: 6 },
   editInput: {
-    backgroundColor: C.bg, borderRadius: 10, borderWidth: 1,
-    borderColor: C.border, padding: 12, fontSize: 16, color: C.text,
+    backgroundColor: palette.paper, borderRadius: 10, borderWidth: 1,
+    borderColor: palette.line, padding: 12, fontSize: 16, color: palette.ink,
   },
   modalActions: { flexDirection: 'row', gap: 10, marginTop: 8 },
   cancelBtn: {
-    flex: 1, height: 52, borderRadius: 12, backgroundColor: C.bg,
-    borderWidth: 1, borderColor: C.border, alignItems: 'center', justifyContent: 'center',
+    flex: 1, height: 52, borderRadius: 12, backgroundColor: palette.paper,
+    borderWidth: 1, borderColor: palette.line, alignItems: 'center', justifyContent: 'center',
   },
-  cancelText: { fontSize: 16, color: C.muted, fontWeight: '600' },
+  cancelText: { fontSize: 16, color: palette.muted, fontWeight: '600' },
   confirmBtn: {
-    flex: 1, height: 52, borderRadius: 12, backgroundColor: C.primary,
+    flex: 1, height: 52, borderRadius: 12, backgroundColor: palette.moss,
     alignItems: 'center', justifyContent: 'center',
   },
-  confirmText: { fontSize: 16, color: '#FFFFFF', fontWeight: '700' },
+  confirmText: { fontSize: 16, color: palette.white, fontWeight: '700' },
   confirmOverlay: {
     flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', padding: 24,
   },
-  confirmBox: { backgroundColor: C.card, borderRadius: 16, padding: 24 },
-  confirmTitle: { fontSize: 17, fontWeight: '700', color: C.text, textAlign: 'center', marginBottom: 6 },
-  confirmSub: { fontSize: 14, color: C.muted, textAlign: 'center', marginBottom: 20 },
+  confirmBox: { backgroundColor: palette.card, borderRadius: 16, padding: 24 },
+  confirmTitle: { fontSize: 17, fontWeight: '700', color: palette.ink, textAlign: 'center', marginBottom: 6 },
+  confirmSub: { fontSize: 14, color: palette.muted, textAlign: 'center', marginBottom: 20 },
   confirmDeleteBtn: {
-    backgroundColor: C.red, borderRadius: 12, height: 52,
+    backgroundColor: palette.critical, borderRadius: 12, height: 52,
     alignItems: 'center', justifyContent: 'center', marginBottom: 10,
   },
-  confirmDeleteText: { color: '#FFFFFF', fontSize: 16, fontWeight: '700' },
+  confirmDeleteText: { color: palette.white, fontSize: 16, fontWeight: '700' },
   confirmCancelBtn: {
-    borderRadius: 12, height: 52, borderWidth: 1, borderColor: C.border,
+    borderRadius: 12, height: 52, borderWidth: 1, borderColor: palette.line,
     alignItems: 'center', justifyContent: 'center',
   },
-  confirmCancelText: { fontSize: 16, color: C.muted, fontWeight: '600' },
+  confirmCancelText: { fontSize: 16, color: palette.muted, fontWeight: '600' },
 });

@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Investor } from '../types';
 import { getFactoryId, generateId } from './context';
 import { supabase } from '../lib/supabase';
+import { enqueueIfNetworkError } from '../lib/syncQueue';
 
 function cacheKey() { return `${getFactoryId()}_investors`; }
 
@@ -47,7 +48,7 @@ export const addInvestor = async (
   const investors = await getInvestors();
   await setCache([newInvestor, ...investors]);
 
-  supabase.from('investors').insert({
+  const row = {
     id: newInvestor.id,
     factory_id: factoryId,
     name: newInvestor.name,
@@ -56,7 +57,10 @@ export const addInvestor = async (
     date_added: newInvestor.dateAdded,
     notes: newInvestor.notes ?? null,
     user_id: newInvestor.userId ?? null,
-  }).then(({ error }) => { if (error) console.warn('investors insert sync error', error.message); });
+  };
+  supabase.from('investors').insert(row).then(({ error }) => {
+    if (error) enqueueIfNetworkError(error, { table: 'investors', op: 'insert', values: row, label: 'investisseur' });
+  });
 
   return newInvestor;
 };
@@ -75,15 +79,19 @@ export const updateInvestor = async (
   if (updates.notes !== undefined) row.notes = updates.notes;
   if (updates.userId !== undefined) row.user_id = updates.userId ?? null;
 
-  supabase.from('investors').update(row).eq('id', id).eq('factory_id', getFactoryId())
-    .then(({ error }) => { if (error) console.warn('investors update sync error', error.message); });
+  const factoryId = getFactoryId();
+  supabase.from('investors').update(row).eq('id', id).eq('factory_id', factoryId)
+    .then(({ error }) => {
+      if (error) enqueueIfNetworkError(error, { table: 'investors', op: 'update', values: row, match: { id, factory_id: factoryId }, label: 'investisseur (modif.)' });
+    });
 };
 
 export const deleteInvestor = async (id: string): Promise<void> => {
   const investors = await getInvestors();
   await setCache(investors.filter((inv) => inv.id !== id));
-  supabase.from('investors').delete().eq('id', id).eq('factory_id', getFactoryId())
-    .then(({ error }) => { if (error) console.warn('investors delete sync error', error.message); });
+  const factoryId = getFactoryId();
+  const { error } = await supabase.from('investors').delete().eq('id', id).eq('factory_id', factoryId);
+  if (error) await enqueueIfNetworkError(error, { table: 'investors', op: 'delete', match: { id, factory_id: factoryId }, label: 'investisseur (suppr.)' });
 };
 
 export const setInvestors = async (investors: Investor[]): Promise<void> => {

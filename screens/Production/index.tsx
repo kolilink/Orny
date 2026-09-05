@@ -9,26 +9,19 @@ import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { getProducts, addProduct, updateProduct, deleteProduct } from '../../store/products';
 import { getBatches, addBatch } from '../../store/batches';
-import { getStock, deductStock, updateStock, addStockItem } from '../../store/stock';
+import { getStock, deductStock, recordStockAddition, addStockItem, checkStockAvailability } from '../../store/stock';
 import DatePickerField from '../../components/DatePickerField';
 import { toDateString } from '../../utils/dates';
 import { Product, Batch, StockItem } from '../../types';
-
-const C = {
-  primary: '#1D9E75',
-  red: '#E24B4A',
-  orange: '#EF9F27',
-  bg: '#F8F8F6',
-  card: '#FFFFFF',
-  text: '#1A1A18',
-  muted: '#6B6B66',
-  border: '#E8E8E4',
-};
+import { Palette } from '../../theme/tokens';
+import { useTheme } from '../../theme/ThemeContext';
 
 type ScreenState = 'list' | 'log';
 type MaterialRow = { rawMaterialId: string; name: string; quantity: string; unit: string };
 
 export default function ProductionScreen() {
+  const { palette } = useTheme();
+  const styles = makeStyles(palette);
   const insets = useSafeAreaInsets();
 
   // ── Data ──────────────────────────────────────────────────────────
@@ -182,6 +175,34 @@ export default function ProductionScreen() {
       return;
     }
 
+    const deductions: Record<string, number> = {};
+    for (const m of materials) {
+      const qty = parseFloat(m.quantity) || 0;
+      if (m.rawMaterialId && qty > 0) {
+        deductions[m.rawMaterialId] = (deductions[m.rawMaterialId] ?? 0) + qty;
+      }
+    }
+    const shortfalls = await checkStockAvailability(deductions);
+    if (shortfalls.length > 0) {
+      const detail = shortfalls
+        .map((s) => `${s.name} : ${s.available} ${s.unit} dispo, ${s.needed} ${s.unit} nécessaire${s.needed > 1 ? 's' : ''}`)
+        .join('\n');
+      Alert.alert(
+        'Stock insuffisant',
+        `${detail}\n\nEnregistrer quand même ? Le stock manquant sera ramené à 0.`,
+        [
+          { text: 'Annuler', style: 'cancel' },
+          { text: 'Enregistrer quand même', style: 'destructive', onPress: doSave },
+        ]
+      );
+      return;
+    }
+
+    await doSave();
+  };
+
+  const doSave = async () => {
+    const unitsNum = parseFloat(units);
     setSaving(true);
     try {
       const validMaterials = materials.map((m) => ({
@@ -214,11 +235,19 @@ export default function ProductionScreen() {
       }
       await deductStock(deductions);
 
-      // Increment finished product stock
-      const finishedItem = stockItems.find((s) => s.id === selectedProduct!.id);
-      if (finishedItem) {
-        await updateStock({ [selectedProduct!.id]: finishedItem.currentLevel + unitsNum });
-      }
+      // Cost of what this batch actually produced = the GNF cost of the
+      // materials it consumed, each at that material's current
+      // weighted-average cost. This is what lets the finished-goods item's
+      // own avgCost — and eventually a sale's cost_amount — reflect a real
+      // number instead of nothing.
+      const totalMaterialCost = validMaterials.reduce((sum, m) => {
+        const material = stockItems.find((s) => s.id === m.rawMaterialId);
+        return sum + m.quantity * (material?.avgCost ?? 0);
+      }, 0);
+      const unitCost = unitsNum > 0 ? totalMaterialCost / unitsNum : 0;
+
+      // Increment finished product stock (and its cost basis)
+      await recordStockAddition(selectedProduct!.id, unitsNum, unitCost);
 
       await load();
       backToList();
@@ -297,12 +326,12 @@ export default function ProductionScreen() {
             {todayBatches.length} lot{todayBatches.length !== 1 ? 's' : ''} · {todayUnits} unités produites
           </Text>
         </View>
-        <Ionicons name="chevron-forward" size={18} color="#BABAB6" />
+        <Ionicons name="chevron-forward" size={18} color={palette.muted} />
       </TouchableOpacity>
 
       {/* New product button */}
       <TouchableOpacity style={styles.newProductBtn} onPress={() => setNewProductModal(true)}>
-        <Ionicons name="add-circle-outline" size={20} color={C.primary} />
+        <Ionicons name="add-circle-outline" size={20} color={palette.moss} />
         <Text style={styles.newProductBtnText}>Nouveau produit</Text>
       </TouchableOpacity>
 
@@ -332,7 +361,7 @@ export default function ProductionScreen() {
               onPress={() => { setActionsProduct(p); setProductActionsModal(true); }}
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
             >
-              <Ionicons name="ellipsis-vertical" size={20} color={C.muted} />
+              <Ionicons name="ellipsis-vertical" size={20} color={palette.muted} />
             </TouchableOpacity>
           </View>
         ))
@@ -349,7 +378,7 @@ export default function ProductionScreen() {
       <ScrollView contentContainerStyle={styles.logContent}>
         {/* Back header */}
         <TouchableOpacity style={styles.backBtn} onPress={backToList}>
-          <Ionicons name="arrow-back" size={22} color={C.primary} />
+          <Ionicons name="arrow-back" size={22} color={palette.moss} />
           <Text style={styles.backBtnText}>{selectedProduct?.name}</Text>
         </TouchableOpacity>
 
@@ -363,7 +392,7 @@ export default function ProductionScreen() {
               onChangeText={setUnits}
               keyboardType="decimal-pad"
               placeholder="0"
-              placeholderTextColor="#BABAB6"
+              placeholderTextColor={palette.muted}
               autoFocus
             />
             <Text style={styles.unitsLabel} numberOfLines={2}>{selectedProduct?.unit}</Text>
@@ -382,16 +411,16 @@ export default function ProductionScreen() {
                 onChangeText={(v) => updateMaterialQty(idx, v)}
                 keyboardType="decimal-pad"
                 placeholder="0"
-                placeholderTextColor="#BABAB6"
+                placeholderTextColor={palette.muted}
               />
               <Text style={styles.matUnit}>{m.unit}</Text>
               <TouchableOpacity onPress={() => removeMaterial(idx)}>
-                <Ionicons name="close-circle-outline" size={22} color={C.red} />
+                <Ionicons name="close-circle-outline" size={22} color={palette.critical} />
               </TouchableOpacity>
             </View>
           ))}
           <TouchableOpacity style={styles.addMatBtn} onPress={() => setMaterialPickerModal(true)}>
-            <Ionicons name="add" size={18} color={C.primary} />
+            <Ionicons name="add" size={18} color={palette.moss} />
             <Text style={styles.addMatBtnText}>Ajouter une matière</Text>
           </TouchableOpacity>
         </View>
@@ -400,16 +429,22 @@ export default function ProductionScreen() {
         {hasMaterialsWithQty && (
           <View style={[
             styles.stockStatus,
-            { borderColor: stockOk ? C.primary + '44' : C.orange + '66' },
+            { borderColor: stockOk ? palette.moss + '44' : palette.caution + '66' },
           ]}>
             {stockOk ? (
-              <Text style={[styles.stockStatusText, { color: C.primary }]}>
-                ✅ Tu as tout en stock
-              </Text>
+              <View style={styles.stockStatusRow}>
+                <Ionicons name="checkmark-circle" size={16} color={palette.moss} />
+                <Text style={[styles.stockStatusText, { color: palette.moss }]}>
+                  Tu as tout en stock
+                </Text>
+              </View>
             ) : (
-              <Text style={[styles.stockStatusText, { color: '#A06000' }]}>
-                ⚠️ Il te manque: {missingItems.join(', ')}
-              </Text>
+              <View style={styles.stockStatusRow}>
+                <Ionicons name="alert-circle" size={16} color={palette.caution} />
+                <Text style={[styles.stockStatusText, { color: palette.caution }]}>
+                  Il te manque: {missingItems.join(', ')}
+                </Text>
+              </View>
             )}
           </View>
         )}
@@ -417,7 +452,7 @@ export default function ProductionScreen() {
         {/* Plus de détails */}
         <TouchableOpacity style={styles.detailsToggle} onPress={() => setDetailsOpen(!detailsOpen)}>
           <Text style={styles.detailsToggleText}>Plus de détails</Text>
-          <Ionicons name={detailsOpen ? 'chevron-up' : 'chevron-down'} size={18} color={C.muted} />
+          <Ionicons name={detailsOpen ? 'chevron-up' : 'chevron-down'} size={18} color={palette.muted} />
         </TouchableOpacity>
 
         {detailsOpen && (
@@ -430,7 +465,7 @@ export default function ProductionScreen() {
                 onChangeText={setEnergy}
                 keyboardType="decimal-pad"
                 placeholder="0"
-                placeholderTextColor="#BABAB6"
+                placeholderTextColor={palette.muted}
               />
             </FieldWrap>
             <FieldWrap label="Heures travaillées">
@@ -440,7 +475,7 @@ export default function ProductionScreen() {
                 onChangeText={setHours}
                 keyboardType="decimal-pad"
                 placeholder="0"
-                placeholderTextColor="#BABAB6"
+                placeholderTextColor={palette.muted}
               />
             </FieldWrap>
             <FieldWrap label="Notes">
@@ -450,7 +485,7 @@ export default function ProductionScreen() {
                 onChangeText={setNotes}
                 multiline
                 placeholder="Notes optionnelles…"
-                placeholderTextColor="#BABAB6"
+                placeholderTextColor={palette.muted}
               />
             </FieldWrap>
           </View>
@@ -497,7 +532,7 @@ export default function ProductionScreen() {
                   value={newProductName}
                   onChangeText={setNewProductName}
                   placeholder="Ex: SOL Original 50g"
-                  placeholderTextColor="#BABAB6"
+                  placeholderTextColor={palette.muted}
                   autoFocus
                 />
               </FieldWrap>
@@ -507,7 +542,7 @@ export default function ProductionScreen() {
                   value={newProductUnit}
                   onChangeText={setNewProductUnit}
                   placeholder="sachet, kg, bouteille, L…"
-                  placeholderTextColor="#BABAB6"
+                  placeholderTextColor={palette.muted}
                 />
               </FieldWrap>
               <View style={styles.modalActions}>
@@ -601,7 +636,7 @@ export default function ProductionScreen() {
             <ActionRow
               icon="trash-outline"
               label="Supprimer"
-              color={C.red}
+              color={palette.critical}
               last
               onPress={() => {
                 if (actionsProduct) handleDeleteProduct(actionsProduct);
@@ -728,7 +763,7 @@ export default function ProductionScreen() {
               style={styles.addMatBtn}
               onPress={() => { setMaterialPickerModal(false); setNewMatModal(true); }}
             >
-              <Ionicons name="add" size={18} color={C.primary} />
+              <Ionicons name="add" size={18} color={palette.moss} />
               <Text style={styles.addMatBtnText}>+ Nouvelle matière première</Text>
             </TouchableOpacity>
             <TouchableOpacity style={[styles.cancelBtn, { marginTop: 8 }]} onPress={() => setMaterialPickerModal(false)}>
@@ -755,7 +790,7 @@ export default function ProductionScreen() {
                   value={newMatName}
                   onChangeText={setNewMatName}
                   placeholder="Ex: Sel, Farine…"
-                  placeholderTextColor="#BABAB6"
+                  placeholderTextColor={palette.muted}
                   autoFocus
                 />
               </FieldWrap>
@@ -765,7 +800,7 @@ export default function ProductionScreen() {
                   value={newMatUnit}
                   onChangeText={setNewMatUnit}
                   placeholder="kg, L, g, sac…"
-                  placeholderTextColor="#BABAB6"
+                  placeholderTextColor={palette.muted}
                 />
               </FieldWrap>
               <View style={styles.modalActions}>
@@ -794,6 +829,8 @@ export default function ProductionScreen() {
 // ── Small helpers ─────────────────────────────────────────────────
 
 function FieldWrap({ label, children }: { label: string; children: React.ReactNode }) {
+  const { palette } = useTheme();
+  const styles = makeStyles(palette);
   return (
     <View style={styles.fieldWrap}>
       <Text style={styles.fieldLabel}>{label}</Text>
@@ -811,12 +848,14 @@ function ActionRow({
   last?: boolean;
   onPress: () => void;
 }) {
+  const { palette } = useTheme();
+  const styles = makeStyles(palette);
   return (
     <TouchableOpacity
       style={[styles.actionRow, last && { borderBottomWidth: 0 }]}
       onPress={onPress}
     >
-      <Ionicons name={icon} size={20} color={color ?? C.text} />
+      <Ionicons name={icon} size={20} color={color ?? palette.ink} />
       <Text style={[styles.actionLabel, color ? { color } : undefined]}>{label}</Text>
     </TouchableOpacity>
   );
@@ -824,11 +863,11 @@ function ActionRow({
 
 // ── Styles ────────────────────────────────────────────────────────
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: C.bg },
+const makeStyles = (palette: Palette) => StyleSheet.create({
+  container: { flex: 1, backgroundColor: palette.paper },
   fill: { flex: 1 },
   pageTitle: {
-    fontSize: 22, fontWeight: '700', color: C.text,
+    fontSize: 22, fontWeight: '700', color: palette.ink,
     paddingHorizontal: 16, paddingTop: 8, paddingBottom: 4,
   },
 
@@ -836,22 +875,22 @@ const styles = StyleSheet.create({
   listContent: { padding: 16, paddingBottom: 40, gap: 10 },
   todayCard: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    backgroundColor: C.card, borderRadius: 14, padding: 16,
-    borderWidth: 1, borderColor: C.border,
+    backgroundColor: palette.card, borderRadius: 14, padding: 16,
+    borderWidth: 1, borderColor: palette.line,
     shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 4, elevation: 1,
   },
-  todayTitle: { fontSize: 13, fontWeight: '600', color: C.muted, marginBottom: 2 },
-  todayStats: { fontSize: 16, fontWeight: '700', color: C.text },
+  todayTitle: { fontSize: 13, fontWeight: '600', color: palette.muted, marginBottom: 2 },
+  todayStats: { fontSize: 16, fontWeight: '700', color: palette.ink },
   newProductBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
-    backgroundColor: '#E8F6F0', borderRadius: 12, paddingVertical: 14,
-    borderWidth: 1, borderColor: C.primary + '44',
+    backgroundColor: palette.mossSoft, borderRadius: 12, paddingVertical: 14,
+    borderWidth: 1, borderColor: palette.moss + '44',
   },
-  newProductBtnText: { fontSize: 15, fontWeight: '700', color: C.primary },
+  newProductBtnText: { fontSize: 15, fontWeight: '700', color: palette.moss },
   productCard: {
     flexDirection: 'row', alignItems: 'center',
-    backgroundColor: C.card, borderRadius: 14,
-    borderWidth: 1, borderColor: C.border,
+    backgroundColor: palette.card, borderRadius: 14,
+    borderWidth: 1, borderColor: palette.line,
     shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 4, elevation: 1,
     overflow: 'hidden',
   },
@@ -860,119 +899,120 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between', padding: 16, gap: 8,
   },
   productInfo: { flex: 1 },
-  productName: { fontSize: 16, fontWeight: '600', color: C.text },
-  productUnit: { fontSize: 13, color: C.muted, marginTop: 2 },
-  productLastMade: { fontSize: 11, color: C.muted, textAlign: 'right', flexShrink: 1 },
-  productNeverMade: { fontSize: 11, color: '#BABAB6', fontStyle: 'italic', flexShrink: 1 },
+  productName: { fontSize: 16, fontWeight: '600', color: palette.ink },
+  productUnit: { fontSize: 13, color: palette.muted, marginTop: 2 },
+  productLastMade: { fontSize: 11, color: palette.muted, textAlign: 'right', flexShrink: 1 },
+  productNeverMade: { fontSize: 11, color: palette.muted, fontStyle: 'italic', flexShrink: 1 },
   productMenuBtn: {
     paddingHorizontal: 14, paddingVertical: 18,
-    borderLeftWidth: 1, borderColor: C.border,
+    borderLeftWidth: 1, borderColor: palette.line,
   },
   emptyState: { paddingVertical: 32, alignItems: 'center' },
-  emptyText: { fontSize: 14, color: C.muted, textAlign: 'center', fontStyle: 'italic' },
+  emptyText: { fontSize: 14, color: palette.muted, textAlign: 'center', fontStyle: 'italic' },
 
   // Log form
   logContent: { padding: 16, paddingBottom: 60, gap: 12 },
   backBtn: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 },
-  backBtnText: { fontSize: 18, fontWeight: '700', color: C.text },
+  backBtnText: { fontSize: 18, fontWeight: '700', color: palette.ink },
   card: {
-    backgroundColor: C.card, borderRadius: 14, padding: 16, gap: 12,
-    borderWidth: 1, borderColor: C.border,
+    backgroundColor: palette.card, borderRadius: 14, padding: 16, gap: 12,
+    borderWidth: 1, borderColor: palette.line,
     shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 4, elevation: 1,
   },
-  bigFieldLabel: { fontSize: 16, fontWeight: '700', color: C.text },
+  bigFieldLabel: { fontSize: 16, fontWeight: '700', color: palette.ink },
   unitsRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   unitsInput: {
-    flex: 1, minWidth: 0, fontSize: 36, fontWeight: '700', color: C.text,
-    backgroundColor: C.bg, borderRadius: 12, borderWidth: 1, borderColor: C.border,
+    flex: 1, minWidth: 0, fontSize: 36, fontWeight: '700', color: palette.ink,
+    backgroundColor: palette.paper, borderRadius: 12, borderWidth: 1, borderColor: palette.line,
     paddingHorizontal: 12, paddingVertical: 14, textAlign: 'center',
   },
-  unitsLabel: { fontSize: 16, fontWeight: '600', color: C.muted, flexShrink: 0, maxWidth: 80 },
-  cardTitle: { fontSize: 15, fontWeight: '600', color: C.text },
+  unitsLabel: { fontSize: 16, fontWeight: '600', color: palette.muted, flexShrink: 0, maxWidth: 80 },
+  cardTitle: { fontSize: 15, fontWeight: '600', color: palette.ink },
   matRow: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
-    backgroundColor: C.bg, borderRadius: 10, padding: 10,
+    backgroundColor: palette.paper, borderRadius: 10, padding: 10,
   },
-  matName: { flex: 1, fontSize: 14, fontWeight: '500', color: C.text },
+  matName: { flex: 1, fontSize: 14, fontWeight: '500', color: palette.ink },
   matQtyInput: {
-    width: 72, backgroundColor: C.card, borderRadius: 8, borderWidth: 1,
-    borderColor: C.border, padding: 8, fontSize: 14, color: C.text, textAlign: 'center',
+    width: 72, backgroundColor: palette.card, borderRadius: 8, borderWidth: 1,
+    borderColor: palette.line, padding: 8, fontSize: 14, color: palette.ink, textAlign: 'center',
   },
-  matUnit: { fontSize: 13, color: C.muted, width: 40 },
+  matUnit: { fontSize: 13, color: palette.muted, width: 40 },
   addMatBtn: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
     alignSelf: 'flex-start', paddingHorizontal: 10, paddingVertical: 6,
-    backgroundColor: '#E8F6F0', borderRadius: 8,
+    backgroundColor: palette.mossSoft, borderRadius: 8,
   },
-  addMatBtnText: { fontSize: 13, color: C.primary, fontWeight: '600' },
+  addMatBtnText: { fontSize: 13, color: palette.moss, fontWeight: '600' },
   stockStatus: {
-    backgroundColor: C.card, borderRadius: 12, padding: 12,
+    backgroundColor: palette.card, borderRadius: 12, padding: 12,
     borderWidth: 2,
   },
-  stockStatusText: { fontSize: 14, fontWeight: '600' },
+  stockStatusRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  stockStatusText: { fontSize: 14, fontWeight: '600', flex: 1 },
   detailsToggle: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingVertical: 4,
   },
-  detailsToggleText: { fontSize: 14, color: C.muted, fontWeight: '500' },
+  detailsToggleText: { fontSize: 14, color: palette.muted, fontWeight: '500' },
   fieldWrap: { gap: 4 },
-  fieldLabel: { fontSize: 13, color: C.muted, fontWeight: '500' },
+  fieldLabel: { fontSize: 13, color: palette.muted, fontWeight: '500' },
   input: {
-    backgroundColor: C.bg, borderRadius: 10, borderWidth: 1,
-    borderColor: C.border, padding: 12, fontSize: 15, color: C.text,
+    backgroundColor: palette.paper, borderRadius: 10, borderWidth: 1,
+    borderColor: palette.line, padding: 12, fontSize: 15, color: palette.ink,
   },
   notesInput: { minHeight: 72, textAlignVertical: 'top' },
   saveBtn: {
-    backgroundColor: C.primary, borderRadius: 14, height: 54,
+    backgroundColor: palette.moss, borderRadius: 14, height: 54,
     alignItems: 'center', justifyContent: 'center',
   },
-  saveBtnText: { color: '#FFFFFF', fontSize: 17, fontWeight: '700' },
+  saveBtnText: { color: palette.white, fontSize: 17, fontWeight: '700' },
 
   // Toast
   toast: {
     position: 'absolute', bottom: 32, alignSelf: 'center',
-    backgroundColor: '#1A1A18EE', paddingHorizontal: 20, paddingVertical: 10,
+    backgroundColor: palette.ink + 'EE', paddingHorizontal: 20, paddingVertical: 10,
     borderRadius: 22,
   },
-  toastText: { color: '#FFFFFF', fontSize: 15, fontWeight: '600' },
+  toastText: { color: palette.white, fontSize: 15, fontWeight: '600' },
 
   // Modals
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
   modalCard: {
-    backgroundColor: C.card, borderTopLeftRadius: 22, borderTopRightRadius: 22,
+    backgroundColor: palette.card, borderTopLeftRadius: 22, borderTopRightRadius: 22,
     padding: 24, paddingBottom: 40, maxHeight: '88%',
   },
-  modalTitle: { fontSize: 18, fontWeight: '700', color: C.text, marginBottom: 16 },
+  modalTitle: { fontSize: 18, fontWeight: '700', color: palette.ink, marginBottom: 16 },
   modalList: { maxHeight: 320, marginBottom: 4 },
   modalActions: { flexDirection: 'row', gap: 10, marginTop: 16 },
   cancelBtn: {
-    flex: 1, height: 50, borderRadius: 12, backgroundColor: C.bg,
-    borderWidth: 1, borderColor: C.border, alignItems: 'center', justifyContent: 'center',
+    flex: 1, height: 50, borderRadius: 12, backgroundColor: palette.paper,
+    borderWidth: 1, borderColor: palette.line, alignItems: 'center', justifyContent: 'center',
   },
-  cancelText: { fontSize: 15, color: C.muted, fontWeight: '600' },
+  cancelText: { fontSize: 15, color: palette.muted, fontWeight: '600' },
   confirmBtn: {
-    flex: 1, height: 50, borderRadius: 12, backgroundColor: C.primary,
+    flex: 1, height: 50, borderRadius: 12, backgroundColor: palette.moss,
     alignItems: 'center', justifyContent: 'center',
   },
-  confirmText: { fontSize: 15, color: '#FFFFFF', fontWeight: '700' },
+  confirmText: { fontSize: 15, color: palette.white, fontWeight: '700' },
 
   // Action sheet rows
   actionRow: {
     flexDirection: 'row', alignItems: 'center', gap: 12,
-    paddingVertical: 14, borderBottomWidth: 1, borderColor: C.border,
+    paddingVertical: 14, borderBottomWidth: 1, borderColor: palette.line,
   },
-  actionLabel: { fontSize: 16, color: C.text },
+  actionLabel: { fontSize: 16, color: palette.ink },
 
   // History / Picker rows
   historyRow: {
     flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between',
-    paddingVertical: 10, borderBottomWidth: 1, borderColor: '#F0F0EE', gap: 8,
+    paddingVertical: 10, borderBottomWidth: 1, borderColor: palette.line, gap: 8,
   },
-  historyProduct: { fontSize: 14, fontWeight: '600', color: C.text },
-  historyDate: { fontSize: 12, fontWeight: '600', color: C.muted },
-  historyUnits: { fontSize: 14, fontWeight: '700', color: C.primary },
-  historyMats: { fontSize: 12, color: C.muted, marginTop: 2 },
-  pickerRow: { paddingVertical: 12, borderBottomWidth: 1, borderColor: '#F0F0EE' },
-  pickerName: { fontSize: 15, color: C.text, fontWeight: '500' },
-  pickerLevel: { fontSize: 12, color: C.muted, marginTop: 2 },
+  historyProduct: { fontSize: 14, fontWeight: '600', color: palette.ink },
+  historyDate: { fontSize: 12, fontWeight: '600', color: palette.muted },
+  historyUnits: { fontSize: 14, fontWeight: '700', color: palette.moss },
+  historyMats: { fontSize: 12, color: palette.muted, marginTop: 2 },
+  pickerRow: { paddingVertical: 12, borderBottomWidth: 1, borderColor: palette.line },
+  pickerName: { fontSize: 15, color: palette.ink, fontWeight: '500' },
+  pickerLevel: { fontSize: 12, color: palette.muted, marginTop: 2 },
 });

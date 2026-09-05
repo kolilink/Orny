@@ -1,33 +1,33 @@
-import React, { useState, useCallback, useRef, useEffect } from 'react';
+import React, { useState, useCallback, useRef, useEffect, useLayoutEffect } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, FlatList,
   TextInput, Modal, ScrollView,
 } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useFocusEffect } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Supplier, Purchase } from '../../types';
+import { Supplier, Purchase, StockItem, isPurchasePaid, purchaseDebt } from '../../types';
 import DatePickerField from '../../components/DatePickerField';
 import { getSuppliers, addSupplier, updateSupplier, deleteSupplier, syncSuppliersFromSupabase } from '../../store/suppliers';
-import { getPurchases, addPurchase, deletePurchase, syncPurchasesFromSupabase } from '../../store/purchases';
+import { getPurchases, addPurchase, deletePurchase, recordPurchasePayment, syncPurchasesFromSupabase } from '../../store/purchases';
+import { getStock, addStockItem, syncStockFromSupabase } from '../../store/stock';
 import { formatGNF } from '../../utils/format';
 import { getFactoryId } from '../../store/context';
-
-const C = {
-  primary: '#1D9E75', red: '#E24B4A', orange: '#EF9F27',
-  bg: '#F8F8F6', card: '#FFFFFF', text: '#1A1A18', muted: '#6B6B66', border: '#E8E8E4',
-};
+import { Palette } from '../../theme/tokens';
+import { useTheme } from '../../theme/ThemeContext';
 
 function toDateStr(d: Date) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 export default function SuppliersScreen() {
-  const insets = useSafeAreaInsets();
+  const { palette } = useTheme();
+  const styles = makeStyles(palette);
+  const navigation = useNavigation();
   const [tab, setTab] = useState<'suppliers' | 'purchases'>('suppliers');
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [purchases, setPurchases] = useState<Purchase[]>([]);
+  const [stockItems, setStockItems] = useState<StockItem[]>([]);
 
   // ── Supplier form modal ────────────────────────────────────────
   const [supplierModal, setSupplierModal] = useState(false);
@@ -45,6 +45,7 @@ export default function SuppliersScreen() {
   const [purchaseModal, setPurchaseModal] = useState(false);
   const [pSupplier, setPSupplier] = useState<Supplier | null>(null);
   const [pProduct, setPProduct] = useState('');
+  const [pStockItemId, setPStockItemId] = useState<string | undefined>(undefined);
   const [pQty, setPQty] = useState('');
   const [pUnit, setPUnit] = useState('kg');
   const [pUnitPrice, setPUnitPrice] = useState('');
@@ -52,6 +53,10 @@ export default function SuppliersScreen() {
   const [pDate, setPDate] = useState(toDateStr(new Date()));
   const [pNotes, setPNotes] = useState('');
   const [supplierPickerVisible, setSupplierPickerVisible] = useState(false);
+  const [stockPickerVisible, setStockPickerVisible] = useState(false);
+  const [newMatModal, setNewMatModal] = useState(false);
+  const [newMatName, setNewMatName] = useState('');
+  const [newMatUnit, setNewMatUnit] = useState('');
 
   // ── Draft persistence (purchase form) ─────────────────────────
   const purchaseDraftKey = `purchase_draft_${getFactoryId() ?? 'default'}`;
@@ -63,6 +68,7 @@ export default function SuppliersScreen() {
       try {
         const d = JSON.parse(raw);
         if (d.pProduct) setPProduct(d.pProduct);
+        if (d.pStockItemId) setPStockItemId(d.pStockItemId);
         if (d.pQty) setPQty(d.pQty);
         if (d.pUnit) setPUnit(d.pUnit);
         if (d.pUnitPrice) setPUnitPrice(d.pUnitPrice);
@@ -81,19 +87,21 @@ export default function SuppliersScreen() {
     if (draftTimer.current) clearTimeout(draftTimer.current);
     draftTimer.current = setTimeout(() => {
       AsyncStorage.setItem(purchaseDraftKey, JSON.stringify({
-        pProduct, pQty, pUnit, pUnitPrice, pPayment, pDate, pNotes,
+        pProduct, pStockItemId, pQty, pUnit, pUnitPrice, pPayment, pDate, pNotes,
         pSupplierId: pSupplier?.id, pSupplierName: pSupplier?.name,
       }));
     }, 400);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pProduct, pQty, pUnit, pUnitPrice, pPayment, pDate, pNotes, pSupplier]);
+  }, [pProduct, pStockItemId, pQty, pUnit, pUnitPrice, pPayment, pDate, pNotes, pSupplier]);
 
   const load = useCallback(async () => {
     syncSuppliersFromSupabase();
     syncPurchasesFromSupabase();
-    const [s, p] = await Promise.all([getSuppliers(), getPurchases()]);
+    syncStockFromSupabase();
+    const [s, p, st] = await Promise.all([getSuppliers(), getPurchases(), getStock()]);
     setSuppliers(s);
     setPurchases(p);
+    setStockItems(st);
   }, []);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
@@ -138,23 +146,53 @@ export default function SuppliersScreen() {
     const qty = parseFloat(pQty);
     const up = parseInt(pUnitPrice.replace(/\s/g, ''), 10);
     if (!pProduct.trim() || !qty || qty <= 0 || !up || up <= 0) return;
+    const totalAmount = Math.round(qty * up);
     const item = await addPurchase({
       supplierId: pSupplier?.id,
       supplierName: pSupplier?.name ?? 'Inconnu',
       date: pDate,
       product: pProduct.trim(),
+      stockItemId: pStockItemId,
       quantity: qty,
       unit: pUnit.trim() || 'kg',
       unitPrice: up,
-      totalAmount: Math.round(qty * up),
+      totalAmount,
+      // Same convention as a sale: cash/Orange Money means paid in full at
+      // the moment of purchase, credit means nothing paid yet — the owed
+      // amount is tracked from here on, not lost the moment the form closes.
+      amountPaid: pPayment !== 'credit' ? totalAmount : 0,
       paymentMethod: pPayment,
       notes: pNotes.trim() || undefined,
     });
-    setPProduct(''); setPQty(''); setPUnitPrice(''); setPNotes('');
+    setPProduct(''); setPStockItemId(undefined); setPQty(''); setPUnitPrice(''); setPNotes('');
     setPPayment('cash'); setPDate(toDateStr(new Date())); setPSupplier(null);
     AsyncStorage.removeItem(purchaseDraftKey);
     setPurchaseModal(false);
     setPurchases(prev => [item, ...prev]);
+    // Purchase already bumped the stock item's level in the store — refresh
+    // so the next purchase modal shows the up-to-date "en stock" quantity.
+    getStock().then(setStockItems);
+  }
+
+  function selectStockItem(item: StockItem) {
+    setPStockItemId(item.id);
+    setPProduct(item.name);
+    setPUnit(item.unit);
+    setStockPickerVisible(false);
+  }
+
+  async function handleCreateStockItem() {
+    if (!newMatName.trim() || !newMatUnit.trim()) return;
+    const item = await addStockItem({
+      name: newMatName.trim(),
+      unit: newMatUnit.trim(),
+      currentLevel: 0,
+      alertThreshold: 0,
+    });
+    setStockItems((prev) => [...prev, item]);
+    selectStockItem(item);
+    setNewMatName(''); setNewMatUnit('');
+    setNewMatModal(false);
   }
 
   async function confirmDeletePurchase() {
@@ -164,19 +202,29 @@ export default function SuppliersScreen() {
     setDeletePurchaseId(null);
   }
 
+  async function handleMarkPurchasePaid(purchase: Purchase) {
+    await recordPurchasePayment(purchase.id, purchase.totalAmount);
+    setPurchases((prev) => prev.map((p) => (p.id === purchase.id ? { ...p, amountPaid: p.totalAmount } : p)));
+  }
+
   const totalPurchases = purchases.reduce((sum, p) => sum + p.totalAmount, 0);
+  const totalOwed = purchases.reduce((sum, p) => sum + purchaseDebt(p), 0);
+
+  // "+" lives in the native header (this screen has one — see the rule in
+  // navigation/index.tsx), not duplicated as its own row below it.
+  useLayoutEffect(() => {
+    navigation.setOptions({
+      headerRight: () => (
+        <TouchableOpacity onPress={() => tab === 'suppliers' ? openAddSupplier() : setPurchaseModal(true)} hitSlop={8}>
+          <Ionicons name="add" size={26} color={palette.moss} />
+        </TouchableOpacity>
+      ),
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [navigation, tab, palette.moss]);
 
   return (
-    <View style={[styles.container, { paddingTop: insets.top }]}>
-      <View style={styles.header}>
-        <Text style={styles.title}>Fournisseurs & Achats</Text>
-        <TouchableOpacity
-          style={styles.addBtn}
-          onPress={() => tab === 'suppliers' ? openAddSupplier() : setPurchaseModal(true)}
-        >
-          <Ionicons name="add" size={22} color="#FFF" />
-        </TouchableOpacity>
-      </View>
+    <View style={styles.container}>
 
       <View style={styles.tabs}>
         <TouchableOpacity style={[styles.tab, tab === 'suppliers' && styles.tabActive]} onPress={() => setTab('suppliers')}>
@@ -198,7 +246,7 @@ export default function SuppliersScreen() {
             <View style={styles.card}>
               <View style={styles.cardLeft}>
                 <View style={styles.iconWrap}>
-                  <Ionicons name="business" size={20} color={C.primary} />
+                  <Ionicons name="business" size={20} color={palette.moss} />
                 </View>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.cardName}>{item.name}</Text>
@@ -208,10 +256,10 @@ export default function SuppliersScreen() {
               </View>
               <View style={{ flexDirection: 'row', gap: 4 }}>
                 <TouchableOpacity onPress={() => openEditSupplier(item)} style={{ padding: 6 }}>
-                  <Ionicons name="pencil-outline" size={18} color={C.primary} />
+                  <Ionicons name="pencil-outline" size={18} color={palette.moss} />
                 </TouchableOpacity>
                 <TouchableOpacity onPress={() => setDeleteSupplierTarget(item)} style={{ padding: 6 }}>
-                  <Ionicons name="trash-outline" size={18} color={C.red} />
+                  <Ionicons name="trash-outline" size={18} color={palette.critical} />
                 </TouchableOpacity>
               </View>
             </View>
@@ -225,32 +273,56 @@ export default function SuppliersScreen() {
           ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
           ListHeaderComponent={
             purchases.length > 0 ? (
-              <View style={styles.totalRow}>
-                <Text style={styles.totalLabel}>Total achats</Text>
-                <Text style={styles.totalValue}>{formatGNF(totalPurchases)}</Text>
+              <View style={{ gap: 8, marginBottom: 12 }}>
+                <View style={[styles.totalRow, { marginBottom: 0 }]}>
+                  <Text style={styles.totalLabel}>Total achats</Text>
+                  <Text style={styles.totalValue}>{formatGNF(totalPurchases)}</Text>
+                </View>
+                {totalOwed > 0 && (
+                  <View style={[styles.totalRow, { marginBottom: 0, backgroundColor: palette.criticalSoft }]}>
+                    <Text style={[styles.totalLabel, { color: palette.critical }]}>Dû aux fournisseurs</Text>
+                    <Text style={[styles.totalValue, { color: palette.critical }]}>{formatGNF(totalOwed)}</Text>
+                  </View>
+                )}
               </View>
             ) : null
           }
           ListEmptyComponent={<Text style={styles.empty}>Aucun achat enregistré{'\n'}Appuyez sur + pour en ajouter un</Text>}
-          renderItem={({ item }) => (
-            <View style={styles.card}>
-              <View style={styles.cardLeft}>
-                <View style={[styles.iconWrap, { backgroundColor: '#FFF3E6' }]}>
-                  <Ionicons name="cart" size={20} color={C.orange} />
+          renderItem={({ item }) => {
+            const paid = isPurchasePaid(item);
+            const debt = purchaseDebt(item);
+            return (
+              <View style={styles.card}>
+                <View style={styles.cardLeft}>
+                  <View style={[styles.iconWrap, { backgroundColor: palette.cautionSoft }]}>
+                    <Ionicons name="cart" size={20} color={palette.caution} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.cardName}>{item.product}</Text>
+                    <Text style={styles.cardSub}>{item.supplierName}  ·  {item.quantity} {item.unit}  ·  {item.date}</Text>
+                    {!paid && (
+                      <Text style={[styles.cardSub, { color: palette.critical, fontWeight: '600', marginTop: 3 }]}>
+                        Dû : {formatGNF(debt)}
+                      </Text>
+                    )}
+                  </View>
                 </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.cardName}>{item.product}</Text>
-                  <Text style={styles.cardSub}>{item.supplierName}  ·  {item.quantity} {item.unit}  ·  {item.date}</Text>
+                <View style={{ alignItems: 'flex-end' }}>
+                  <Text style={[styles.cardName, { color: palette.critical }]}>{formatGNF(item.totalAmount)}</Text>
+                  <View style={{ flexDirection: 'row', gap: 10, marginTop: 4 }}>
+                    {!paid && (
+                      <TouchableOpacity onPress={() => handleMarkPurchasePaid(item)} style={{ padding: 4 }}>
+                        <Ionicons name="checkmark-circle-outline" size={18} color={palette.moss} />
+                      </TouchableOpacity>
+                    )}
+                    <TouchableOpacity onPress={() => setDeletePurchaseId(item.id)} style={{ padding: 4 }}>
+                      <Ionicons name="trash-outline" size={16} color={palette.critical} />
+                    </TouchableOpacity>
+                  </View>
                 </View>
               </View>
-              <View style={{ alignItems: 'flex-end' }}>
-                <Text style={[styles.cardName, { color: C.red }]}>{formatGNF(item.totalAmount)}</Text>
-                <TouchableOpacity onPress={() => setDeletePurchaseId(item.id)} style={{ padding: 4, marginTop: 4 }}>
-                  <Ionicons name="trash-outline" size={16} color={C.red} />
-                </TouchableOpacity>
-              </View>
-            </View>
-          )}
+            );
+          }}
         />
       )}
 
@@ -261,13 +333,13 @@ export default function SuppliersScreen() {
           <Text style={styles.sheetTitle}>{editingSupplier ? 'Modifier fournisseur' : 'Nouveau fournisseur'}</Text>
           <ScrollView>
             <Text style={styles.fieldLabel}>Nom *</Text>
-            <TextInput style={styles.input} value={sName} onChangeText={setSName} placeholder="Ex: Mamadou Diallo" placeholderTextColor={C.muted} />
+            <TextInput style={styles.input} value={sName} onChangeText={setSName} placeholder="Ex: Mamadou Diallo" placeholderTextColor={palette.muted} />
             <Text style={styles.fieldLabel}>Produit fourni *</Text>
-            <TextInput style={styles.input} value={sProduct} onChangeText={setSProduct} placeholder="Ex: Farine, matière première..." placeholderTextColor={C.muted} />
+            <TextInput style={styles.input} value={sProduct} onChangeText={setSProduct} placeholder="Ex: Farine, matière première..." placeholderTextColor={palette.muted} />
             <Text style={styles.fieldLabel}>Téléphone</Text>
-            <TextInput style={styles.input} value={sPhone} onChangeText={setSPhone} placeholder="Ex: 622 00 00 00" placeholderTextColor={C.muted} keyboardType="phone-pad" />
+            <TextInput style={styles.input} value={sPhone} onChangeText={setSPhone} placeholder="Ex: 622 00 00 00" placeholderTextColor={palette.muted} keyboardType="phone-pad" />
             <Text style={styles.fieldLabel}>Notes</Text>
-            <TextInput style={styles.input} value={sNotes} onChangeText={setSNotes} placeholder="Notes optionnelles" placeholderTextColor={C.muted} />
+            <TextInput style={styles.input} value={sNotes} onChangeText={setSNotes} placeholder="Notes optionnelles" placeholderTextColor={palette.muted} />
             <TouchableOpacity style={styles.confirmBtn} onPress={handleSaveSupplier}>
               <Text style={styles.confirmBtnText}>{editingSupplier ? 'Mettre à jour' : 'Ajouter le fournisseur'}</Text>
             </TouchableOpacity>
@@ -284,22 +356,25 @@ export default function SuppliersScreen() {
             <Text style={styles.fieldLabel}>Fournisseur</Text>
             <TouchableOpacity style={styles.pickerBtn} onPress={() => setSupplierPickerVisible(true)}>
               <Text style={styles.pickerBtnText}>{pSupplier?.name ?? 'Sélectionner (optionnel)'}</Text>
-              <Ionicons name="chevron-down" size={16} color={C.muted} />
+              <Ionicons name="chevron-down" size={16} color={palette.muted} />
             </TouchableOpacity>
-            <Text style={styles.fieldLabel}>Produit *</Text>
-            <TextInput style={styles.input} value={pProduct} onChangeText={setPProduct} placeholder="Ex: Farine, matière première..." placeholderTextColor={C.muted} />
+            <Text style={styles.fieldLabel}>Produit / matière première *</Text>
+            <TouchableOpacity style={styles.pickerBtn} onPress={() => setStockPickerVisible(true)}>
+              <Text style={styles.pickerBtnText}>{pProduct || 'Sélectionner une matière première'}</Text>
+              <Ionicons name="chevron-down" size={16} color={palette.muted} />
+            </TouchableOpacity>
             <View style={{ flexDirection: 'row', gap: 10 }}>
               <View style={{ flex: 1 }}>
                 <Text style={styles.fieldLabel}>Quantité *</Text>
-                <TextInput style={styles.input} value={pQty} onChangeText={setPQty} placeholder="Ex: 100" placeholderTextColor={C.muted} keyboardType="numeric" />
+                <TextInput style={styles.input} value={pQty} onChangeText={setPQty} placeholder="Ex: 100" placeholderTextColor={palette.muted} keyboardType="numeric" />
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={styles.fieldLabel}>Unité</Text>
-                <TextInput style={styles.input} value={pUnit} onChangeText={setPUnit} placeholder="kg, sacs..." placeholderTextColor={C.muted} />
+                <TextInput style={styles.input} value={pUnit} onChangeText={setPUnit} placeholder="kg, sacs..." placeholderTextColor={palette.muted} />
               </View>
             </View>
             <Text style={styles.fieldLabel}>Prix unitaire (GNF) *</Text>
-            <TextInput style={styles.input} value={pUnitPrice} onChangeText={setPUnitPrice} placeholder="Ex: 1500" placeholderTextColor={C.muted} keyboardType="numeric" />
+            <TextInput style={styles.input} value={pUnitPrice} onChangeText={setPUnitPrice} placeholder="Ex: 1500" placeholderTextColor={palette.muted} keyboardType="numeric" />
             {pQty && pUnitPrice ? (
               <Text style={styles.totalPreview}>Total : {formatGNF(parseFloat(pQty) * parseInt(pUnitPrice.replace(/\s/g, ''), 10) || 0)}</Text>
             ) : null}
@@ -319,7 +394,7 @@ export default function SuppliersScreen() {
               ))}
             </View>
             <Text style={styles.fieldLabel}>Notes</Text>
-            <TextInput style={styles.input} value={pNotes} onChangeText={setPNotes} placeholder="Optionnel" placeholderTextColor={C.muted} />
+            <TextInput style={styles.input} value={pNotes} onChangeText={setPNotes} placeholder="Optionnel" placeholderTextColor={palette.muted} />
             <TouchableOpacity style={styles.confirmBtn} onPress={handleAddPurchase}>
               <Text style={styles.confirmBtnText}>Enregistrer l'achat</Text>
             </TouchableOpacity>
@@ -336,7 +411,19 @@ export default function SuppliersScreen() {
             <Text style={styles.supplierRowText}>Aucun / Manuel</Text>
           </TouchableOpacity>
           {suppliers.map((s) => (
-            <TouchableOpacity key={s.id} style={styles.supplierRow} onPress={() => { setPSupplier(s); setPProduct(s.product); setSupplierPickerVisible(false); }}>
+            <TouchableOpacity
+              key={s.id}
+              style={styles.supplierRow}
+              onPress={() => {
+                setPSupplier(s);
+                // Convenience: if a stock item already matches this supplier's
+                // known product, pre-select it — otherwise the user still
+                // picks (or creates) one explicitly via the Produit field.
+                const match = stockItems.find((si) => si.name.trim().toLowerCase() === s.product.trim().toLowerCase());
+                if (match) selectStockItem(match);
+                setSupplierPickerVisible(false);
+              }}
+            >
               <Text style={styles.supplierRowText}>{s.name}</Text>
               <Text style={styles.supplierRowSub}>{s.product}</Text>
             </TouchableOpacity>
@@ -344,11 +431,52 @@ export default function SuppliersScreen() {
         </View>
       </Modal>
 
+      {/* Stock item picker inside purchase modal */}
+      <Modal visible={stockPickerVisible} transparent animationType="slide">
+        <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={() => setStockPickerVisible(false)} />
+        <View style={[styles.sheet, { maxHeight: 460 }]}>
+          <Text style={styles.sheetTitle}>Choisir une matière première</Text>
+          <ScrollView style={{ maxHeight: 320 }}>
+            {stockItems.map((item) => (
+              <TouchableOpacity key={item.id} style={styles.supplierRow} onPress={() => selectStockItem(item)}>
+                <Text style={styles.supplierRowText}>{item.name}</Text>
+                <Text style={styles.supplierRowSub}>{item.currentLevel} {item.unit} en stock</Text>
+              </TouchableOpacity>
+            ))}
+            {stockItems.length === 0 && (
+              <Text style={styles.empty}>Aucun article de stock pour l'instant</Text>
+            )}
+          </ScrollView>
+          <TouchableOpacity
+            style={styles.addMatBtn}
+            onPress={() => { setStockPickerVisible(false); setNewMatModal(true); }}
+          >
+            <Ionicons name="add" size={18} color={palette.moss} />
+            <Text style={styles.addMatBtnText}>+ Nouvelle matière première</Text>
+          </TouchableOpacity>
+        </View>
+      </Modal>
+
+      {/* New stock item modal */}
+      <Modal visible={newMatModal} transparent animationType="slide">
+        <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={() => setNewMatModal(false)} />
+        <View style={styles.sheet}>
+          <Text style={styles.sheetTitle}>Nouvelle matière première</Text>
+          <Text style={styles.fieldLabel}>Nom</Text>
+          <TextInput style={styles.input} value={newMatName} onChangeText={setNewMatName} placeholder="Ex: Sel, Farine…" placeholderTextColor={palette.muted} autoFocus />
+          <Text style={styles.fieldLabel}>Unité</Text>
+          <TextInput style={styles.input} value={newMatUnit} onChangeText={setNewMatUnit} placeholder="kg, L, sac…" placeholderTextColor={palette.muted} />
+          <TouchableOpacity style={styles.confirmBtn} onPress={handleCreateStockItem}>
+            <Text style={styles.confirmBtnText}>Créer</Text>
+          </TouchableOpacity>
+        </View>
+      </Modal>
+
       {/* Delete Supplier Confirm */}
       <Modal visible={!!deleteSupplierTarget} transparent animationType="fade">
         <View style={styles.confirmOverlay}>
           <View style={styles.confirmBox}>
-            <Ionicons name="trash-outline" size={32} color={C.red} style={{ alignSelf: 'center', marginBottom: 12 }} />
+            <Ionicons name="trash-outline" size={32} color={palette.critical} style={{ alignSelf: 'center', marginBottom: 12 }} />
             <Text style={styles.confirmTitle}>Supprimer ce fournisseur ?</Text>
             <Text style={styles.confirmSub}>{deleteSupplierTarget?.name}{'\n'}Ses achats associés seront aussi supprimés.</Text>
             <TouchableOpacity style={styles.confirmBtnRed} onPress={confirmDeleteSupplier}>
@@ -365,7 +493,7 @@ export default function SuppliersScreen() {
       <Modal visible={!!deletePurchaseId} transparent animationType="fade">
         <View style={styles.confirmOverlay}>
           <View style={styles.confirmBox}>
-            <Ionicons name="trash-outline" size={32} color={C.red} style={{ alignSelf: 'center', marginBottom: 12 }} />
+            <Ionicons name="trash-outline" size={32} color={palette.critical} style={{ alignSelf: 'center', marginBottom: 12 }} />
             <Text style={styles.confirmTitle}>Supprimer cet achat ?</Text>
             <TouchableOpacity style={styles.confirmBtnRed} onPress={confirmDeletePurchase}>
               <Text style={styles.confirmBtnText}>Supprimer</Text>
@@ -380,49 +508,51 @@ export default function SuppliersScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: C.bg },
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16, paddingBottom: 8 },
-  title: { fontSize: 22, fontWeight: '700', color: C.text },
-  addBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: C.primary, alignItems: 'center', justifyContent: 'center' },
-  tabs: { flexDirection: 'row', marginHorizontal: 16, marginBottom: 12, backgroundColor: '#EDEDEB', borderRadius: 12, padding: 4 },
+const makeStyles = (palette: Palette) => StyleSheet.create({
+  container: { flex: 1, backgroundColor: palette.paper },
+  tabs: { flexDirection: 'row', marginHorizontal: 16, marginBottom: 12, backgroundColor: palette.paper, borderRadius: 12, padding: 4 },
   tab: { flex: 1, paddingVertical: 8, borderRadius: 10, alignItems: 'center' },
-  tabActive: { backgroundColor: C.card },
-  tabText: { fontSize: 13, color: C.muted, fontWeight: '500' },
-  tabTextActive: { color: C.text, fontWeight: '700' },
-  card: { backgroundColor: C.card, borderRadius: 12, padding: 14, borderWidth: 1, borderColor: C.border, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  tabActive: { backgroundColor: palette.card },
+  tabText: { fontSize: 13, color: palette.muted, fontWeight: '500' },
+  tabTextActive: { color: palette.ink, fontWeight: '700' },
+  card: { backgroundColor: palette.card, borderRadius: 12, padding: 14, borderWidth: 1, borderColor: palette.line, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   cardLeft: { flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 },
-  iconWrap: { width: 38, height: 38, borderRadius: 10, backgroundColor: '#E8F6F0', alignItems: 'center', justifyContent: 'center' },
-  cardName: { fontSize: 15, fontWeight: '600', color: C.text },
-  cardSub: { fontSize: 12, color: C.muted, marginTop: 2 },
-  cardNotes: { fontSize: 12, color: C.muted, fontStyle: 'italic', marginTop: 2 },
-  totalRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 12, backgroundColor: '#FFF3E6', padding: 12, borderRadius: 10 },
-  totalLabel: { fontSize: 14, color: C.orange, fontWeight: '600' },
-  totalValue: { fontSize: 14, color: C.orange, fontWeight: '700' },
-  empty: { textAlign: 'center', color: C.muted, marginTop: 40, fontSize: 15, lineHeight: 24 },
+  iconWrap: { width: 38, height: 38, borderRadius: 10, backgroundColor: palette.mossSoft, alignItems: 'center', justifyContent: 'center' },
+  cardName: { fontSize: 15, fontWeight: '600', color: palette.ink },
+  cardSub: { fontSize: 12, color: palette.muted, marginTop: 2 },
+  cardNotes: { fontSize: 12, color: palette.muted, fontStyle: 'italic', marginTop: 2 },
+  totalRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 12, backgroundColor: palette.cautionSoft, padding: 12, borderRadius: 10 },
+  totalLabel: { fontSize: 14, color: palette.caution, fontWeight: '600' },
+  totalValue: { fontSize: 14, color: palette.caution, fontWeight: '700' },
+  empty: { textAlign: 'center', color: palette.muted, marginTop: 40, fontSize: 15, lineHeight: 24 },
   overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.3)' },
-  sheet: { backgroundColor: C.card, borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, paddingBottom: 40 },
-  sheetTitle: { fontSize: 17, fontWeight: '700', color: C.text, marginBottom: 16 },
-  fieldLabel: { fontSize: 13, fontWeight: '600', color: C.muted, marginBottom: 6, marginTop: 12 },
-  input: { backgroundColor: '#F8F8F6', borderRadius: 12, padding: 14, fontSize: 16, color: C.text, borderWidth: 1, borderColor: C.border },
-  pickerBtn: { backgroundColor: '#F8F8F6', borderRadius: 12, padding: 14, borderWidth: 1, borderColor: C.border, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  pickerBtnText: { fontSize: 16, color: C.text },
-  totalPreview: { fontSize: 14, fontWeight: '700', color: C.primary, marginTop: 6, textAlign: 'right' },
-  methodBtn: { flex: 1, padding: 12, borderRadius: 10, borderWidth: 1, borderColor: C.border, backgroundColor: '#F8F8F6', alignItems: 'center' },
-  methodBtnActive: { borderColor: C.primary, backgroundColor: '#E8F6F0' },
-  methodText: { fontSize: 13, color: C.muted },
-  methodTextActive: { color: C.primary, fontWeight: '700' },
-  confirmBtn: { marginTop: 20, backgroundColor: C.primary, borderRadius: 14, padding: 16, alignItems: 'center' },
-  confirmBtnText: { color: '#FFF', fontSize: 16, fontWeight: '700' },
-  supplierRow: { paddingVertical: 14, borderBottomWidth: 1, borderColor: C.border },
-  supplierRowText: { fontSize: 15, color: C.text, fontWeight: '500' },
-  supplierRowSub: { fontSize: 12, color: C.muted, marginTop: 2 },
+  sheet: { backgroundColor: palette.card, borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, paddingBottom: 40 },
+  sheetTitle: { fontSize: 17, fontWeight: '700', color: palette.ink, marginBottom: 16 },
+  fieldLabel: { fontSize: 13, fontWeight: '600', color: palette.muted, marginBottom: 6, marginTop: 12 },
+  input: { backgroundColor: palette.paper, borderRadius: 12, padding: 14, fontSize: 16, color: palette.ink, borderWidth: 1, borderColor: palette.line },
+  pickerBtn: { backgroundColor: palette.paper, borderRadius: 12, padding: 14, borderWidth: 1, borderColor: palette.line, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  pickerBtnText: { fontSize: 16, color: palette.ink },
+  totalPreview: { fontSize: 14, fontWeight: '700', color: palette.moss, marginTop: 6, textAlign: 'right' },
+  methodBtn: { flex: 1, padding: 12, borderRadius: 10, borderWidth: 1, borderColor: palette.line, backgroundColor: palette.paper, alignItems: 'center' },
+  methodBtnActive: { borderColor: palette.moss, backgroundColor: palette.mossSoft },
+  methodText: { fontSize: 13, color: palette.muted },
+  methodTextActive: { color: palette.moss, fontWeight: '700' },
+  confirmBtn: { marginTop: 20, backgroundColor: palette.moss, borderRadius: 14, padding: 16, alignItems: 'center' },
+  confirmBtnText: { color: palette.white, fontSize: 16, fontWeight: '700' },
+  supplierRow: { paddingVertical: 14, borderBottomWidth: 1, borderColor: palette.line },
+  supplierRowText: { fontSize: 15, color: palette.ink, fontWeight: '500' },
+  supplierRowSub: { fontSize: 12, color: palette.muted, marginTop: 2 },
+  addMatBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+    marginTop: 12, paddingVertical: 12, backgroundColor: palette.mossSoft, borderRadius: 10,
+  },
+  addMatBtnText: { fontSize: 14, color: palette.moss, fontWeight: '600' },
   // confirm modals
   confirmOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', padding: 24 },
-  confirmBox: { backgroundColor: C.card, borderRadius: 20, padding: 24 },
-  confirmTitle: { fontSize: 17, fontWeight: '700', color: C.text, textAlign: 'center', marginBottom: 8 },
-  confirmSub: { fontSize: 14, color: C.muted, textAlign: 'center', marginBottom: 4, lineHeight: 20 },
-  confirmBtnRed: { marginTop: 16, backgroundColor: C.red, borderRadius: 12, padding: 14, alignItems: 'center' },
-  cancelBtn: { marginTop: 10, borderRadius: 12, padding: 14, alignItems: 'center', borderWidth: 1, borderColor: C.border },
-  cancelBtnText: { color: C.muted, fontWeight: '600', fontSize: 15 },
+  confirmBox: { backgroundColor: palette.card, borderRadius: 20, padding: 24 },
+  confirmTitle: { fontSize: 17, fontWeight: '700', color: palette.ink, textAlign: 'center', marginBottom: 8 },
+  confirmSub: { fontSize: 14, color: palette.muted, textAlign: 'center', marginBottom: 4, lineHeight: 20 },
+  confirmBtnRed: { marginTop: 16, backgroundColor: palette.critical, borderRadius: 12, padding: 14, alignItems: 'center' },
+  cancelBtn: { marginTop: 10, borderRadius: 12, padding: 14, alignItems: 'center', borderWidth: 1, borderColor: palette.line },
+  cancelBtnText: { color: palette.muted, fontWeight: '600', fontSize: 15 },
 });

@@ -1,11 +1,13 @@
 import { getSales } from '../store/sales';
-import { getBatches } from '../store/production';
+import { getBatches } from '../store/batches';
 import { getStock } from '../store/stock';
 import { getInvestors } from '../store/investors';
 import { getExpenses } from '../store/expenses';
 import { getWeeklyTarget } from '../store/weeklyTarget';
+import { getMachines } from '../store/machines';
 import { saleDebt } from '../types';
 import { isThisWeek, daysAgo, toDateString } from './dates';
+import { computeRunrates } from './runrate';
 
 function getMonthStart(): string {
   const d = new Date();
@@ -26,6 +28,8 @@ export interface StockSnapshot {
   alertThreshold: number;
   unit: string;
   status: 'ok' | 'low' | 'critical';
+  dailyConsumption: number;
+  daysOfCover: number | null;
 }
 
 export interface BusinessSnapshot {
@@ -43,19 +47,32 @@ export interface BusinessSnapshot {
   };
 
   production: {
-    today: { batches: number; sachets: number; potatoesKg: number; hours: number };
-    week: { batches: number; sachets: number; potatoesKg: number; hours: number; avgYield: number };
-    month: { batches: number; sachets: number };
+    today: { batches: number; unitsProduced: number; hours: number };
+    week: { batches: number; unitsProduced: number; hours: number };
+    month: { batches: number; unitsProduced: number };
     weeklyTarget: number;
     weeklyProgress: number;
-    avgYieldGPerKg: number;
     productionCoverage: number;
+    topProducts: Array<{ name: string; unitsProduced: number }>;
+    materialsConsumedWeek: Array<{ name: string; quantity: number; unit: string }>;
   };
 
   stock: {
     items: StockSnapshot[];
     lowCount: number;
     criticalNames: string[];
+  };
+
+  // Empty until the factory actually enters machines (screens/Machines/) —
+  // present from day one so Orny AI picks it up automatically the moment
+  // real data exists, with no further code changes needed.
+  machines: {
+    total: number;
+    running: number;
+    down: number;
+    maintenance: number;
+    idle: number;
+    items: Array<{ name: string; type: string; status: string; ratedCapacity: number | null; capacityUnit: string | null }>;
   };
 
   financial: {
@@ -71,13 +88,14 @@ export interface BusinessSnapshot {
 }
 
 export async function getBusinessSnapshot(): Promise<BusinessSnapshot> {
-  const [sales, batches, stock, investors, weeklyTarget, expenses] = await Promise.all([
+  const [sales, batches, stock, investors, weeklyTarget, expenses, machines] = await Promise.all([
     getSales(),
     getBatches(),
     getStock(),
     getInvestors(),
     getWeeklyTarget(),
     getExpenses(),
+    getMachines(),
   ]);
 
   const today = toDateString();
@@ -133,38 +151,71 @@ export async function getBusinessSnapshot(): Promise<BusinessSnapshot> {
   const weekBatches = batches.filter(b => isThisWeek(b.date));
   const monthBatches = batches.filter(b => isThisMonth(b.date));
 
-  const sumSachets = (arr: typeof batches) => arr.reduce((a, b) => a + b.sachets80g, 0);
-  const sumPotatoesKg = (arr: typeof batches) => arr.reduce((a, b) => a + b.potatoesUsedKg, 0);
-  const sumHours = (arr: typeof batches) => arr.reduce((a, b) => a + b.hoursWorked, 0);
+  const sumUnits = (arr: typeof batches) => arr.reduce((a, b) => a + b.unitsProduced, 0);
+  const sumHours = (arr: typeof batches) => arr.reduce((a, b) => a + (b.hoursWorked ?? 0), 0);
 
-  const allYields = batches.filter(b => b.yieldGramsPerKg > 0).map(b => b.yieldGramsPerKg);
-  const avgYield =
-    allYields.length > 0
-      ? Math.round(allYields.reduce((a, v) => a + v, 0) / allYields.length)
-      : 0;
-
-  const weekYields = weekBatches.filter(b => b.yieldGramsPerKg > 0).map(b => b.yieldGramsPerKg);
-  const weekAvgYield =
-    weekYields.length > 0
-      ? Math.round(weekYields.reduce((a, v) => a + v, 0) / weekYields.length)
-      : avgYield;
-
-  const weekSachets = sumSachets(weekBatches);
+  const weekUnits = sumUnits(weekBatches);
   const weekSalesUnits = weekSales.reduce((a, s) => a + s.quantity, 0);
-  const productionCoverage = weekSalesUnits > 0 ? safePct(weekSachets, weekSalesUnits) : 100;
+  const productionCoverage = weekSalesUnits > 0 ? safePct(weekUnits, weekSalesUnits) : 100;
+
+  // Per-product breakdown (generic — Production no longer assumes a single
+  // potato→sachet recipe; each batch names its own product).
+  const productMap: Record<string, number> = {};
+  weekBatches.forEach(b => {
+    productMap[b.productName] = (productMap[b.productName] ?? 0) + b.unitsProduced;
+  });
+  const topProducts = Object.entries(productMap)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([name, unitsProduced]) => ({ name, unitsProduced }));
+
+  // Raw materials consumed this week, grouped by name+unit (materials are
+  // arbitrary per-recipe now, so quantities can only be summed within the
+  // same unit — this is also the input the inventory runrate calc reuses).
+  const materialMap: Record<string, { quantity: number; unit: string }> = {};
+  weekBatches.forEach(b => {
+    (b.materialsUsed ?? []).forEach(m => {
+      const key = `${m.name}__${m.unit}`;
+      if (!materialMap[key]) materialMap[key] = { quantity: 0, unit: m.unit };
+      materialMap[key].quantity += m.quantity;
+    });
+  });
+  const materialsConsumedWeek = Object.entries(materialMap)
+    .map(([key, v]) => ({ name: key.split('__')[0], quantity: v.quantity, unit: v.unit }))
+    .sort((a, b) => b.quantity - a.quantity);
+
+  const runrateById = new Map(computeRunrates(stock, batches, sales).map(r => [r.id, r]));
 
   const stockItems: StockSnapshot[] = stock.map(item => {
     let status: 'ok' | 'low' | 'critical' = 'ok';
     if (item.currentLevel <= 0) status = 'critical';
     else if (item.currentLevel <= item.alertThreshold) status = 'low';
+    const runrate = runrateById.get(item.id);
     return {
       name: item.name,
       currentLevel: item.currentLevel,
       alertThreshold: item.alertThreshold,
       unit: item.unit,
       status,
+      dailyConsumption: runrate?.dailyConsumption ?? 0,
+      daysOfCover: runrate?.daysOfCover ?? null,
     };
   });
+
+  const machineSnapshot = {
+    total: machines.length,
+    running: machines.filter(m => m.status === 'running').length,
+    down: machines.filter(m => m.status === 'down').length,
+    maintenance: machines.filter(m => m.status === 'maintenance').length,
+    idle: machines.filter(m => m.status === 'idle').length,
+    items: machines.map(m => ({
+      name: m.name,
+      type: m.type,
+      status: m.status,
+      ratedCapacity: m.ratedCapacity,
+      capacityUnit: m.capacityUnit,
+    })),
+  };
 
   const weekRevenue = sumRevenue(weekSales);
   const weekBatchCount = weekBatches.length;
@@ -220,25 +271,23 @@ export async function getBusinessSnapshot(): Promise<BusinessSnapshot> {
     production: {
       today: {
         batches: todayBatches.length,
-        sachets: sumSachets(todayBatches),
-        potatoesKg: sumPotatoesKg(todayBatches),
+        unitsProduced: sumUnits(todayBatches),
         hours: sumHours(todayBatches),
       },
       week: {
         batches: weekBatchCount,
-        sachets: weekSachets,
-        potatoesKg: sumPotatoesKg(weekBatches),
+        unitsProduced: weekUnits,
         hours: sumHours(weekBatches),
-        avgYield: weekAvgYield,
       },
       month: {
         batches: monthBatches.length,
-        sachets: sumSachets(monthBatches),
+        unitsProduced: sumUnits(monthBatches),
       },
       weeklyTarget,
-      weeklyProgress: safePct(weekSachets, weeklyTarget),
-      avgYieldGPerKg: avgYield,
+      weeklyProgress: safePct(weekUnits, weeklyTarget),
       productionCoverage,
+      topProducts,
+      materialsConsumedWeek,
     },
 
     stock: {
@@ -246,6 +295,8 @@ export async function getBusinessSnapshot(): Promise<BusinessSnapshot> {
       lowCount: stockItems.filter(s => s.status !== 'ok').length,
       criticalNames: stockItems.filter(s => s.status === 'critical').map(s => s.name),
     },
+
+    machines: machineSnapshot,
 
     financial: {
       totalCapitalInvested: investors.reduce((a, inv) => a + inv.amountInvested, 0),

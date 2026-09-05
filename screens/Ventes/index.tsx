@@ -12,21 +12,14 @@ import { getSales, addSale, updateSale, deleteSale, syncSalesFromSupabase } from
 import { getClients, upsertClient, syncClientsFromSupabase } from '../../store/clients';
 import { getFlavors, syncFlavorsFromSupabase } from '../../store/flavors';
 import { getBulks, syncBulksFromSupabase } from '../../store/bulks';
+import { checkStockAvailability, deductStock, ensureStockItem, getStock } from '../../store/stock';
 import { Sale, ProductFlavor, BulkProduct, Client, saleDebt } from '../../types';
 import { formatGNF, formatDate } from '../../utils/format';
 import { toDateString } from '../../utils/dates';
 import { getFactoryId } from '../../store/context';
-
-const C = {
-  primary: '#1D9E75',
-  red: '#E24B4A',
-  orange: '#EF9F27',
-  bg: '#F8F8F6',
-  card: '#FFFFFF',
-  text: '#1A1A18',
-  muted: '#6B6B66',
-  border: '#E8E8E4',
-};
+import { Palette } from '../../theme/tokens';
+import { useTheme } from '../../theme/ThemeContext';
+import { AppModal, Button, ConfirmDialog } from '../../components/ui';
 
 const PAYMENT_LABELS: Record<Sale['paymentMethod'], string> = {
   cash: 'Cash',
@@ -34,11 +27,16 @@ const PAYMENT_LABELS: Record<Sale['paymentMethod'], string> = {
   credit: 'Crédit',
 };
 
-const PAYMENT_COLORS: Record<Sale['paymentMethod'], string> = {
-  cash: '#1D9E75',
-  orange_money: '#EF9F27',
-  credit: '#E24B4A',
-};
+// orange_money references Orange Money's own real-world brand color
+// deliberately, not the app's caution/critical tokens — see the same note
+// in screens/Reports/index.tsx.
+const ORANGE_MONEY_BRAND = '#EF9F27';
+
+const makePaymentColors = (palette: Palette): Record<Sale['paymentMethod'], string> => ({
+  cash: palette.moss,
+  orange_money: ORANGE_MONEY_BRAND,
+  credit: palette.critical,
+});
 
 type ProductMode = 'flavor' | 'bulk';
 
@@ -52,6 +50,9 @@ type CartItem = {
 };
 
 export default function VentesScreen() {
+  const { palette } = useTheme();
+  const styles = makeStyles(palette);
+  const PAYMENT_COLORS = makePaymentColors(palette);
   const insets = useSafeAreaInsets();
   const [tab, setTab] = useState<'new' | 'history'>('new');
   const [sales, setSalesState] = useState<Sale[]>([]);
@@ -122,7 +123,28 @@ export default function VentesScreen() {
     if (bk.length > 0 && !selectedBulkId) {
       setSelectedBulkId(bk[0].id);
     }
+    // Self-heal: flavors/standalone bulks created before stock tracking
+    // existed have no stock row yet — back-fill them at 0 so they show up
+    // and can be topped up, instead of silently having nothing to deduct.
+    await Promise.all([
+      ...fl.map((f) => ensureStockItem(f.id, f.label, 'sachet')),
+      ...bk.filter((b) => !b.flavorId).map((b) => ensureStockItem(b.id, b.name, 'unité')),
+    ]);
   }, []);
+
+  // Resolves what a cart item actually sells against in finished-goods
+  // stock: a flavor deducts its own row; a bulk built on a flavor deducts
+  // bagCount×qty from THAT flavor's row (a bulk is just a case of it, not
+  // separate inventory); a standalone bulk deducts its own row.
+  const resolveStockTarget = (item: CartItem): { stockId: string; amount: number } => {
+    if (item.productType === 'bulk') {
+      const bulk = bulks.find((b) => b.id === item.product);
+      if (bulk?.flavorId) {
+        return { stockId: bulk.flavorId, amount: item.quantity * bulk.bagCount };
+      }
+    }
+    return { stockId: item.product, amount: item.quantity };
+  };
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
@@ -206,21 +228,32 @@ export default function VentesScreen() {
     setCartItems((prev) => prev.filter((item) => item.id !== id));
   };
 
-  const handleFinalize = async () => {
-    if (!clientQuery.trim()) {
-      Alert.alert('Erreur', 'Veuillez saisir un nom de client.');
-      return;
+  // Aggregates cart items into { stockId: totalQtyNeeded }, merging a flavor
+  // sold directly with the same flavor sold via a bulk built on it.
+  const buildDeductions = (): Record<string, number> => {
+    const deductions: Record<string, number> = {};
+    for (const item of cartItems) {
+      const { stockId, amount } = resolveStockTarget(item);
+      deductions[stockId] = (deductions[stockId] ?? 0) + amount;
     }
-    if (cartItems.length === 0) {
-      Alert.alert('Erreur', 'Ajoutez au moins un produit au panier.');
-      return;
-    }
+    return deductions;
+  };
+
+  const finalizeSale = async () => {
     setSaving(true);
     try {
       await upsertClient(clientQuery.trim());
+      // Real cost of goods for this sale — read each item's finished-goods
+      // avgCost BEFORE stock is deducted (consumption never moves avgCost,
+      // so before/after doesn't matter, but the deduction below needs the
+      // combined quantities anyway). This is what Reports uses for real
+      // profit instead of expensing raw-material purchases by month bought.
+      const stockForCost = await getStock();
       for (const item of cartItems) {
         const itemTotal = item.quantity * item.unitPrice;
         const amountPaid = paymentMethod !== 'credit' ? itemTotal : 0;
+        const { stockId, amount } = resolveStockTarget(item);
+        const avgCost = stockForCost.find((s) => s.id === stockId)?.avgCost ?? 0;
         await addSale({
           date: toDateString(),
           clientName: clientQuery.trim(),
@@ -231,14 +264,45 @@ export default function VentesScreen() {
           totalAmount: itemTotal,
           amountPaid,
           paymentMethod,
+          costAmount: avgCost * amount,
         });
       }
+      await deductStock(buildDeductions());
       await load();
       resetForm();
       Alert.alert('Succès', `${cartItems.length} article${cartItems.length > 1 ? 's' : ''} enregistré${cartItems.length > 1 ? 's' : ''}.`);
     } finally {
       setSaving(false);
     }
+  };
+
+  const handleFinalize = async () => {
+    if (!clientQuery.trim()) {
+      Alert.alert('Erreur', 'Veuillez saisir un nom de client.');
+      return;
+    }
+    if (cartItems.length === 0) {
+      Alert.alert('Erreur', 'Ajoutez au moins un produit au panier.');
+      return;
+    }
+
+    const shortfalls = await checkStockAvailability(buildDeductions());
+    if (shortfalls.length > 0) {
+      const detail = shortfalls
+        .map((s) => `${s.name} : ${s.available} ${s.unit} dispo, ${s.needed} ${s.unit} nécessaire${s.needed > 1 ? 's' : ''}`)
+        .join('\n');
+      Alert.alert(
+        'Stock insuffisant',
+        `${detail}\n\nVendre quand même ?`,
+        [
+          { text: 'Annuler', style: 'cancel' },
+          { text: 'Vendre quand même', style: 'destructive', onPress: finalizeSale },
+        ]
+      );
+      return;
+    }
+
+    await finalizeSale();
   };
 
   const handleMarkPaid = async (sale: Sale) => {
@@ -346,7 +410,7 @@ export default function VentesScreen() {
                 style={[styles.modeBtn, productMode === 'flavor' && styles.modeBtnActive]}
                 onPress={() => handleModeChange('flavor')}
               >
-                <Text style={[styles.modeBtnText, productMode === 'flavor' && { color: '#fff' }]}>
+                <Text style={[styles.modeBtnText, productMode === 'flavor' && { color: palette.white }]}>
                   Unités individuelles
                 </Text>
               </TouchableOpacity>
@@ -354,7 +418,7 @@ export default function VentesScreen() {
                 style={[styles.modeBtn, productMode === 'bulk' && styles.modeBtnActive]}
                 onPress={() => handleModeChange('bulk')}
               >
-                <Text style={[styles.modeBtnText, productMode === 'bulk' && { color: '#fff' }]}>
+                <Text style={[styles.modeBtnText, productMode === 'bulk' && { color: palette.white }]}>
                   Lots
                 </Text>
               </TouchableOpacity>
@@ -373,7 +437,7 @@ export default function VentesScreen() {
                         style={[styles.productCard, selectedFlavorId === f.id && styles.productCardSelected]}
                         onPress={() => handleSelectFlavor(f)}
                       >
-                        <Text style={[styles.productLabel, selectedFlavorId === f.id && { color: '#fff' }]}>
+                        <Text style={[styles.productLabel, selectedFlavorId === f.id && { color: palette.white }]}>
                           {f.label}
                         </Text>
                         <Text style={[styles.productPrice, selectedFlavorId === f.id && { color: 'rgba(255,255,255,0.8)' }]}>
@@ -397,7 +461,7 @@ export default function VentesScreen() {
                         style={[styles.productCard, selectedBulkId === b.id && styles.productCardSelected]}
                         onPress={() => handleSelectBulk(b)}
                       >
-                        <Text style={[styles.productLabel, selectedBulkId === b.id && { color: '#fff' }]}>
+                        <Text style={[styles.productLabel, selectedBulkId === b.id && { color: palette.white }]}>
                           {b.name}
                         </Text>
                         <Text style={[styles.productPrice, selectedBulkId === b.id && { color: 'rgba(255,255,255,0.8)' }]}>
@@ -440,7 +504,7 @@ export default function VentesScreen() {
 
             {/* Add to cart button */}
             <TouchableOpacity style={styles.addToCartBtn} onPress={handleAddToCart}>
-              <Ionicons name="add-circle-outline" size={20} color={C.primary} />
+              <Ionicons name="add-circle-outline" size={20} color={palette.moss} />
               <Text style={styles.addToCartText}>Ajouter au panier</Text>
             </TouchableOpacity>
 
@@ -458,7 +522,7 @@ export default function VentesScreen() {
                     </View>
                     <Text style={styles.cartItemTotal}>{formatGNF(item.quantity * item.unitPrice)}</Text>
                     <TouchableOpacity style={styles.cartRemoveBtn} onPress={() => handleRemoveFromCart(item.id)}>
-                      <Ionicons name="trash-outline" size={18} color={C.red} />
+                      <Ionicons name="trash-outline" size={18} color={palette.critical} />
                     </TouchableOpacity>
                   </View>
                 ))}
@@ -476,7 +540,7 @@ export default function VentesScreen() {
                       style={[styles.payBtn, paymentMethod === m && { backgroundColor: PAYMENT_COLORS[m] }]}
                       onPress={() => setPaymentMethod(m)}
                     >
-                      <Text style={[styles.payBtnText, paymentMethod === m && { color: '#fff' }]}>
+                      <Text style={[styles.payBtnText, paymentMethod === m && { color: palette.white }]}>
                         {PAYMENT_LABELS[m]}
                       </Text>
                     </TouchableOpacity>
@@ -515,8 +579,8 @@ export default function VentesScreen() {
                 </View>
                 <View style={{ alignItems: 'flex-end', gap: 4 }}>
                   <Text style={styles.saleTotal}>{formatGNF(item.totalAmount)}</Text>
-                  <View style={[styles.badge, { backgroundColor: (PAYMENT_COLORS[item.paymentMethod] ?? C.muted) + '22' }]}>
-                    <Text style={[styles.badgeText, { color: PAYMENT_COLORS[item.paymentMethod] ?? C.muted }]}>
+                  <View style={[styles.badge, { backgroundColor: (PAYMENT_COLORS[item.paymentMethod] ?? palette.muted) + '22' }]}>
+                    <Text style={[styles.badgeText, { color: PAYMENT_COLORS[item.paymentMethod] ?? palette.muted }]}>
                       {PAYMENT_LABELS[item.paymentMethod] ?? item.paymentMethod}
                     </Text>
                   </View>
@@ -531,144 +595,113 @@ export default function VentesScreen() {
       )}
 
       {/* Detail modal */}
-      <Modal visible={!!detailSale} animationType="slide" transparent onRequestClose={() => setDetailSale(null)}>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Détail de la vente</Text>
-            {detailSale && (
-              <>
-                <DetailRow label="Client" value={detailSale.clientName} />
-                <DetailRow label="Produit" value={getProductLabel(detailSale)} />
-                <DetailRow label="Quantité" value={`${detailSale.quantity}×`} />
-                <DetailRow label="Prix unitaire" value={formatGNF(detailSale.unitPrice)} />
-                <DetailRow label="Total" value={formatGNF(detailSale.totalAmount)} />
-                <DetailRow label="Paiement" value={PAYMENT_LABELS[detailSale.paymentMethod] ?? detailSale.paymentMethod} />
-                {detailSale.paymentMethod === 'credit' && (
-                  <DetailRow
-                    label="Montant dû"
-                    value={formatGNF(saleDebt(detailSale))}
-                    valueStyle={{ color: saleDebt(detailSale) > 0 ? C.red : C.primary }}
-                  />
-                )}
-                <DetailRow label="Date" value={formatDate(detailSale.date)} />
-                {detailSale.paymentMethod === 'credit' && saleDebt(detailSale) > 0 && (
-                  <TouchableOpacity
-                    style={styles.markPaidBtn}
-                    onPress={() => handleMarkPaid(detailSale)}
-                  >
-                    <Ionicons name="checkmark-circle-outline" size={18} color={C.primary} />
-                    <Text style={styles.markPaidText}>Marquer comme payé</Text>
-                  </TouchableOpacity>
-                )}
-                <View style={styles.detailActions}>
-                  <TouchableOpacity style={styles.editDetailBtn} onPress={() => openEdit(detailSale)}>
-                    <Ionicons name="pencil-outline" size={16} color={C.primary} />
-                    <Text style={styles.editDetailText}>Modifier</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={styles.deleteDetailBtn} onPress={() => handleDelete(detailSale)}>
-                    <Ionicons name="trash-outline" size={16} color={C.red} />
-                    <Text style={styles.deleteDetailText}>Supprimer</Text>
-                  </TouchableOpacity>
-                </View>
-              </>
+      <AppModal visible={!!detailSale} onClose={() => setDetailSale(null)} title="Détail de la vente">
+        {detailSale && (
+          <>
+            <DetailRow label="Client" value={detailSale.clientName} />
+            <DetailRow label="Produit" value={getProductLabel(detailSale)} />
+            <DetailRow label="Quantité" value={`${detailSale.quantity}×`} />
+            <DetailRow label="Prix unitaire" value={formatGNF(detailSale.unitPrice)} />
+            <DetailRow label="Total" value={formatGNF(detailSale.totalAmount)} />
+            <DetailRow label="Paiement" value={PAYMENT_LABELS[detailSale.paymentMethod] ?? detailSale.paymentMethod} />
+            {detailSale.paymentMethod === 'credit' && (
+              <DetailRow
+                label="Montant dû"
+                value={formatGNF(saleDebt(detailSale))}
+                valueStyle={{ color: saleDebt(detailSale) > 0 ? palette.critical : palette.moss }}
+              />
             )}
-            <TouchableOpacity style={styles.closeBtn} onPress={() => setDetailSale(null)}>
-              <Text style={styles.closeBtnText}>Fermer</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
+            <DetailRow label="Date" value={formatDate(detailSale.date)} />
+            {detailSale.paymentMethod === 'credit' && saleDebt(detailSale) > 0 && (
+              <TouchableOpacity
+                style={styles.markPaidBtn}
+                onPress={() => handleMarkPaid(detailSale)}
+              >
+                <Ionicons name="checkmark-circle-outline" size={18} color={palette.moss} />
+                <Text style={styles.markPaidText}>Marquer comme payé</Text>
+              </TouchableOpacity>
+            )}
+            <View style={styles.detailActions}>
+              <TouchableOpacity style={styles.editDetailBtn} onPress={() => openEdit(detailSale)}>
+                <Ionicons name="pencil-outline" size={16} color={palette.moss} />
+                <Text style={styles.editDetailText}>Modifier</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.deleteDetailBtn} onPress={() => handleDelete(detailSale)}>
+                <Ionicons name="trash-outline" size={16} color={palette.critical} />
+                <Text style={styles.deleteDetailText}>Supprimer</Text>
+              </TouchableOpacity>
+            </View>
+          </>
+        )}
+      </AppModal>
 
-      {/* Delete confirm modal */}
-      <Modal visible={!!deleteTarget} transparent animationType="fade" onRequestClose={() => setDeleteTarget(null)}>
-        <View style={styles.confirmOverlay}>
-          <View style={styles.confirmBox}>
-            <Ionicons name="trash-outline" size={32} color={C.red} style={{ alignSelf: 'center', marginBottom: 12 }} />
-            <Text style={styles.confirmTitle}>Supprimer cette vente ?</Text>
-            <Text style={styles.confirmSub}>
-              {deleteTarget ? `${deleteTarget.clientName} — ${formatGNF(deleteTarget.totalAmount)}` : ''}
-            </Text>
-            <TouchableOpacity
-              style={styles.confirmDeleteBtn}
-              onPress={async () => {
-                if (!deleteTarget) return;
-                await deleteSale(deleteTarget.id);
-                await load();
-                setDeleteTarget(null);
-              }}
-            >
-              <Text style={styles.confirmDeleteText}>Supprimer</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.confirmCancelBtn} onPress={() => setDeleteTarget(null)}>
-              <Text style={styles.confirmCancelText}>Annuler</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
+      {/* Delete confirm */}
+      <ConfirmDialog
+        visible={!!deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={async () => {
+          if (!deleteTarget) return;
+          await deleteSale(deleteTarget.id);
+          await load();
+          setDeleteTarget(null);
+        }}
+        title="Supprimer cette vente ?"
+        message={deleteTarget ? `${deleteTarget.clientName} — ${formatGNF(deleteTarget.totalAmount)}` : ''}
+        confirmLabel="Supprimer"
+        icon="trash-outline"
+        tone="danger"
+      />
 
       {/* Edit modal */}
-      <Modal visible={!!editingSale} animationType="slide" transparent onRequestClose={() => setEditingSale(null)}>
-        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-          <View style={styles.modalOverlay}>
-            <View style={styles.modalCard}>
-              <Text style={styles.modalTitle}>Modifier la vente</Text>
-              {editForm && (
-                <ScrollView>
-                  <Text style={styles.editLabel}>Client</Text>
-                  <TextInput
-                    style={styles.editInput}
-                    value={editForm.clientName}
-                    onChangeText={(v) => setEditForm((f) => f ? { ...f, clientName: v } : f)}
-                  />
-                  <Text style={styles.editLabel}>Quantité</Text>
-                  <TextInput
-                    style={styles.editInput}
-                    keyboardType="numeric"
-                    value={String(editForm.quantity)}
-                    onChangeText={(v) => setEditForm((f) => f ? { ...f, quantity: parseInt(v) || 1 } : f)}
-                  />
-                  <Text style={styles.editLabel}>Prix unitaire (GNF)</Text>
-                  <TextInput
-                    style={styles.editInput}
-                    keyboardType="numeric"
-                    value={String(editForm.unitPrice)}
-                    onChangeText={(v) => setEditForm((f) => f ? { ...f, unitPrice: parseInt(v) || 0 } : f)}
-                  />
-                  <Text style={styles.editLabel}>Mode de paiement</Text>
-                  <View style={styles.paymentRow}>
-                    {(Object.keys(PAYMENT_LABELS) as Sale['paymentMethod'][]).map((m) => (
-                      <TouchableOpacity
-                        key={m}
-                        style={[styles.payBtn, editForm.paymentMethod === m && { backgroundColor: PAYMENT_COLORS[m] }]}
-                        onPress={() => setEditForm((f) => f ? { ...f, paymentMethod: m } : f)}
-                      >
-                        <Text style={[styles.payBtnText, editForm.paymentMethod === m && { color: '#fff' }]}>
-                          {PAYMENT_LABELS[m]}
-                        </Text>
-                      </TouchableOpacity>
-                    ))}
-                  </View>
-                  <Text style={[styles.totalBox, { marginTop: 12 }]}>
-                    Total : {formatGNF(editForm.quantity * editForm.unitPrice)}
-                  </Text>
-                </ScrollView>
-              )}
-              <View style={styles.modalActionsRow}>
-                <TouchableOpacity style={styles.cancelBtn2} onPress={() => setEditingSale(null)}>
-                  <Text style={styles.cancelText2}>Annuler</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.confirmBtn2, saving && { opacity: 0.6 }]}
-                  onPress={handleUpdate}
-                  disabled={saving}
-                >
-                  <Text style={styles.confirmText2}>{saving ? '…' : 'Enregistrer'}</Text>
-                </TouchableOpacity>
+      <AppModal visible={!!editingSale} onClose={() => setEditingSale(null)} title="Modifier la vente">
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          {editForm && (
+            <ScrollView keyboardShouldPersistTaps="handled">
+              <Text style={styles.editLabel}>Client</Text>
+              <TextInput
+                style={styles.editInput}
+                value={editForm.clientName}
+                onChangeText={(v) => setEditForm((f) => f ? { ...f, clientName: v } : f)}
+              />
+              <Text style={styles.editLabel}>Quantité</Text>
+              <TextInput
+                style={styles.editInput}
+                keyboardType="numeric"
+                value={String(editForm.quantity)}
+                onChangeText={(v) => setEditForm((f) => f ? { ...f, quantity: parseInt(v) || 1 } : f)}
+              />
+              <Text style={styles.editLabel}>Prix unitaire (GNF)</Text>
+              <TextInput
+                style={styles.editInput}
+                keyboardType="numeric"
+                value={String(editForm.unitPrice)}
+                onChangeText={(v) => setEditForm((f) => f ? { ...f, unitPrice: parseInt(v) || 0 } : f)}
+              />
+              <Text style={styles.editLabel}>Mode de paiement</Text>
+              <View style={styles.paymentRow}>
+                {(Object.keys(PAYMENT_LABELS) as Sale['paymentMethod'][]).map((m) => (
+                  <TouchableOpacity
+                    key={m}
+                    style={[styles.payBtn, editForm.paymentMethod === m && { backgroundColor: PAYMENT_COLORS[m] }]}
+                    onPress={() => setEditForm((f) => f ? { ...f, paymentMethod: m } : f)}
+                  >
+                    <Text style={[styles.payBtnText, editForm.paymentMethod === m && { color: palette.white }]}>
+                      {PAYMENT_LABELS[m]}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
               </View>
-            </View>
+              <Text style={[styles.totalBox, { marginTop: 12 }]}>
+                Total : {formatGNF(editForm.quantity * editForm.unitPrice)}
+              </Text>
+            </ScrollView>
+          )}
+          <View style={styles.modalActionsRow}>
+            <Button label="Annuler" variant="ghost" onPress={() => setEditingSale(null)} style={{ flex: 1 }} />
+            <Button label="Enregistrer" onPress={handleUpdate} loading={saving} style={{ flex: 1 }} />
           </View>
         </KeyboardAvoidingView>
-      </Modal>
+      </AppModal>
     </View>
   );
 }
@@ -678,6 +711,8 @@ function DetailRow({
 }: {
   label: string; value: string; valueStyle?: object;
 }) {
+  const { palette } = useTheme();
+  const styles = makeStyles(palette);
   return (
     <View style={styles.detailRow}>
       <Text style={styles.detailLabel}>{label}</Text>
@@ -686,177 +721,138 @@ function DetailRow({
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: C.bg },
+const makeStyles = (palette: Palette) => StyleSheet.create({
+  container: { flex: 1, backgroundColor: palette.paper },
   segmentRow: {
-    flexDirection: 'row', backgroundColor: C.card,
-    borderBottomWidth: 1, borderColor: C.border,
+    flexDirection: 'row', backgroundColor: palette.card,
+    borderBottomWidth: 1, borderColor: palette.line,
   },
   segment: { flex: 1, paddingVertical: 14, alignItems: 'center' },
-  segmentActive: { borderBottomWidth: 2, borderColor: C.primary },
-  segmentText: { fontSize: 15, color: C.muted, fontWeight: '500' },
-  segmentTextActive: { color: C.primary, fontWeight: '600' },
+  segmentActive: { borderBottomWidth: 2, borderColor: palette.moss },
+  segmentText: { fontSize: 15, color: palette.muted, fontWeight: '500' },
+  segmentTextActive: { color: palette.moss, fontWeight: '600' },
   form: { padding: 16, paddingBottom: 40, gap: 6 },
-  label: { fontSize: 14, fontWeight: '600', color: C.text, marginTop: 10, marginBottom: 4 },
+  label: { fontSize: 14, fontWeight: '600', color: palette.ink, marginTop: 10, marginBottom: 4 },
   input: {
-    backgroundColor: C.card, borderRadius: 12, borderWidth: 1,
-    borderColor: C.border, padding: 14, fontSize: 16, color: C.text,
+    backgroundColor: palette.card, borderRadius: 12, borderWidth: 1,
+    borderColor: palette.line, padding: 14, fontSize: 16, color: palette.ink,
   },
   autocompleteWrap: { position: 'relative', zIndex: 10 },
   suggestions: {
     position: 'absolute', top: 52, left: 0, right: 0,
-    backgroundColor: C.card, borderRadius: 12,
-    borderWidth: 1, borderColor: C.border,
+    backgroundColor: palette.card, borderRadius: 12,
+    borderWidth: 1, borderColor: palette.line,
     shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 8, elevation: 4,
     zIndex: 20,
   },
-  suggestionItem: { padding: 14, borderBottomWidth: 1, borderColor: '#F0F0EE' },
-  suggestionText: { fontSize: 15, color: C.text },
-  suggestionPhone: { fontSize: 12, color: C.muted, marginTop: 2 },
+  suggestionItem: { padding: 14, borderBottomWidth: 1, borderColor: palette.line },
+  suggestionText: { fontSize: 15, color: palette.ink },
+  suggestionPhone: { fontSize: 12, color: palette.muted, marginTop: 2 },
   modeRow: { flexDirection: 'row', gap: 10 },
   modeBtn: {
     flex: 1, paddingVertical: 12, borderRadius: 12,
-    backgroundColor: C.card, borderWidth: 1, borderColor: C.border,
+    backgroundColor: palette.card, borderWidth: 1, borderColor: palette.line,
     alignItems: 'center',
   },
-  modeBtnActive: { backgroundColor: C.primary, borderColor: C.primary },
-  modeBtnText: { fontSize: 14, fontWeight: '600', color: C.text },
-  emptyHint: { fontSize: 13, color: C.muted, fontStyle: 'italic' },
+  modeBtnActive: { backgroundColor: palette.moss, borderColor: palette.moss },
+  modeBtnText: { fontSize: 14, fontWeight: '600', color: palette.ink },
+  emptyHint: { fontSize: 13, color: palette.muted, fontStyle: 'italic' },
   productsRow: { gap: 8 },
   productCard: {
-    backgroundColor: C.card, borderRadius: 12, borderWidth: 1,
-    borderColor: C.border, padding: 14,
+    backgroundColor: palette.card, borderRadius: 12, borderWidth: 1,
+    borderColor: palette.line, padding: 14,
   },
-  productCardSelected: { backgroundColor: C.primary, borderColor: C.primary },
-  productLabel: { fontSize: 15, fontWeight: '600', color: C.text },
-  productPrice: { fontSize: 13, color: C.muted, marginTop: 2 },
+  productCardSelected: { backgroundColor: palette.moss, borderColor: palette.moss },
+  productLabel: { fontSize: 15, fontWeight: '600', color: palette.ink },
+  productPrice: { fontSize: 13, color: palette.muted, marginTop: 2 },
   qtyRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   qtyBtn: {
-    width: 48, height: 48, borderRadius: 12, backgroundColor: C.card,
-    borderWidth: 1, borderColor: C.border, alignItems: 'center', justifyContent: 'center',
+    width: 48, height: 48, borderRadius: 12, backgroundColor: palette.card,
+    borderWidth: 1, borderColor: palette.line, alignItems: 'center', justifyContent: 'center',
   },
-  qtyBtnText: { fontSize: 22, color: C.primary, fontWeight: '600' },
+  qtyBtnText: { fontSize: 22, color: palette.moss, fontWeight: '600' },
   qtyInput: {
-    flex: 1, backgroundColor: C.card, borderRadius: 12, borderWidth: 1,
-    borderColor: C.border, padding: 12, fontSize: 18, textAlign: 'center', color: C.text,
+    flex: 1, backgroundColor: palette.card, borderRadius: 12, borderWidth: 1,
+    borderColor: palette.line, padding: 12, fontSize: 18, textAlign: 'center', color: palette.ink,
   },
   totalBox: {
-    backgroundColor: '#F0FBF7', borderRadius: 12, padding: 16,
-    alignItems: 'center', borderWidth: 1, borderColor: '#C7EDE3',
-    fontSize: 16, fontWeight: '600', color: C.primary, textAlign: 'center',
+    backgroundColor: palette.mossSoft, borderRadius: 12, padding: 16,
+    alignItems: 'center', borderWidth: 1, borderColor: palette.moss + '40',
+    fontSize: 16, fontWeight: '600', color: palette.moss, textAlign: 'center',
   } as any,
-  totalText: { fontSize: 24, fontWeight: '600', color: C.primary },
+  totalText: { fontSize: 24, fontWeight: '600', color: palette.moss },
   addToCartBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
     borderRadius: 12, height: 52, marginTop: 4,
-    backgroundColor: '#E8F6F0', borderWidth: 1, borderColor: '#C7EDE3',
+    backgroundColor: palette.mossSoft, borderWidth: 1, borderColor: palette.moss + '40',
   },
-  addToCartText: { fontSize: 16, fontWeight: '600', color: C.primary },
+  addToCartText: { fontSize: 16, fontWeight: '600', color: palette.moss },
   cartRow: {
-    flexDirection: 'row', alignItems: 'center', backgroundColor: C.card,
-    borderRadius: 12, borderWidth: 1, borderColor: C.border, padding: 14, gap: 10,
+    flexDirection: 'row', alignItems: 'center', backgroundColor: palette.card,
+    borderRadius: 12, borderWidth: 1, borderColor: palette.line, padding: 14, gap: 10,
   },
-  cartItemLabel: { fontSize: 14, fontWeight: '600', color: C.text },
-  cartItemMeta: { fontSize: 12, color: C.muted, marginTop: 2 },
-  cartItemTotal: { fontSize: 14, fontWeight: '600', color: C.text },
+  cartItemLabel: { fontSize: 14, fontWeight: '600', color: palette.ink },
+  cartItemMeta: { fontSize: 12, color: palette.muted, marginTop: 2 },
+  cartItemTotal: { fontSize: 14, fontWeight: '600', color: palette.ink },
   cartRemoveBtn: { padding: 4 },
   cartGrandTotal: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    backgroundColor: '#F0FBF7', borderRadius: 12, padding: 16,
-    borderWidth: 1, borderColor: '#C7EDE3', marginTop: 4,
+    backgroundColor: palette.mossSoft, borderRadius: 12, padding: 16,
+    borderWidth: 1, borderColor: palette.moss + '40', marginTop: 4,
   },
-  cartGrandLabel: { fontSize: 15, fontWeight: '600', color: C.primary },
-  cartGrandValue: { fontSize: 22, fontWeight: '700', color: C.primary },
+  cartGrandLabel: { fontSize: 15, fontWeight: '600', color: palette.moss },
+  cartGrandValue: { fontSize: 22, fontWeight: '700', color: palette.moss },
   paymentRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   payBtn: {
     flex: 1, minWidth: '30%', height: 52, borderRadius: 12,
-    backgroundColor: C.card, borderWidth: 1, borderColor: C.border,
+    backgroundColor: palette.card, borderWidth: 1, borderColor: palette.line,
     alignItems: 'center', justifyContent: 'center',
   },
-  payBtnText: { fontSize: 14, fontWeight: '600', color: C.text },
+  payBtnText: { fontSize: 14, fontWeight: '600', color: palette.ink },
   submitBtn: {
-    backgroundColor: C.primary, borderRadius: 12, height: 52,
+    backgroundColor: palette.moss, borderRadius: 12, height: 52,
     alignItems: 'center', justifyContent: 'center', marginTop: 8,
   },
-  submitText: { color: '#FFFFFF', fontSize: 16, fontWeight: '700' },
+  submitText: { color: palette.white, fontSize: 16, fontWeight: '700' },
   saleRow: {
-    flexDirection: 'row', backgroundColor: C.card, borderRadius: 12,
-    padding: 14, marginBottom: 10, borderWidth: 1, borderColor: C.border,
+    flexDirection: 'row', backgroundColor: palette.card, borderRadius: 12,
+    padding: 14, marginBottom: 10, borderWidth: 1, borderColor: palette.line,
     shadowColor: '#000', shadowOpacity: 0.03, shadowRadius: 3, elevation: 1,
   },
-  saleClient: { fontSize: 15, fontWeight: '600', color: C.text },
-  saleMeta: { fontSize: 13, color: C.muted, marginTop: 2 },
-  saleTotal: { fontSize: 15, fontWeight: '600', color: C.text },
+  saleClient: { fontSize: 15, fontWeight: '600', color: palette.ink },
+  saleMeta: { fontSize: 13, color: palette.muted, marginTop: 2 },
+  saleTotal: { fontSize: 15, fontWeight: '600', color: palette.ink },
   badge: { borderRadius: 20, paddingHorizontal: 8, paddingVertical: 3 },
   badgeText: { fontSize: 11, fontWeight: '600' },
-  debtBadge: { fontSize: 11, color: C.red, fontWeight: '600' },
-  empty: { textAlign: 'center', color: C.muted, marginTop: 40, fontSize: 15 },
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
-  modalCard: {
-    backgroundColor: C.card, borderTopLeftRadius: 20, borderTopRightRadius: 20,
-    padding: 24, paddingBottom: 40, maxHeight: '90%',
-  },
-  modalTitle: { fontSize: 18, fontWeight: '700', color: C.text, marginBottom: 16 },
+  debtBadge: { fontSize: 11, color: palette.critical, fontWeight: '600' },
+  empty: { textAlign: 'center', color: palette.muted, marginTop: 40, fontSize: 15 },
   detailRow: {
     flexDirection: 'row', justifyContent: 'space-between',
-    paddingVertical: 10, borderBottomWidth: 1, borderColor: '#F0F0EE',
+    paddingVertical: 10, borderBottomWidth: 1, borderColor: palette.line,
   },
-  detailLabel: { fontSize: 14, color: C.muted },
-  detailValue: { fontSize: 14, fontWeight: '600', color: C.text },
+  detailLabel: { fontSize: 14, color: palette.muted },
+  detailValue: { fontSize: 14, fontWeight: '600', color: palette.ink },
   markPaidBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
-    backgroundColor: '#E8F6F0', borderRadius: 10, padding: 12, marginTop: 12,
-    borderWidth: 1, borderColor: '#C7EDE3',
+    backgroundColor: palette.mossSoft, borderRadius: 10, padding: 12, marginTop: 12,
+    borderWidth: 1, borderColor: palette.moss + '40',
   },
-  markPaidText: { fontSize: 15, fontWeight: '600', color: C.primary },
+  markPaidText: { fontSize: 15, fontWeight: '600', color: palette.moss },
   detailActions: { flexDirection: 'row', gap: 10, marginTop: 12 },
   editDetailBtn: {
-    flex: 1, height: 44, borderRadius: 10, backgroundColor: '#E8F6F0',
+    flex: 1, height: 44, borderRadius: 10, backgroundColor: palette.mossSoft,
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
   },
-  editDetailText: { fontSize: 14, fontWeight: '600', color: C.primary },
+  editDetailText: { fontSize: 14, fontWeight: '600', color: palette.moss },
   deleteDetailBtn: {
-    flex: 1, height: 44, borderRadius: 10, backgroundColor: '#FDECEA',
+    flex: 1, height: 44, borderRadius: 10, backgroundColor: palette.criticalSoft,
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
   },
-  deleteDetailText: { fontSize: 14, fontWeight: '600', color: C.red },
-  closeBtn: {
-    backgroundColor: C.bg, borderRadius: 12, height: 52,
-    alignItems: 'center', justifyContent: 'center', marginTop: 12,
-  },
-  closeBtnText: { fontSize: 16, color: C.text, fontWeight: '600' },
-  editLabel: { fontSize: 14, fontWeight: '600', color: C.text, marginTop: 12, marginBottom: 4 },
+  deleteDetailText: { fontSize: 14, fontWeight: '600', color: palette.critical },
+  editLabel: { fontSize: 14, fontWeight: '600', color: palette.ink, marginTop: 12, marginBottom: 4 },
   editInput: {
-    backgroundColor: C.bg, borderRadius: 12, borderWidth: 1,
-    borderColor: C.border, padding: 14, fontSize: 16, color: C.text,
+    backgroundColor: palette.paper, borderRadius: 12, borderWidth: 1,
+    borderColor: palette.line, padding: 14, fontSize: 16, color: palette.ink,
   },
   modalActionsRow: { flexDirection: 'row', gap: 10, marginTop: 16 },
-  cancelBtn2: {
-    flex: 1, height: 52, borderRadius: 12, backgroundColor: C.bg,
-    borderWidth: 1, borderColor: C.border, alignItems: 'center', justifyContent: 'center',
-  },
-  cancelText2: { fontSize: 16, color: C.muted, fontWeight: '600' },
-  confirmBtn2: {
-    flex: 1, height: 52, borderRadius: 12, backgroundColor: C.primary,
-    alignItems: 'center', justifyContent: 'center',
-  },
-  confirmText2: { fontSize: 16, color: '#FFFFFF', fontWeight: '700' },
-  confirmOverlay: {
-    flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', padding: 24,
-  },
-  confirmBox: {
-    backgroundColor: C.card, borderRadius: 16, padding: 24,
-  },
-  confirmTitle: { fontSize: 17, fontWeight: '700', color: '#1A1A18', textAlign: 'center', marginBottom: 6 },
-  confirmSub: { fontSize: 14, color: C.muted, textAlign: 'center', marginBottom: 20 },
-  confirmDeleteBtn: {
-    backgroundColor: C.red, borderRadius: 12, height: 52,
-    alignItems: 'center', justifyContent: 'center', marginBottom: 10,
-  },
-  confirmDeleteText: { color: '#FFFFFF', fontSize: 16, fontWeight: '700' },
-  confirmCancelBtn: {
-    borderRadius: 12, height: 52, borderWidth: 1, borderColor: C.border,
-    alignItems: 'center', justifyContent: 'center',
-  },
-  confirmCancelText: { fontSize: 16, color: C.muted, fontWeight: '600' },
 });
