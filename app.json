@@ -25,7 +25,7 @@
         "NSPhotoLibraryUsageDescription": "Utilisée pour choisir une photo de document (contrats, licences, factures) ou votre photo de profil depuis votre galerie.",
         "ITSAppUsesNonExemptEncryption": false
       },
-      "buildNumber": "3"
+      "buildNumber": "4"
     },
     "android": {
       "package": "com.kolilink.orny",
@@ -37,7 +37,8 @@
       "permissions": [
         "android.permission.RECORD_AUDIO",
         "android.permission.MODIFY_AUDIO_SETTINGS"
-      ]
+      ],
+      "versionCode": 2
     },
     "web": {
       "favicon": "./assets/favicon.png"
