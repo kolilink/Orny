@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from './supabase';
+import { generateId } from '../store/context';
 
 const QUEUE_KEY = 'sync_queue_v1';
 const MAX_ATTEMPTS = 5;
@@ -83,7 +84,9 @@ export async function enqueueIfNetworkError(
     throw error;
   }
   const queue = await getQueue();
-  queue.push({ ...item, id: crypto.randomUUID(), attempts: 0, createdAt: Date.now() });
+  // Not crypto.randomUUID() — see store/context.ts's generateId(), reused
+  // here rather than duplicating the same Hermes-safe fallback a second time.
+  queue.push({ ...item, id: generateId(), attempts: 0, createdAt: Date.now() });
   await setQueue(queue);
 }
 

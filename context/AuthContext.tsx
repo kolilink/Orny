@@ -433,8 +433,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   async function regenerateInviteCode() {
     if (!membership) return { error: 'Non connecté.' };
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    // Not crypto.getRandomValues() — doesn't exist in Hermes on a real
+    // native build (see store/context.ts's generateId() for the fuller
+    // explanation and the live "property crypto doesn't exist" crash this
+    // exact pattern was already confirmed to cause elsewhere in this app).
+    // Same fix Patron's own invite-code generation already uses for the
+    // identical reason — this is an 8-character code, not a security
+    // token whose unguessability actually matters cryptographically.
     const bytes = new Uint8Array(8);
-    crypto.getRandomValues(bytes);
+    for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
     const newCode = Array.from(bytes, b => chars[b % chars.length]).join('');
     const { error } = await supabase
       .from('factories')
