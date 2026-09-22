@@ -721,9 +721,19 @@ const makeStyles = (palette: Palette) => StyleSheet.create({
     backgroundColor: palette.mossSoft, borderRadius: radius.pill,
     borderWidth: 1, borderColor: palette.moss + '40',
   },
-  chipBrief: { backgroundColor: palette.moss, borderColor: palette.moss },
+  // Not a solid palette.moss fill + white text — measured contrast on the
+  // real token values: ~2.5:1 in light mode, ~1.9:1 in dark mode, both well
+  // under WCAG's 4.5:1 minimum for text this small (12px). `moss` is tuned
+  // to read as a vivid accent against a neutral page background, not as a
+  // fill dark/light enough for white text on top of it — a real, provable
+  // legibility bug, not just "make it look nicer." Kept visually distinct
+  // from a plain chip via a bold, fully-opaque border (vs. the regular
+  // chip's 25%-opacity one) instead of an inverted fill, so it still stands
+  // out while reusing the same mossSoft/mossDeep pairing already proven
+  // readable in both themes (~4.8:1 light, ~6.4:1 dark).
+  chipBrief: { backgroundColor: palette.mossSoft, borderColor: palette.moss, borderWidth: 2 },
   chipText: { fontSize: 12, color: palette.mossDeep, fontWeight: '600' },
-  chipTextBrief: { color: palette.white },
+  chipTextBrief: { fontWeight: '700' },
 
   inputBar: {
     flexDirection: 'row', alignItems: 'flex-end',

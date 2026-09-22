@@ -213,7 +213,23 @@ function AuthGate() {
 
   const isTransitioning = session && hadMembership.current && !membership;
 
-  if (loading || membershipLoading || isTransitioning) {
+  // `loading`/`membershipLoading` are only ever true during the one-time
+  // cold-start window (see AuthContext.tsx — setLoading is only ever called
+  // from boot()) — App.js now keeps the native splash screen up across that
+  // whole window (see its own comment), so this branch should almost never
+  // actually render; it's the fallback for the rare cases that outlast the
+  // native splash (first install with nothing cached yet, or the 8s safety
+  // timeout). It matches the native splash's own fixed green
+  // (app.json's expo.splash.backgroundColor, not a themed token — that
+  // native value doesn't adapt to light/dark mode either, so this can't be
+  // palette.paper without a visible color flash the instant this appears).
+  // `isTransitioning` is a different, later-in-session case (a factory
+  // switch, well after the app's real themed UI has already been shown) —
+  // it correctly keeps the normal themed background.
+  if (loading || membershipLoading) {
+    return <View style={styles.coldStartSplash}><ActivityIndicator size="large" color={palette.white} /></View>;
+  }
+  if (isTransitioning) {
     return <View style={styles.splash}><ActivityIndicator size="large" color={palette.moss} /></View>;
   }
 
@@ -238,4 +254,8 @@ export default function Navigation() {
 
 const makeStyles = (palette: Palette) => StyleSheet.create({
   splash: { flex: 1, backgroundColor: palette.paper, alignItems: 'center', justifyContent: 'center' },
+  // Matches app.json's fixed native splash backgroundColor exactly — see
+  // the comment at this style's one call site above for why this can't be
+  // a themed token.
+  coldStartSplash: { flex: 1, backgroundColor: '#10B981', alignItems: 'center', justifyContent: 'center' },
 });
