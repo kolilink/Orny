@@ -21,6 +21,18 @@ export const isThisWeek = (dateStr: string): boolean => {
   return dateStr >= getWeekStart() && dateStr <= toDateString();
 };
 
+// The calendar week immediately before the current one (Mon-Sun) — used to
+// give Claude a real trend to compare against ("up/down vs last week"),
+// not just a flat point-in-time snapshot.
+export const isLastWeek = (dateStr: string): boolean => {
+  const thisWeekStart = new Date(getWeekStart() + 'T00:00:00');
+  const lastWeekStart = new Date(thisWeekStart);
+  lastWeekStart.setDate(lastWeekStart.getDate() - 7);
+  const lastWeekEnd = new Date(thisWeekStart);
+  lastWeekEnd.setDate(lastWeekEnd.getDate() - 1);
+  return dateStr >= toDateString(lastWeekStart) && dateStr <= toDateString(lastWeekEnd);
+};
+
 export const isToday = (dateStr: string): boolean => {
   return dateStr === toDateString();
 };

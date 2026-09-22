@@ -11,7 +11,7 @@ interface DispatchBody {
   factory_id: string
   title: string
   body: string
-  target_roles?: string[]      // e.g. ['admin', 'employee'] — omit for everyone in the factory
+  target_roles?: string[]      // e.g. ['admin', 'manager'] — omit for everyone in the factory
   target_user_ids?: string[]   // optional extra narrowing, intersected against real members
   data?: Record<string, unknown>
 }

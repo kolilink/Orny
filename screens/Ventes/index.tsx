@@ -1,25 +1,25 @@
-import React, { useState, useCallback, useRef, useEffect } from 'react';
-import {
-  View, Text, StyleSheet, ScrollView, TextInput,
-  TouchableOpacity, FlatList, Modal, KeyboardAvoidingView,
-  Platform, Alert,
-} from 'react-native';
+import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react';
+import { View, StyleSheet, ScrollView, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, Alert } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { getSales, addSale, updateSale, deleteSale, syncSalesFromSupabase } from '../../store/sales';
+import { useAuth } from '../../context/AuthContext';
+import { addSale } from '../../store/sales';
 import { getClients, upsertClient, syncClientsFromSupabase } from '../../store/clients';
 import { getFlavors, syncFlavorsFromSupabase } from '../../store/flavors';
 import { getBulks, syncBulksFromSupabase } from '../../store/bulks';
-import { checkStockAvailability, deductStock, ensureStockItem, getStock } from '../../store/stock';
-import { Sale, ProductFlavor, BulkProduct, Client, saleDebt } from '../../types';
-import { formatGNF, formatDate } from '../../utils/format';
+import { checkStockAvailability, deductStock, ensureStockItem, getStock, syncStockFromSupabase } from '../../store/stock';
+import { Sale, ProductFlavor, BulkProduct, Client, StockItem } from '../../types';
+import { formatGNF, formatNumber } from '../../utils/format';
 import { toDateString } from '../../utils/dates';
 import { getFactoryId } from '../../store/context';
+import { stockSeverity } from '../../utils/stockAlerts';
+import { ClientPicker } from '../../components/ClientPicker';
+import { hapticTap, hapticSuccess, hapticSelect } from '../../utils/haptics';
 import { Palette } from '../../theme/tokens';
 import { useTheme } from '../../theme/ThemeContext';
-import { AppModal, Button, ConfirmDialog } from '../../components/ui';
+import { AppModal, Button, CountUpNumber, MoneyInput, PressableScale, FadeSlideIn, Text } from '../../components/ui';
 
 const PAYMENT_LABELS: Record<Sale['paymentMethod'], string> = {
   cash: 'Cash',
@@ -29,13 +29,15 @@ const PAYMENT_LABELS: Record<Sale['paymentMethod'], string> = {
 
 // orange_money references Orange Money's own real-world brand color
 // deliberately, not the app's caution/critical tokens — see the same note
-// in screens/Reports/index.tsx.
+// in screens/Reports/index.tsx and screens/Ventes/History.tsx.
 const ORANGE_MONEY_BRAND = '#EF9F27';
 
+// credit is a payment *method*, not itself a problem — see the identical
+// note in screens/Ventes/History.tsx.
 const makePaymentColors = (palette: Palette): Record<Sale['paymentMethod'], string> => ({
   cash: palette.moss,
   orange_money: ORANGE_MONEY_BRAND,
-  credit: palette.critical,
+  credit: palette.violet,
 });
 
 type ProductMode = 'flavor' | 'bulk';
@@ -49,30 +51,91 @@ type CartItem = {
   unitPrice: number;
 };
 
+// One product-grid tile, extracted and memoized so that typing in the
+// client field, ticking a cart quantity stepper, or any other unrelated
+// state change on this screen no longer re-renders every card in the grid
+// (previously all inline in one .map(), so every keystroke re-created every
+// card's element and its PressableScale/FadeSlideIn closures). Only takes
+// primitive props (plus a stable `onTap`, see handleTapProduct's own
+// useCallback) so React.memo's default shallow comparison actually skips
+// re-rendering a card whose own data hasn't changed.
+type ProductCardProps = {
+  mode: ProductMode;
+  id: string;
+  label: string;
+  subtitle: string;
+  price: number;
+  badgeCount: number;
+  index: number;
+  tinted?: boolean;
+  stockLine?: { label: string; severity: 'critical' | 'low' | 'ok' };
+  onTap: (mode: ProductMode, id: string, label: string, price: number) => void;
+  styles: ReturnType<typeof makeStyles>;
+};
+
+const ProductCard = React.memo(function ProductCard({
+  mode, id, label, subtitle, price, badgeCount, index, tinted, stockLine, onTap, styles,
+}: ProductCardProps) {
+  return (
+    <FadeSlideIn index={index} style={styles.productCardSlot}>
+      <PressableScale
+        style={[styles.productCard, tinted && styles.productCardBulk]}
+        onPress={() => onTap(mode, id, label, price)}
+      >
+        <Text style={styles.productLabel}>{label}</Text>
+        <Text style={styles.productPrice}>{subtitle}</Text>
+        {stockLine && (
+          <Text
+            style={[
+              styles.productStock,
+              stockLine.severity === 'low' && styles.productStockLow,
+              stockLine.severity === 'critical' && styles.productStockOut,
+            ]}
+          >
+            {stockLine.label}
+          </Text>
+        )}
+        {badgeCount > 0 && (
+          <View style={styles.productBadge}>
+            <Text style={styles.productBadgeText}>{badgeCount}</Text>
+          </View>
+        )}
+      </PressableScale>
+    </FadeSlideIn>
+  );
+});
+
+// The Ventes tab is purely the sell action — nothing to read, only products
+// to tap and a cart to check out. Sales history (list, detail, edit, delete)
+// lives on its own screen now (screens/Ventes/History.tsx), reached from
+// Plus like Dépenses/Investisseurs, not from a tab inside this flow.
 export default function VentesScreen() {
   const { palette } = useTheme();
-  const styles = makeStyles(palette);
+  // Memoized so its identity is stable across renders that don't change
+  // palette — ProductCard below is React.memo'd specifically to skip
+  // re-rendering the whole product grid on every keystroke/cart tick, and
+  // that only works if the `styles` object it's compared against isn't a
+  // brand-new reference every single render.
+  const styles = useMemo(() => makeStyles(palette), [palette]);
   const PAYMENT_COLORS = makePaymentColors(palette);
   const insets = useSafeAreaInsets();
-  const [tab, setTab] = useState<'new' | 'history'>('new');
-  const [sales, setSalesState] = useState<Sale[]>([]);
+  const { user } = useAuth();
   const [allClients, setAllClients] = useState<Client[]>([]);
   const [flavors, setFlavorsState] = useState<ProductFlavor[]>([]);
   const [bulks, setBulksState] = useState<BulkProduct[]>([]);
+  const [stock, setStockState] = useState<StockItem[]>([]);
 
   const [clientQuery, setClientQuery] = useState('');
-  const [showSuggestions, setShowSuggestions] = useState(false);
-  const blurSuppressedRef = useRef(false);
 
-  const [productMode, setProductMode] = useState<ProductMode>('flavor');
-  const [selectedFlavorId, setSelectedFlavorId] = useState('');
-  const [selectedBulkId, setSelectedBulkId] = useState('');
-
-  const [quantity, setQuantity] = useState(1);
-  const [unitPrice, setUnitPrice] = useState(0);
   const [paymentMethod, setPaymentMethod] = useState<Sale['paymentMethod']>('cash');
   const [cartItems, setCartItems] = useState<CartItem[]>([]);
   const [saving, setSaving] = useState(false);
+
+  // Quick per-line price override — deliberately not part of the default
+  // tap-to-add path (see the file-level note below the component), reached
+  // only by tapping a cart row's own price.
+  const [priceEditTarget, setPriceEditTarget] = useState<CartItem | null>(null);
+  const [priceEditValue, setPriceEditValue] = useState('');
 
   // ── Draft persistence ──────────────────────────────────────────
   const draftKey = `ventes_draft_${getFactoryId() ?? 'default'}`;
@@ -99,36 +162,31 @@ export default function VentesScreen() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clientQuery, paymentMethod, cartItems]);
 
-  const [detailSale, setDetailSale] = useState<Sale | null>(null);
-  const [deleteTarget, setDeleteTarget] = useState<Sale | null>(null);
-  const [editingSale, setEditingSale] = useState<Sale | null>(null);
-  const [editForm, setEditForm] = useState<{
-    clientName: string; quantity: number; unitPrice: number;
-    paymentMethod: Sale['paymentMethod'];
-  } | null>(null);
-
+  // Cache-first: render instantly from whatever's already on-device (no
+  // waiting on the network before a single product shows up), then sync in
+  // the background and render again once fresh data actually arrives — the
+  // same shape AuthContext's own cold-start bootstrap already proved out,
+  // applied consistently here instead of blocking the UI on the sync first.
   const load = useCallback(async () => {
-    await Promise.all([syncSalesFromSupabase(), syncClientsFromSupabase(), syncFlavorsFromSupabase(), syncBulksFromSupabase()]);
-    const [s, cls, fl, bk] = await Promise.all([
-      getSales(), getClients(), getFlavors(), getBulks(),
-    ]);
-    setSalesState(s);
+    const [cls, fl, bk, st] = await Promise.all([getClients(), getFlavors(), getBulks(), getStock()]);
     setAllClients(cls);
     setFlavorsState(fl);
     setBulksState(bk);
-    if (fl.length > 0 && !selectedFlavorId) {
-      setSelectedFlavorId(fl[0].id);
-      setUnitPrice(fl[0].defaultPrice);
-    }
-    if (bk.length > 0 && !selectedBulkId) {
-      setSelectedBulkId(bk[0].id);
-    }
+    setStockState(st);
+
+    await Promise.all([syncClientsFromSupabase(), syncFlavorsFromSupabase(), syncBulksFromSupabase(), syncStockFromSupabase()]);
+    const [freshCls, freshFl, freshBk, freshSt] = await Promise.all([getClients(), getFlavors(), getBulks(), getStock()]);
+    setAllClients(freshCls);
+    setFlavorsState(freshFl);
+    setBulksState(freshBk);
+    setStockState(freshSt);
+
     // Self-heal: flavors/standalone bulks created before stock tracking
     // existed have no stock row yet — back-fill them at 0 so they show up
     // and can be topped up, instead of silently having nothing to deduct.
     await Promise.all([
-      ...fl.map((f) => ensureStockItem(f.id, f.label, 'sachet')),
-      ...bk.filter((b) => !b.flavorId).map((b) => ensureStockItem(b.id, b.name, 'unité')),
+      ...freshFl.map((f) => ensureStockItem(f.id, f.label, 'sachet')),
+      ...freshBk.filter((b) => !b.flavorId).map((b) => ensureStockItem(b.id, b.name, 'unité')),
     ]);
   }, []);
 
@@ -148,84 +206,75 @@ export default function VentesScreen() {
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
-  const selectedFlavor = flavors.find((f) => f.id === selectedFlavorId);
-  const selectedBulk = bulks.find((b) => b.id === selectedBulkId);
-
-  const currentItemTotal = quantity * unitPrice;
   const cartTotal = cartItems.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0);
-
-  const suggestions = clientQuery.length > 0
-    ? allClients.filter((c) =>
-        c.name.toLowerCase().includes(clientQuery.toLowerCase()) ||
-        (c.phone && c.phone.includes(clientQuery))
-      )
-    : [];
-
-  const getProductLabel = (sale: Sale): string => {
-    if (sale.productType === 'bulk') {
-      return bulks.find((b) => b.id === sale.product)?.name ?? sale.product;
-    }
-    return flavors.find((f) => f.id === sale.product)?.label ?? sale.product;
-  };
 
   const resetForm = () => {
     setClientQuery('');
-    setQuantity(1);
     setPaymentMethod('cash');
-    setShowSuggestions(false);
     setCartItems([]);
     AsyncStorage.removeItem(draftKey);
-    if (productMode === 'flavor' && selectedFlavor) {
-      setUnitPrice(selectedFlavor.defaultPrice);
-    } else if (productMode === 'bulk' && selectedBulk) {
-      setUnitPrice(selectedBulk.unitPrice);
-    }
   };
 
-  const handleSelectFlavor = (f: ProductFlavor) => {
-    setSelectedFlavorId(f.id);
-    setUnitPrice(f.defaultPrice);
-  };
+  // How many of this exact product are already in the cart — shown as a
+  // small badge on its card, the only feedback a tap needs (no separate
+  // "added!" toast, no page transition).
+  const cartQtyFor = (mode: ProductMode, id: string) =>
+    cartItems.filter((it) => it.productType === mode && it.product === id).reduce((s, it) => s + it.quantity, 0);
 
-  const handleSelectBulk = (b: BulkProduct) => {
-    setSelectedBulkId(b.id);
-    setUnitPrice(b.unitPrice);
-  };
+  // Real pieces remaining, shown right on the card — a seller taps to sell,
+  // they should see if they're about to run out before promising it to a
+  // customer, not discover it at checkout via a "stock insuffisant" alert.
+  const stockFor = (id: string): number => stock.find((s) => s.id === id)?.currentLevel ?? 0;
 
-  const handleModeChange = (mode: ProductMode) => {
-    setProductMode(mode);
-    if (mode === 'flavor' && selectedFlavor) {
-      setUnitPrice(selectedFlavor.defaultPrice);
-    } else if (mode === 'bulk' && selectedBulk) {
-      setUnitPrice(selectedBulk.unitPrice);
-    }
-  };
+  // Tapping a product IS adding it — no separate quantity/price step, no
+  // "Ajouter au panier" button. A repeat tap on the same product (at its
+  // current, unedited price) just bumps that line's quantity by one; a
+  // price that's been overridden via openPriceEdit stays its own line so a
+  // discounted unit and a full-price one don't silently merge.
+  // useCallback with no deps — the body only ever reads/writes cartItems via
+  // the functional setState form below, so it never needs to close over
+  // fresh render-scope values. A stable reference here is what lets
+  // ProductCard's React.memo below actually skip re-rendering on unrelated
+  // state changes (a new inline arrow function every render would defeat it
+  // regardless of memo, since props would never compare equal).
+  const handleTapProduct = useCallback((mode: ProductMode, id: string, label: string, price: number) => {
+    hapticTap();
+    setCartItems((prev) => {
+      const idx = prev.findIndex((it) => it.productType === mode && it.product === id && it.unitPrice === price);
+      if (idx >= 0) {
+        const next = [...prev];
+        next[idx] = { ...next[idx], quantity: next[idx].quantity + 1 };
+        return next;
+      }
+      return [...prev, {
+        id: Date.now().toString() + String(Math.random()),
+        productType: mode, product: id, productLabel: label, quantity: 1, unitPrice: price,
+      }];
+    });
+  }, []);
 
-  const handleAddToCart = () => {
-    const productId = productMode === 'flavor' ? selectedFlavorId : selectedBulkId;
-    if (!productId) {
-      Alert.alert('Erreur', productMode === 'flavor'
-        ? 'Aucune saveur disponible. Créez-en une dans Menu > Saveurs.'
-        : 'Aucun lot disponible. Créez-en un dans Menu > Vrac.');
+  const handleUpdateQty = (id: string, qty: number) => {
+    if (qty <= 0) {
+      handleRemoveFromCart(id);
       return;
     }
-    const label = productMode === 'flavor'
-      ? flavors.find((f) => f.id === productId)?.label ?? productId
-      : bulks.find((b) => b.id === productId)?.name ?? productId;
-
-    setCartItems((prev) => [...prev, {
-      id: Date.now().toString() + String(Math.random()),
-      productType: productMode,
-      product: productId,
-      productLabel: label,
-      quantity,
-      unitPrice,
-    }]);
-    setQuantity(1);
+    setCartItems((prev) => prev.map((it) => (it.id === id ? { ...it, quantity: qty } : it)));
   };
 
   const handleRemoveFromCart = (id: string) => {
     setCartItems((prev) => prev.filter((item) => item.id !== id));
+  };
+
+  const openPriceEdit = (item: CartItem) => {
+    setPriceEditTarget(item);
+    setPriceEditValue(String(item.unitPrice));
+  };
+
+  const handleSavePriceEdit = () => {
+    if (!priceEditTarget) return;
+    const newPrice = parseInt(priceEditValue.replace(/\s/g, ''), 10) || 0;
+    setCartItems((prev) => prev.map((it) => (it.id === priceEditTarget.id ? { ...it, unitPrice: newPrice } : it)));
+    setPriceEditTarget(null);
   };
 
   // Aggregates cart items into { stockId: totalQtyNeeded }, merging a flavor
@@ -265,12 +314,14 @@ export default function VentesScreen() {
           amountPaid,
           paymentMethod,
           costAmount: avgCost * amount,
+          createdBy: user?.id,
         });
       }
       await deductStock(buildDeductions());
       await load();
       resetForm();
-      Alert.alert('Succès', `${cartItems.length} article${cartItems.length > 1 ? 's' : ''} enregistré${cartItems.length > 1 ? 's' : ''}.`);
+      hapticSuccess();
+      Alert.alert('Succès', `${cartItems.length} produit${cartItems.length > 1 ? 's' : ''} enregistré${cartItems.length > 1 ? 's' : ''}.`);
     } finally {
       setSaving(false);
     }
@@ -305,496 +356,239 @@ export default function VentesScreen() {
     await finalizeSale();
   };
 
-  const handleMarkPaid = async (sale: Sale) => {
-    await updateSale(sale.id, { amountPaid: sale.totalAmount });
-    await load();
-    setDetailSale(null);
-    Alert.alert('Succès', 'Vente marquée comme payée.');
-  };
-
-  const openEdit = (sale: Sale) => {
-    setEditingSale(sale);
-    setEditForm({
-      clientName: sale.clientName,
-      quantity: sale.quantity,
-      unitPrice: sale.unitPrice,
-      paymentMethod: sale.paymentMethod,
-    });
-    setDetailSale(null);
-  };
-
-  const handleUpdate = async () => {
-    if (!editingSale || !editForm) return;
-    setSaving(true);
-    try {
-      const newTotal = editForm.quantity * editForm.unitPrice;
-      const amountPaid = editForm.paymentMethod !== 'credit' ? newTotal : (editingSale.amountPaid ?? 0);
-      await updateSale(editingSale.id, {
-        clientName: editForm.clientName,
-        quantity: editForm.quantity,
-        unitPrice: editForm.unitPrice,
-        totalAmount: newTotal,
-        amountPaid,
-        paymentMethod: editForm.paymentMethod,
-      });
-      await load();
-      setEditingSale(null);
-      setEditForm(null);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const handleDelete = (sale: Sale) => {
-    setDetailSale(null);
-    setDeleteTarget(sale);
-  };
-
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
-      <View style={styles.segmentRow}>
-        {(['new', 'history'] as const).map((t) => (
-          <TouchableOpacity
-            key={t}
-            style={[styles.segment, tab === t && styles.segmentActive]}
-            onPress={() => setTab(t)}
-          >
-            <Text style={[styles.segmentText, tab === t && styles.segmentTextActive]}>
-              {t === 'new' ? 'Nouvelle vente' : 'Historique'}
-            </Text>
+      <View style={styles.header}>
+        <Text style={styles.headerTitle}>Vendre</Text>
+        {cartItems.length > 0 && (
+          <TouchableOpacity onPress={resetForm} hitSlop={8}>
+            <Text style={styles.headerClear}>Vider</Text>
           </TouchableOpacity>
-        ))}
+        )}
       </View>
 
-      {tab === 'new' ? (
-        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-          <ScrollView contentContainerStyle={styles.form}>
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <ScrollView contentContainerStyle={styles.form} keyboardShouldPersistTaps="handled">
 
-            {/* Client */}
-            <Text style={styles.label}>Client</Text>
-            <View style={styles.autocompleteWrap}>
-              <TextInput
-                style={styles.input}
-                placeholder="Nom ou numéro de téléphone"
-                value={clientQuery}
-                onChangeText={(t) => { setClientQuery(t); setShowSuggestions(true); }}
-                onFocus={() => setShowSuggestions(true)}
-                onBlur={() => setTimeout(() => {
-                  if (!blurSuppressedRef.current) setShowSuggestions(false);
-                  blurSuppressedRef.current = false;
-                }, 150)}
-              />
-              {showSuggestions && suggestions.length > 0 && (
-                <View style={styles.suggestions}>
-                  {suggestions.map((client) => (
-                    <TouchableOpacity
-                      key={client.id}
-                      style={styles.suggestionItem}
-                      onPressIn={() => { blurSuppressedRef.current = true; }}
-                      onPress={() => { setClientQuery(client.name); setShowSuggestions(false); }}
-                    >
-                      <Text style={styles.suggestionText}>{client.name}</Text>
-                      {client.phone ? (
-                        <Text style={styles.suggestionPhone}>{client.phone}</Text>
-                      ) : null}
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              )}
+          {/* One combined grid — no Unités individuelles/Lots toggle to tap
+              through first. A lot is told apart from an individual unit by
+              a tinted green background on its own card, not by which tab
+              you're currently on. Tap adds directly to the cart below. */}
+          {flavors.length === 0 && bulks.length === 0 ? (
+            <Text style={styles.emptyHint}>Aucun produit. Allez dans Menu &gt; Saveurs ou Lots pour en créer.</Text>
+          ) : (
+            <View style={styles.productsRow}>
+              {flavors.map((f, i) => {
+                const stockItem = stock.find((s) => s.id === f.id);
+                const level = stockFor(f.id);
+                const severity = stockSeverity(level, stockItem?.alertThreshold ?? 0);
+                return (
+                  <ProductCard
+                    key={f.id}
+                    mode="flavor"
+                    id={f.id}
+                    label={f.label}
+                    subtitle={formatNumber(f.defaultPrice)}
+                    price={f.defaultPrice}
+                    badgeCount={cartQtyFor('flavor', f.id)}
+                    index={i}
+                    stockLine={{ label: `${level} en stock`, severity }}
+                    onTap={handleTapProduct}
+                    styles={styles}
+                  />
+                );
+              })}
+              {bulks.map((b, i) => (
+                <ProductCard
+                  key={b.id}
+                  mode="bulk"
+                  id={b.id}
+                  label={b.name}
+                  subtitle={`${b.bagCount} pcs · ${formatNumber(b.unitPrice)}`}
+                  price={b.unitPrice}
+                  badgeCount={cartQtyFor('bulk', b.id)}
+                  index={flavors.length + i}
+                  tinted
+                  onTap={handleTapProduct}
+                  styles={styles}
+                />
+              ))}
             </View>
+          )}
 
-            {/* Product type */}
-            <Text style={styles.label}>Type de produit</Text>
-            <View style={styles.modeRow}>
-              <TouchableOpacity
-                style={[styles.modeBtn, productMode === 'flavor' && styles.modeBtnActive]}
-                onPress={() => handleModeChange('flavor')}
-              >
-                <Text style={[styles.modeBtnText, productMode === 'flavor' && { color: palette.white }]}>
-                  Unités individuelles
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.modeBtn, productMode === 'bulk' && styles.modeBtnActive]}
-                onPress={() => handleModeChange('bulk')}
-              >
-                <Text style={[styles.modeBtnText, productMode === 'bulk' && { color: palette.white }]}>
-                  Lots
-                </Text>
-              </TouchableOpacity>
-            </View>
-
-            {productMode === 'flavor' ? (
-              <>
-                <Text style={styles.label}>Saveur</Text>
-                {flavors.length === 0 ? (
-                  <Text style={styles.emptyHint}>Aucune saveur. Allez dans Menu &gt; Saveurs pour en créer.</Text>
-                ) : (
-                  <View style={styles.productsRow}>
-                    {flavors.map((f) => (
-                      <TouchableOpacity
-                        key={f.id}
-                        style={[styles.productCard, selectedFlavorId === f.id && styles.productCardSelected]}
-                        onPress={() => handleSelectFlavor(f)}
-                      >
-                        <Text style={[styles.productLabel, selectedFlavorId === f.id && { color: palette.white }]}>
-                          {f.label}
-                        </Text>
-                        <Text style={[styles.productPrice, selectedFlavorId === f.id && { color: 'rgba(255,255,255,0.8)' }]}>
-                          {formatGNF(f.defaultPrice)}
-                        </Text>
+          {/* Everything below only matters once there's something to sell —
+              cart, client, payment method, and the finalize button all
+              appear together at the point of checkout, not scattered
+              above the product picker. */}
+          {cartItems.length > 0 && (
+            <>
+              <Text style={[styles.label, { marginTop: 20 }]}>
+                Panier · {cartItems.length} produit{cartItems.length > 1 ? 's' : ''}
+              </Text>
+              <View style={styles.cartList}>
+                {cartItems.map((item, i) => (
+                  <React.Fragment key={item.id}>
+                    {i > 0 && <View style={styles.rowDivider} />}
+                    <View style={styles.cartRow}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.cartItemLabel}>{item.productLabel}</Text>
+                        <TouchableOpacity onPress={() => openPriceEdit(item)}>
+                          <Text style={styles.cartItemPrice}>{formatNumber(item.unitPrice)} / pcs</Text>
+                        </TouchableOpacity>
+                      </View>
+                      <View style={styles.cartQtyStepper}>
+                        <TouchableOpacity style={styles.cartQtyBtn} onPress={() => handleUpdateQty(item.id, item.quantity - 1)}>
+                          <Text style={styles.cartQtyBtnText}>−</Text>
+                        </TouchableOpacity>
+                        <Text style={styles.cartQtyValue}>{item.quantity}</Text>
+                        <TouchableOpacity style={styles.cartQtyBtn} onPress={() => handleUpdateQty(item.id, item.quantity + 1)}>
+                          <Text style={styles.cartQtyBtnText}>+</Text>
+                        </TouchableOpacity>
+                      </View>
+                      <Text style={styles.cartItemTotal}>{formatNumber(item.quantity * item.unitPrice)}</Text>
+                      <TouchableOpacity style={styles.cartRemoveBtn} onPress={() => handleRemoveFromCart(item.id)}>
+                        <Ionicons name="trash-outline" size={16} color={palette.critical} />
                       </TouchableOpacity>
-                    ))}
-                  </View>
-                )}
-              </>
-            ) : (
-              <>
-                <Text style={styles.label}>Lot</Text>
-                {bulks.length === 0 ? (
-                  <Text style={styles.emptyHint}>Aucun lot. Allez dans Menu &gt; Vrac pour en créer.</Text>
-                ) : (
-                  <View style={styles.productsRow}>
-                    {bulks.map((b) => (
-                      <TouchableOpacity
-                        key={b.id}
-                        style={[styles.productCard, selectedBulkId === b.id && styles.productCardSelected]}
-                        onPress={() => handleSelectBulk(b)}
-                      >
-                        <Text style={[styles.productLabel, selectedBulkId === b.id && { color: palette.white }]}>
-                          {b.name}
-                        </Text>
-                        <Text style={[styles.productPrice, selectedBulkId === b.id && { color: 'rgba(255,255,255,0.8)' }]}>
-                          {b.bagCount} unités · {formatGNF(b.unitPrice)}
-                        </Text>
-                      </TouchableOpacity>
-                    ))}
-                  </View>
-                )}
-              </>
-            )}
-
-            <Text style={styles.label}>Quantité</Text>
-            <View style={styles.qtyRow}>
-              <TouchableOpacity style={styles.qtyBtn} onPress={() => setQuantity((q) => Math.max(1, q - 1))}>
-                <Text style={styles.qtyBtnText}>−</Text>
-              </TouchableOpacity>
-              <TextInput
-                style={styles.qtyInput}
-                keyboardType="numeric"
-                value={String(quantity)}
-                onChangeText={(t) => setQuantity(Math.max(1, parseInt(t) || 1))}
-              />
-              <TouchableOpacity style={styles.qtyBtn} onPress={() => setQuantity((q) => q + 1)}>
-                <Text style={styles.qtyBtnText}>+</Text>
-              </TouchableOpacity>
-            </View>
-
-            <Text style={styles.label}>Prix unitaire (GNF)</Text>
-            <TextInput
-              style={styles.input}
-              keyboardType="numeric"
-              value={String(unitPrice)}
-              onChangeText={(t) => setUnitPrice(parseInt(t) || 0)}
-            />
-
-            <View style={styles.totalBox}>
-              <Text style={styles.totalText}>{formatGNF(currentItemTotal)}</Text>
-            </View>
-
-            {/* Add to cart button */}
-            <TouchableOpacity style={styles.addToCartBtn} onPress={handleAddToCart}>
-              <Ionicons name="add-circle-outline" size={20} color={palette.moss} />
-              <Text style={styles.addToCartText}>Ajouter au panier</Text>
-            </TouchableOpacity>
-
-            {/* Cart */}
-            {cartItems.length > 0 && (
-              <>
-                <Text style={[styles.label, { marginTop: 20 }]}>
-                  Panier · {cartItems.length} article{cartItems.length > 1 ? 's' : ''}
-                </Text>
-                {cartItems.map((item) => (
-                  <View key={item.id} style={styles.cartRow}>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.cartItemLabel}>{item.productLabel}</Text>
-                      <Text style={styles.cartItemMeta}>{item.quantity}× · {formatGNF(item.unitPrice)}</Text>
                     </View>
-                    <Text style={styles.cartItemTotal}>{formatGNF(item.quantity * item.unitPrice)}</Text>
-                    <TouchableOpacity style={styles.cartRemoveBtn} onPress={() => handleRemoveFromCart(item.id)}>
-                      <Ionicons name="trash-outline" size={18} color={palette.critical} />
-                    </TouchableOpacity>
-                  </View>
+                  </React.Fragment>
                 ))}
+              </View>
 
-                <View style={styles.cartGrandTotal}>
-                  <Text style={styles.cartGrandLabel}>Total de la vente</Text>
-                  <Text style={styles.cartGrandValue}>{formatGNF(cartTotal)}</Text>
-                </View>
+              <View style={styles.cartGrandTotal}>
+                <Text style={styles.cartGrandLabel}>Total de la vente</Text>
+                <CountUpNumber value={cartTotal} formatter={formatGNF} duration={250} style={styles.cartGrandValue} />
+              </View>
 
-                <Text style={styles.label}>Mode de paiement</Text>
-                <View style={styles.paymentRow}>
-                  {(Object.keys(PAYMENT_LABELS) as Sale['paymentMethod'][]).map((m) => (
-                    <TouchableOpacity
-                      key={m}
-                      style={[styles.payBtn, paymentMethod === m && { backgroundColor: PAYMENT_COLORS[m] }]}
-                      onPress={() => setPaymentMethod(m)}
-                    >
-                      <Text style={[styles.payBtnText, paymentMethod === m && { color: palette.white }]}>
-                        {PAYMENT_LABELS[m]}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-
-                <TouchableOpacity
-                  style={[styles.submitBtn, saving && { opacity: 0.6 }]}
-                  onPress={handleFinalize}
-                  disabled={saving}
-                >
-                  <Text style={styles.submitText}>
-                    {saving ? 'Enregistrement…' : `Finaliser · ${formatGNF(cartTotal)}`}
-                  </Text>
-                </TouchableOpacity>
-              </>
-            )}
-
-          </ScrollView>
-        </KeyboardAvoidingView>
-      ) : (
-        <FlatList
-          data={sales}
-          keyExtractor={(item) => item.id}
-          contentContainerStyle={{ padding: 16, paddingBottom: 32 }}
-          ListEmptyComponent={<Text style={styles.empty}>Aucune vente enregistrée.</Text>}
-          renderItem={({ item }) => {
-            const debt = saleDebt(item);
-            return (
-              <TouchableOpacity style={styles.saleRow} onPress={() => setDetailSale(item)}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.saleClient}>{item.clientName}</Text>
-                  <Text style={styles.saleMeta}>
-                    {getProductLabel(item)} · {item.quantity}× · {formatDate(item.date)}
-                  </Text>
-                </View>
-                <View style={{ alignItems: 'flex-end', gap: 4 }}>
-                  <Text style={styles.saleTotal}>{formatGNF(item.totalAmount)}</Text>
-                  <View style={[styles.badge, { backgroundColor: (PAYMENT_COLORS[item.paymentMethod] ?? palette.muted) + '22' }]}>
-                    <Text style={[styles.badgeText, { color: PAYMENT_COLORS[item.paymentMethod] ?? palette.muted }]}>
-                      {PAYMENT_LABELS[item.paymentMethod] ?? item.paymentMethod}
-                    </Text>
-                  </View>
-                  {debt > 0 && (
-                    <Text style={styles.debtBadge}>Doit {formatGNF(debt)}</Text>
-                  )}
-                </View>
-              </TouchableOpacity>
-            );
-          }}
-        />
-      )}
-
-      {/* Detail modal */}
-      <AppModal visible={!!detailSale} onClose={() => setDetailSale(null)} title="Détail de la vente">
-        {detailSale && (
-          <>
-            <DetailRow label="Client" value={detailSale.clientName} />
-            <DetailRow label="Produit" value={getProductLabel(detailSale)} />
-            <DetailRow label="Quantité" value={`${detailSale.quantity}×`} />
-            <DetailRow label="Prix unitaire" value={formatGNF(detailSale.unitPrice)} />
-            <DetailRow label="Total" value={formatGNF(detailSale.totalAmount)} />
-            <DetailRow label="Paiement" value={PAYMENT_LABELS[detailSale.paymentMethod] ?? detailSale.paymentMethod} />
-            {detailSale.paymentMethod === 'credit' && (
-              <DetailRow
-                label="Montant dû"
-                value={formatGNF(saleDebt(detailSale))}
-                valueStyle={{ color: saleDebt(detailSale) > 0 ? palette.critical : palette.moss }}
+              {/* Client — search existing clients by name/phone, or create
+                  one on the spot when a typed phone number matches nobody
+                  (see components/ClientPicker.tsx). */}
+              <ClientPicker
+                clients={allClients}
+                value={clientQuery}
+                onChangeText={setClientQuery}
+                onClientCreated={(c) => setAllClients((prev) => [c, ...prev])}
               />
-            )}
-            <DetailRow label="Date" value={formatDate(detailSale.date)} />
-            {detailSale.paymentMethod === 'credit' && saleDebt(detailSale) > 0 && (
-              <TouchableOpacity
-                style={styles.markPaidBtn}
-                onPress={() => handleMarkPaid(detailSale)}
-              >
-                <Ionicons name="checkmark-circle-outline" size={18} color={palette.moss} />
-                <Text style={styles.markPaidText}>Marquer comme payé</Text>
-              </TouchableOpacity>
-            )}
-            <View style={styles.detailActions}>
-              <TouchableOpacity style={styles.editDetailBtn} onPress={() => openEdit(detailSale)}>
-                <Ionicons name="pencil-outline" size={16} color={palette.moss} />
-                <Text style={styles.editDetailText}>Modifier</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.deleteDetailBtn} onPress={() => handleDelete(detailSale)}>
-                <Ionicons name="trash-outline" size={16} color={palette.critical} />
-                <Text style={styles.deleteDetailText}>Supprimer</Text>
-              </TouchableOpacity>
-            </View>
-          </>
-        )}
-      </AppModal>
 
-      {/* Delete confirm */}
-      <ConfirmDialog
-        visible={!!deleteTarget}
-        onClose={() => setDeleteTarget(null)}
-        onConfirm={async () => {
-          if (!deleteTarget) return;
-          await deleteSale(deleteTarget.id);
-          await load();
-          setDeleteTarget(null);
-        }}
-        title="Supprimer cette vente ?"
-        message={deleteTarget ? `${deleteTarget.clientName} — ${formatGNF(deleteTarget.totalAmount)}` : ''}
-        confirmLabel="Supprimer"
-        icon="trash-outline"
-        tone="danger"
-      />
-
-      {/* Edit modal */}
-      <AppModal visible={!!editingSale} onClose={() => setEditingSale(null)} title="Modifier la vente">
-        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-          {editForm && (
-            <ScrollView keyboardShouldPersistTaps="handled">
-              <Text style={styles.editLabel}>Client</Text>
-              <TextInput
-                style={styles.editInput}
-                value={editForm.clientName}
-                onChangeText={(v) => setEditForm((f) => f ? { ...f, clientName: v } : f)}
-              />
-              <Text style={styles.editLabel}>Quantité</Text>
-              <TextInput
-                style={styles.editInput}
-                keyboardType="numeric"
-                value={String(editForm.quantity)}
-                onChangeText={(v) => setEditForm((f) => f ? { ...f, quantity: parseInt(v) || 1 } : f)}
-              />
-              <Text style={styles.editLabel}>Prix unitaire (GNF)</Text>
-              <TextInput
-                style={styles.editInput}
-                keyboardType="numeric"
-                value={String(editForm.unitPrice)}
-                onChangeText={(v) => setEditForm((f) => f ? { ...f, unitPrice: parseInt(v) || 0 } : f)}
-              />
-              <Text style={styles.editLabel}>Mode de paiement</Text>
+              <Text style={styles.label}>Mode de paiement</Text>
               <View style={styles.paymentRow}>
                 {(Object.keys(PAYMENT_LABELS) as Sale['paymentMethod'][]).map((m) => (
                   <TouchableOpacity
                     key={m}
-                    style={[styles.payBtn, editForm.paymentMethod === m && { backgroundColor: PAYMENT_COLORS[m] }]}
-                    onPress={() => setEditForm((f) => f ? { ...f, paymentMethod: m } : f)}
+                    style={[styles.payBtn, paymentMethod === m && { backgroundColor: PAYMENT_COLORS[m] }]}
+                    onPress={() => { hapticSelect(); setPaymentMethod(m); }}
                   >
-                    <Text style={[styles.payBtnText, editForm.paymentMethod === m && { color: palette.white }]}>
+                    <Text style={[styles.payBtnText, paymentMethod === m && { color: palette.white }]}>
                       {PAYMENT_LABELS[m]}
                     </Text>
                   </TouchableOpacity>
                 ))}
               </View>
-              <Text style={[styles.totalBox, { marginTop: 12 }]}>
-                Total : {formatGNF(editForm.quantity * editForm.unitPrice)}
-              </Text>
-            </ScrollView>
-          )}
-          <View style={styles.modalActionsRow}>
-            <Button label="Annuler" variant="ghost" onPress={() => setEditingSale(null)} style={{ flex: 1 }} />
-            <Button label="Enregistrer" onPress={handleUpdate} loading={saving} style={{ flex: 1 }} />
-          </View>
-        </KeyboardAvoidingView>
-      </AppModal>
-    </View>
-  );
-}
 
-function DetailRow({
-  label, value, valueStyle,
-}: {
-  label: string; value: string; valueStyle?: object;
-}) {
-  const { palette } = useTheme();
-  const styles = makeStyles(palette);
-  return (
-    <View style={styles.detailRow}>
-      <Text style={styles.detailLabel}>{label}</Text>
-      <Text style={[styles.detailValue, valueStyle]}>{value}</Text>
+              <TouchableOpacity
+                style={[styles.submitBtn, saving && { opacity: 0.6 }]}
+                onPress={handleFinalize}
+                disabled={saving}
+              >
+                <Text style={styles.submitText}>
+                  {saving ? 'Enregistrement…' : `Finaliser · ${formatGNF(cartTotal)}`}
+                </Text>
+              </TouchableOpacity>
+            </>
+          )}
+
+        </ScrollView>
+      </KeyboardAvoidingView>
+
+      {/* Per-line price override — the one deliberate escape hatch from the
+          tap-to-add default price (a real customer discount, a rounding
+          adjustment), reached only by tapping a cart row's own price. */}
+      <AppModal visible={!!priceEditTarget} onClose={() => setPriceEditTarget(null)} title="Modifier le prix">
+        <ScrollView style={{ flexShrink: 1 }} keyboardShouldPersistTaps="handled">
+          <Text style={styles.editLabel}>Prix unitaire (GNF)</Text>
+          <MoneyInput
+            style={styles.editInput}
+            value={priceEditValue}
+            onChangeText={setPriceEditValue}
+            autoFocus
+          />
+          <View style={styles.modalActionsRow}>
+            <Button label="Annuler" variant="ghost" onPress={() => setPriceEditTarget(null)} style={{ flex: 1 }} />
+            <Button label="Enregistrer" onPress={handleSavePriceEdit} style={{ flex: 1 }} />
+          </View>
+        </ScrollView>
+      </AppModal>
     </View>
   );
 }
 
 const makeStyles = (palette: Palette) => StyleSheet.create({
   container: { flex: 1, backgroundColor: palette.paper },
-  segmentRow: {
-    flexDirection: 'row', backgroundColor: palette.card,
-    borderBottomWidth: 1, borderColor: palette.line,
+  header: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 16, paddingTop: 8, paddingBottom: 4,
   },
-  segment: { flex: 1, paddingVertical: 14, alignItems: 'center' },
-  segmentActive: { borderBottomWidth: 2, borderColor: palette.moss },
-  segmentText: { fontSize: 15, color: palette.muted, fontWeight: '500' },
-  segmentTextActive: { color: palette.moss, fontWeight: '600' },
+  headerTitle: { fontSize: 22, fontWeight: '700', color: palette.ink },
+  headerClear: { fontSize: 15, fontWeight: '600', color: palette.critical },
   form: { padding: 16, paddingBottom: 40, gap: 6 },
   label: { fontSize: 14, fontWeight: '600', color: palette.ink, marginTop: 10, marginBottom: 4 },
-  input: {
-    backgroundColor: palette.card, borderRadius: 12, borderWidth: 1,
-    borderColor: palette.line, padding: 14, fontSize: 16, color: palette.ink,
-  },
-  autocompleteWrap: { position: 'relative', zIndex: 10 },
-  suggestions: {
-    position: 'absolute', top: 52, left: 0, right: 0,
-    backgroundColor: palette.card, borderRadius: 12,
-    borderWidth: 1, borderColor: palette.line,
-    shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 8, elevation: 4,
-    zIndex: 20,
-  },
-  suggestionItem: { padding: 14, borderBottomWidth: 1, borderColor: palette.line },
-  suggestionText: { fontSize: 15, color: palette.ink },
-  suggestionPhone: { fontSize: 12, color: palette.muted, marginTop: 2 },
-  modeRow: { flexDirection: 'row', gap: 10 },
-  modeBtn: {
-    flex: 1, paddingVertical: 12, borderRadius: 12,
-    backgroundColor: palette.card, borderWidth: 1, borderColor: palette.line,
-    alignItems: 'center',
-  },
-  modeBtnActive: { backgroundColor: palette.moss, borderColor: palette.moss },
-  modeBtnText: { fontSize: 14, fontWeight: '600', color: palette.ink },
-  emptyHint: { fontSize: 13, color: palette.muted, fontStyle: 'italic' },
-  productsRow: { gap: 8 },
+  emptyHint: { fontSize: 13, color: palette.muted, fontStyle: 'italic', marginTop: 10 },
+  productsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 10 },
+  // Tapping this card adds it to the cart directly — no "selected" state to
+  // track, just an optional badge showing how many are already in the cart.
+  // width lives on the FadeSlideIn wrapper (a sibling-sized grid slot), not
+  // here — this card fills 100% of that slot. Putting a percentage width on
+  // both would compound (48% of an already-48%-wide box), collapsing the
+  // grid to one narrow column.
+  productCardSlot: { width: '48%' },
   productCard: {
-    backgroundColor: palette.card, borderRadius: 12, borderWidth: 1,
+    position: 'relative', width: '100%', backgroundColor: palette.card, borderRadius: 12, borderWidth: 1,
     borderColor: palette.line, padding: 14,
   },
-  productCardSelected: { backgroundColor: palette.moss, borderColor: palette.moss },
+  // A lot/bulk product is told apart from an individual unit by this tint
+  // alone — no separate tab to switch between them.
+  productCardBulk: { backgroundColor: palette.mossSoft, borderColor: palette.moss + '40' },
   productLabel: { fontSize: 15, fontWeight: '600', color: palette.ink },
   productPrice: { fontSize: 13, color: palette.muted, marginTop: 2 },
-  qtyRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  qtyBtn: {
-    width: 48, height: 48, borderRadius: 12, backgroundColor: palette.card,
-    borderWidth: 1, borderColor: palette.line, alignItems: 'center', justifyContent: 'center',
+  // Neutral by default — only turns into a real signal (caution/critical)
+  // once stock is actually low or gone, same threshold Stock's own screen
+  // already uses (StockItem.alertThreshold), never colored just to decorate.
+  productStock: { fontSize: 12, color: palette.muted, marginTop: 4 },
+  productStockLow: { color: palette.caution, fontWeight: '600' },
+  productStockOut: { color: palette.critical, fontWeight: '600' },
+  productBadge: {
+    position: 'absolute', top: -6, right: -6,
+    minWidth: 22, height: 22, borderRadius: 11, paddingHorizontal: 5,
+    backgroundColor: palette.moss, alignItems: 'center', justifyContent: 'center',
   },
-  qtyBtnText: { fontSize: 22, color: palette.moss, fontWeight: '600' },
-  qtyInput: {
-    flex: 1, backgroundColor: palette.card, borderRadius: 12, borderWidth: 1,
-    borderColor: palette.line, padding: 12, fontSize: 18, textAlign: 'center', color: palette.ink,
+  productBadgeText: { fontSize: 12, fontWeight: '700', color: palette.white },
+  // One shared card wraps the whole cart list — rows inside are flat,
+  // divided by a hairline (rowDivider), not individually bordered/shadowed.
+  cartList: {
+    backgroundColor: palette.card, borderRadius: 12,
+    borderWidth: 1, borderColor: palette.line, overflow: 'hidden',
   },
-  totalBox: {
-    backgroundColor: palette.mossSoft, borderRadius: 12, padding: 16,
-    alignItems: 'center', borderWidth: 1, borderColor: palette.moss + '40',
-    fontSize: 16, fontWeight: '600', color: palette.moss, textAlign: 'center',
-  } as any,
-  totalText: { fontSize: 24, fontWeight: '600', color: palette.moss },
-  addToCartBtn: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
-    borderRadius: 12, height: 52, marginTop: 4,
-    backgroundColor: palette.mossSoft, borderWidth: 1, borderColor: palette.moss + '40',
-  },
-  addToCartText: { fontSize: 16, fontWeight: '600', color: palette.moss },
+  rowDivider: { height: StyleSheet.hairlineWidth, backgroundColor: palette.line },
   cartRow: {
-    flexDirection: 'row', alignItems: 'center', backgroundColor: palette.card,
-    borderRadius: 12, borderWidth: 1, borderColor: palette.line, padding: 14, gap: 10,
+    flexDirection: 'row', alignItems: 'center', padding: 14, gap: 10,
   },
   cartItemLabel: { fontSize: 14, fontWeight: '600', color: palette.ink },
-  cartItemMeta: { fontSize: 12, color: palette.muted, marginTop: 2 },
+  // Plain muted, not moss — a per-unit price isn't a signal, just a number;
+  // color here was decorating information that didn't need it.
+  cartItemPrice: { fontSize: 12, color: palette.muted, marginTop: 2 },
   cartItemTotal: { fontSize: 14, fontWeight: '600', color: palette.ink },
+  cartQtyStepper: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  // Neutral fill, not a solid green pill — the +/- glyph carries the brand
+  // accent, the button itself doesn't need to.
+  cartQtyBtn: {
+    width: 28, height: 28, borderRadius: 8, backgroundColor: palette.line,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  cartQtyBtnText: { fontSize: 16, color: palette.moss, fontWeight: '700' },
+  cartQtyValue: { fontSize: 14, fontWeight: '700', color: palette.ink, minWidth: 18, textAlign: 'center' },
   cartRemoveBtn: { padding: 4 },
+  // The one real "pay attention here" moment on this screen besides the
+  // Finaliser button itself — kept as the sole other place color is used to
+  // draw the eye, deliberately.
   cartGrandTotal: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
     backgroundColor: palette.mossSoft, borderRadius: 12, padding: 16,
@@ -814,41 +608,6 @@ const makeStyles = (palette: Palette) => StyleSheet.create({
     alignItems: 'center', justifyContent: 'center', marginTop: 8,
   },
   submitText: { color: palette.white, fontSize: 16, fontWeight: '700' },
-  saleRow: {
-    flexDirection: 'row', backgroundColor: palette.card, borderRadius: 12,
-    padding: 14, marginBottom: 10, borderWidth: 1, borderColor: palette.line,
-    shadowColor: '#000', shadowOpacity: 0.03, shadowRadius: 3, elevation: 1,
-  },
-  saleClient: { fontSize: 15, fontWeight: '600', color: palette.ink },
-  saleMeta: { fontSize: 13, color: palette.muted, marginTop: 2 },
-  saleTotal: { fontSize: 15, fontWeight: '600', color: palette.ink },
-  badge: { borderRadius: 20, paddingHorizontal: 8, paddingVertical: 3 },
-  badgeText: { fontSize: 11, fontWeight: '600' },
-  debtBadge: { fontSize: 11, color: palette.critical, fontWeight: '600' },
-  empty: { textAlign: 'center', color: palette.muted, marginTop: 40, fontSize: 15 },
-  detailRow: {
-    flexDirection: 'row', justifyContent: 'space-between',
-    paddingVertical: 10, borderBottomWidth: 1, borderColor: palette.line,
-  },
-  detailLabel: { fontSize: 14, color: palette.muted },
-  detailValue: { fontSize: 14, fontWeight: '600', color: palette.ink },
-  markPaidBtn: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
-    backgroundColor: palette.mossSoft, borderRadius: 10, padding: 12, marginTop: 12,
-    borderWidth: 1, borderColor: palette.moss + '40',
-  },
-  markPaidText: { fontSize: 15, fontWeight: '600', color: palette.moss },
-  detailActions: { flexDirection: 'row', gap: 10, marginTop: 12 },
-  editDetailBtn: {
-    flex: 1, height: 44, borderRadius: 10, backgroundColor: palette.mossSoft,
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
-  },
-  editDetailText: { fontSize: 14, fontWeight: '600', color: palette.moss },
-  deleteDetailBtn: {
-    flex: 1, height: 44, borderRadius: 10, backgroundColor: palette.criticalSoft,
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
-  },
-  deleteDetailText: { fontSize: 14, fontWeight: '600', color: palette.critical },
   editLabel: { fontSize: 14, fontWeight: '600', color: palette.ink, marginTop: 12, marginBottom: 4 },
   editInput: {
     backgroundColor: palette.paper, borderRadius: 12, borderWidth: 1,

@@ -1,7 +1,9 @@
 import React from 'react';
-import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, ViewStyle } from 'react-native';
+import { ActivityIndicator, StyleSheet, ViewStyle } from 'react-native';
+import { Text } from './AppText';
 import { radius, spacing, Palette } from '../../theme/tokens';
 import { useTheme } from '../../theme/ThemeContext';
+import { PressableScale } from './PressableScale';
 
 interface ButtonProps {
   label: string;
@@ -38,7 +40,7 @@ export function Button({
   const border = variant === 'ghost' ? { borderWidth: 1, borderColor: palette.line } : null;
 
   return (
-    <TouchableOpacity
+    <PressableScale
       onPress={onPress}
       disabled={isDisabled}
       style={[
@@ -54,7 +56,7 @@ export function Button({
       ) : (
         <Text style={[styles.label, { color: textColor, fontSize: FONT_SIZE[size] }]}>{label}</Text>
       )}
-    </TouchableOpacity>
+    </PressableScale>
   );
 }
 

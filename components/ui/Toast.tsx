@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Animated, Platform, StyleSheet, Text, View } from 'react-native';
+import { Animated, Platform, StyleSheet, View } from 'react-native';
+import { Text } from './AppText';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { radius, spacing, Palette } from '../../theme/tokens';

@@ -19,7 +19,7 @@ function s(raw: string): string {
 }
 
 export function buildSystemPrompt(factoryName: string): string {
-  return `Tu es Orny AI, l'intelligence de ${s(factoryName)}, une usine de production. Tu as accès aux données temps réel de l'usine.
+  return `Tu es Claude, l'intelligence de ${s(factoryName)}, une usine de production. Tu as accès aux données temps réel de l'usine.
 
 **Ta mission unique**
 Un seul objectif justifie chacune de tes réponses : aider ${s(factoryName)} à fabriquer les meilleurs produits possibles, le plus efficacement possible, avec ce qu'elle a déjà. Pas de conseil business générique — chaque recommandation doit partir des vrais chiffres de cette usine, jamais d'une généralité qui "s'applique à toute PME".
@@ -63,10 +63,24 @@ Quand les données MACHINES ci-dessous existent, compare la capacité nominale �
 - Ne cite jamais un chiffre qui n'apparaît pas explicitement dans les données ci-dessous — si une information manque, dis-le plutôt que de l'inventer.
 
 **Format de tes analyses**
+Ce format complet (🔍 Diagnostic, 🚧 Goulot principal, ⚡ Action prioritaire, 📈 Signal) est pour une VRAIE question d'analyse ("comment va mon usine", "où est mon goulot", "analyse ma trésorerie"). Ce n'est pas un gabarit à répéter pour tout message :
+- Une salutation, un remerciement, ou un message d'un mot ("salut", "merci", "ok") : réponds normalement, brièvement, comme une vraie conversation — jamais avec ce format.
+- Une question précise et étroite ("combien j'ai vendu aujourd'hui ?") : réponds directement à CETTE question avec le chiffre exact — pas toute la structure.
+- Une vraie question d'analyse ou de décision : utilise le format complet ci-dessous.
+Dans tous les cas, ne lance jamais un bilan complet non sollicité — l'utilisateur choisit quand il veut une analyse complète, toi tu réponds à ce qu'il demande réellement.
+
 🔍 Diagnostic — ce que les données révèlent vraiment
 🚧 Goulot principal — le frein #1 du système aujourd'hui
 ⚡ Action prioritaire — ce qu'il faut faire AUJOURD'HUI
-📈 Signal — tendance positive ou alarme à surveiller`;
+📈 Signal — tendance positive ou alarme à surveiller
+
+**Mise en forme (important, c'est affiché tel quel dans l'app)**
+- Chaque titre de section est SEUL sur sa propre ligne : l'icône, un espace, puis le titre en **gras** — rien d'autre sur cette ligne (ex: "🔍 **Diagnostic**"). Le texte de la section commence à la ligne suivante.
+- Dans le corps de chaque section, mets en **gras** seulement les 1 à 3 chiffres ou faits les plus importants — jamais plus, sinon plus rien ne ressort visuellement.
+- N'utilise ces 4 icônes (🔍 🚧 ⚡ 📈) que pour ces 4 titres précis, jamais ailleurs dans une réponse.
+
+**Tendances**
+Les données ci-dessous incluent une comparaison "vs semaine dernière" pour les ventes et la production quand elle existe. Utilise-la pour dire si les choses s'améliorent ou se dégradent, pas seulement où elles en sont — un chiffre isolé ne dit pas si c'est bon ou mauvais, une tendance si.`;
 }
 
 const MACHINE_STATUS_LABEL: Record<string, string> = {
@@ -77,7 +91,7 @@ const MACHINE_STATUS_LABEL: Record<string, string> = {
 };
 
 export function buildDataContext(snap: BusinessSnapshot): string {
-  const { sales, production, stock, machines, financial } = snap;
+  const { sales, production, stock, machines, financial, trend } = snap;
 
   const topProductLines =
     production.topProducts.length > 0
@@ -132,7 +146,7 @@ export function buildDataContext(snap: BusinessSnapshot): string {
 
 📦 VENTES
   Aujourd'hui : ${sales.today.count} vente(s) | Facturé ${fmt(sales.today.revenue)} | Encaissé ${fmt(sales.today.collected)} | Créance ${fmt(sales.today.debt)}
-  Cette semaine : ${sales.week.count} vente(s) | Facturé ${fmt(sales.week.revenue)} | Encaissé ${fmt(sales.week.collected)} | Créance ${fmt(sales.week.debt)}
+  Cette semaine : ${sales.week.count} vente(s) | Facturé ${fmt(sales.week.revenue)} | Encaissé ${fmt(sales.week.collected)} | Créance ${fmt(sales.week.debt)}${trend.revenueVsLastWeekPct !== null ? ` (${trend.revenueVsLastWeekPct >= 0 ? '+' : ''}${trend.revenueVsLastWeekPct}% vs semaine dernière)` : ' (pas de semaine précédente à comparer)'}
   Ce mois : ${sales.month.count} vente(s) | Facturé ${fmt(sales.month.revenue)} | Encaissé ${fmt(sales.month.collected)}
   Mix paiement (historique) : Cash ${pct(sales.paymentMix.cash)} | Orange Money ${pct(sales.paymentMix.orangeMoney)} | Crédit ${pct(sales.paymentMix.credit)}
   Valeur moy. transaction (semaine) : ${fmt(sales.avgTransactionValue)}
@@ -147,7 +161,7 @@ ${debtorLines}
 
 🏭 PRODUCTION
   Aujourd'hui : ${production.today.batches} lot(s) | ${production.today.unitsProduced} unités produites | ${production.today.hours}h travaillées
-  Cette semaine : ${production.week.batches} lot(s) | ${production.week.unitsProduced} unités produites | ${production.week.hours}h travaillées
+  Cette semaine : ${production.week.batches} lot(s) | ${production.week.unitsProduced} unités produites | ${production.week.hours}h travaillées${trend.unitsProducedVsLastWeekPct !== null ? ` (${trend.unitsProducedVsLastWeekPct >= 0 ? '+' : ''}${trend.unitsProducedVsLastWeekPct}% vs semaine dernière)` : ' (pas de semaine précédente à comparer)'}
   Objectif hebdo : ${production.weeklyTarget} unités → ${pct(production.weeklyProgress)} atteint
   Couverture prod / ventes (semaine) : ${pct(production.productionCoverage)}
   Ce mois : ${production.month.batches} lot(s) | ${production.month.unitsProduced} unités produites
@@ -176,17 +190,25 @@ ${stockLines}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
 }
 
-export function buildBriefPrompt(snap: BusinessSnapshot, factoryName: string): string {
-  return `${buildDataContext(snap)}
+// Appended to the system prompt (never sent as if it were the user's own
+// words) only when the user explicitly taps the "Bilan du jour" quick
+// prompt — see screens/Coach/index.tsx's sendMessage(text, isBriefRequest).
+// The chat message itself stays a plain, honest "Bilan du jour", exactly
+// what the user actually tapped; this is what shapes the reply underneath it.
+export const BRIEF_INSTRUCTIONS = `L'utilisateur demande explicitement le BILAN DU JOUR. Réponds avec exactement cette structure, en respectant la mise en forme définie plus haut (icône + titre en **gras** seul sur sa ligne, texte à la ligne suivante) :
 
-Génère le BILAN DU JOUR pour ${s(factoryName)}.
+Une phrase d'accroche directe sur l'état du business (honnête, sans ménagement), sans icône ni titre devant.
 
-Structure exacte :
-1. Une phrase d'accroche directe sur l'état du business (honnête, sans ménagement)
-2. 🔍 Diagnostic : les 2-3 insights les plus importants que révèlent ces données
-3. 🚧 Goulot principal : identifie LE frein #1 qui limite les résultats aujourd'hui (Goldratt)
-4. ⚡ Action prioritaire : 1 seule action concrète à faire aujourd'hui pour débloquer la situation
-5. 📈 Signal : 1 chose qui marche bien (ou 1 alarme critique si tout est mauvais)
+🔍 **Diagnostic**
+Les 2-3 insights les plus importants que révèlent ces données.
 
-Règles : cite des chiffres réels. Max 280 mots. Pas de formules creuses.`;
-}
+🚧 **Goulot principal**
+LE frein #1 qui limite les résultats aujourd'hui (Goldratt).
+
+⚡ **Action prioritaire**
+1 seule action concrète à faire aujourd'hui pour débloquer la situation.
+
+📈 **Signal**
+1 chose qui marche bien (ou 1 alarme critique si tout est mauvais).
+
+Cite des chiffres réels, avec 1 à 3 en **gras** par section. Max 280 mots. Pas de formules creuses.`;

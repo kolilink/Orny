@@ -25,7 +25,7 @@ const WHISPER_NAME_TO_LOCALE: Record<string, string> = {
   english: 'en-US',
 };
 
-// Whichever language should drive Orny AI's spoken reply: a per-user manual
+// Whichever language should drive Claude's spoken reply: a per-user manual
 // override (profiles.preferred_language, set in Profile settings) always
 // wins when present; otherwise fall back to what Whisper actually detected
 // in this specific recording, so a shared device can still get per-message

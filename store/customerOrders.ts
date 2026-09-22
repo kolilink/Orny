@@ -26,6 +26,7 @@ export const syncCustomerOrdersFromSupabase = async (): Promise<void> => {
   const items: CustomerOrder[] = data.map((r) => ({
     id: r.id,
     factory_id: r.factory_id,
+    orderGroupId: r.order_group_id,
     clientName: r.client_name,
     product: r.product,
     quantity: r.quantity,
@@ -39,21 +40,43 @@ export const syncCustomerOrdersFromSupabase = async (): Promise<void> => {
   await setCache(items);
 };
 
-export const addCustomerOrder = async (
-  order: Omit<CustomerOrder, 'id' | 'factory_id' | 'createdAt'>,
-): Promise<CustomerOrder> => {
+type OrderLineInput = { product: string; quantity: number; unitPrice: number };
+
+// A client's phone-in order is almost never exactly one product — this
+// creates every line of one order in a single call, all sharing one fresh
+// orderGroupId (see db/update26.sql), so the screen can later group/
+// status-change/delete them together as the one real order they are.
+export const addCustomerOrderGroup = async (
+  clientName: string,
+  lines: OrderLineInput[],
+  deliveryDate: string,
+  notes: string | undefined,
+): Promise<CustomerOrder[]> => {
   const factoryId = getFactoryId();
-  const item: CustomerOrder = {
-    ...order,
+  const groupId = generateId();
+  const createdAt = new Date().toISOString();
+  const items: CustomerOrder[] = lines.map((line) => ({
     id: generateId(),
     factory_id: factoryId,
-    createdAt: new Date().toISOString(),
-  };
+    orderGroupId: groupId,
+    clientName,
+    product: line.product,
+    quantity: line.quantity,
+    unitPrice: line.unitPrice,
+    totalAmount: line.quantity * line.unitPrice,
+    deliveryDate,
+    status: 'pending',
+    notes,
+    createdAt,
+  }));
+
   const all = await getCustomerOrders();
-  await setCache([item, ...all]);
-  const row = {
+  await setCache([...items, ...all]);
+
+  const rows = items.map((item) => ({
     id: item.id,
     factory_id: factoryId,
+    order_group_id: item.orderGroupId,
     client_name: item.clientName,
     product: item.product,
     quantity: item.quantity,
@@ -63,31 +86,32 @@ export const addCustomerOrder = async (
     status: item.status,
     notes: item.notes ?? null,
     created_at: item.createdAt,
-  };
-  supabase.from('customer_orders').insert(row).then(({ error }) => {
-    if (error) enqueueIfNetworkError(error, { table: 'customer_orders', op: 'insert', values: row, label: 'commande client' });
-  });
-  return item;
+  }));
+  // Awaited — a fire-and-forget insert here races a caller's immediate
+  // post-add reload/re-sync and can lose the new order from view even
+  // though it lands fine in Postgres (same bug reproduced and fixed for
+  // store/investors.ts's addInvestor).
+  const { error } = await supabase.from('customer_orders').insert(rows);
+  if (error) await enqueueIfNetworkError(error, { table: 'customer_orders', op: 'insert', values: rows, label: 'commande client' });
+  return items;
 };
 
-export const updateCustomerOrderStatus = async (
-  id: string,
+export const updateCustomerOrderGroupStatus = async (
+  groupId: string,
   status: CustomerOrder['status'],
 ): Promise<void> => {
   const factoryId = getFactoryId();
   const all = await getCustomerOrders();
-  const updated = all.map((o) => (o.id === id ? { ...o, status } : o));
+  const updated = all.map((o) => (o.orderGroupId === groupId ? { ...o, status } : o));
   await setCache(updated);
-  supabase.from('customer_orders').update({ status }).eq('id', id).eq('factory_id', factoryId).then(({ error }) => {
-    if (error) enqueueIfNetworkError(error, { table: 'customer_orders', op: 'update', values: { status }, match: { id, factory_id: factoryId }, label: 'commande client (modif.)' });
-  });
+  const { error } = await supabase.from('customer_orders').update({ status }).eq('order_group_id', groupId).eq('factory_id', factoryId);
+  if (error) await enqueueIfNetworkError(error, { table: 'customer_orders', op: 'update', values: { status }, match: { order_group_id: groupId, factory_id: factoryId }, label: 'commande client (modif.)' });
 };
 
-export const deleteCustomerOrder = async (id: string): Promise<void> => {
+export const deleteCustomerOrderGroup = async (groupId: string): Promise<void> => {
   const factoryId = getFactoryId();
   const all = await getCustomerOrders();
-  await setCache(all.filter((o) => o.id !== id));
-  supabase.from('customer_orders').delete().eq('id', id).eq('factory_id', factoryId).then(({ error }) => {
-    if (error) enqueueIfNetworkError(error, { table: 'customer_orders', op: 'delete', match: { id, factory_id: factoryId }, label: 'commande client (suppr.)' });
-  });
+  await setCache(all.filter((o) => o.orderGroupId !== groupId));
+  const { error } = await supabase.from('customer_orders').delete().eq('order_group_id', groupId).eq('factory_id', factoryId);
+  if (error) await enqueueIfNetworkError(error, { table: 'customer_orders', op: 'delete', match: { order_group_id: groupId, factory_id: factoryId }, label: 'commande client (suppr.)' });
 };

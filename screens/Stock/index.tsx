@@ -1,22 +1,25 @@
 import React, { useState, useCallback } from 'react';
-import {
-  View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  Modal, TextInput, Alert, KeyboardAvoidingView, Platform,
-} from 'react-native';
+import { View, StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
-import { getStock, updateStock, addStockItem, deleteStockItem } from '../../store/stock';
+import { getStock, updateStock, addStockItem, deleteStockItem, syncStockFromSupabase } from '../../store/stock';
+import { getFlavors, syncFlavorsFromSupabase } from '../../store/flavors';
+import { getBulks, syncBulksFromSupabase } from '../../store/bulks';
+import { getProducts } from '../../store/products';
 import { StockItem } from '../../types';
 import { Palette } from '../../theme/tokens';
 import { useTheme } from '../../theme/ThemeContext';
+import { AppModal, Button, ConfirmDialog, Text } from '../../components/ui';
+import { stockSeverity } from '../../utils/stockAlerts';
 
 type StockStatus = 'CRITIQUE' | 'FAIBLE' | 'OK';
 
+// Same rule Ventes/notifications/the Coach data feed already use — see
+// utils/stockAlerts.ts for why this screen used to disagree with all three.
 const getStatus = (item: StockItem): StockStatus => {
-  if (item.currentLevel < item.alertThreshold) return 'CRITIQUE';
-  if (item.currentLevel < item.alertThreshold * 1.2) return 'FAIBLE';
-  return 'OK';
+  const severity = stockSeverity(item.currentLevel, item.alertThreshold);
+  return severity === 'critical' ? 'CRITIQUE' : severity === 'low' ? 'FAIBLE' : 'OK';
 };
 
 const makeStatusColors = (palette: Palette): Record<StockStatus, { bg: string; text: string }> => ({
@@ -33,7 +36,8 @@ export default function StockScreen() {
   const { palette } = useTheme();
   const styles = makeStyles(palette);
   const STATUS_COLORS = makeStatusColors(palette);
-  const [stock, setStockState] = useState<StockItem[]>([]);
+  const [allStock, setAllStockState] = useState<StockItem[]>([]);
+  const [finishedGoodsIds, setFinishedGoodsIds] = useState<Set<string>>(new Set());
   const [showUpdateModal, setShowUpdateModal] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
   const [editValues, setEditValues] = useState<Record<string, string>>({});
@@ -41,13 +45,40 @@ export default function StockScreen() {
   const [saving, setSaving] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<StockItem | null>(null);
 
+  // This screen is raw materials only (sel, gaz, pommes de terre, huile,
+  // emballages...) — finished-goods stock is a proxy row sharing its id
+  // with a Saveur/Lot/Produit de production, and its only real home is the
+  // Ventes screen now (see "en stock" on each product card there). Showing
+  // it here too was pure repetition of the same number in two places.
+  // Cache-first: read cache instantly, then sync in the background and
+  // re-render with fresh data — this screen used to only ever read cache
+  // with nothing refreshing it. `getProducts` isn't re-synced here: that
+  // store is dead (superseded when Production and Ventes were unified onto
+  // flavors/bulks) and nothing writes to it anymore.
   const load = useCallback(async () => {
-    const s = await getStock();
-    setStockState(s);
+    const [s, flavors, bulks, products] = await Promise.all([
+      getStock(), getFlavors(), getBulks(), getProducts(),
+    ]);
+    setAllStockState(s);
+    setFinishedGoodsIds(new Set([
+      ...flavors.map((f) => f.id),
+      ...bulks.map((b) => b.id),
+      ...products.map((p) => p.id),
+    ]));
+
+    await Promise.all([syncStockFromSupabase(), syncFlavorsFromSupabase(), syncBulksFromSupabase()]);
+    const [freshS, freshFlavors, freshBulks] = await Promise.all([getStock(), getFlavors(), getBulks()]);
+    setAllStockState(freshS);
+    setFinishedGoodsIds(new Set([
+      ...freshFlavors.map((f) => f.id),
+      ...freshBulks.map((b) => b.id),
+      ...products.map((p) => p.id),
+    ]));
   }, []);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
+  const stock = allStock.filter((item) => !finishedGoodsIds.has(item.id));
   const criticalItems = stock.filter((i) => getStatus(i) === 'CRITIQUE');
 
   const openUpdateModal = () => {
@@ -65,7 +96,7 @@ export default function StockScreen() {
         updates[key] = parseFloat(val) || 0;
       });
       const updated = await updateStock(updates);
-      setStockState(updated);
+      setAllStockState(updated);
       setShowUpdateModal(false);
     } finally {
       setSaving(false);
@@ -94,7 +125,6 @@ export default function StockScreen() {
   };
 
   const handleDeleteItem = (item: StockItem) => {
-    console.log('[Stock] delete pressed for', item.id, item.name);
     setDeleteTarget(item);
   };
 
@@ -156,126 +186,94 @@ export default function StockScreen() {
         )}
       </ScrollView>
 
-      <View style={styles.footer}>
-        <TouchableOpacity style={styles.updateBtn} onPress={openUpdateModal}>
-          <Text style={styles.updateBtnText}>Mettre à jour les niveaux</Text>
-        </TouchableOpacity>
-      </View>
+      {/* Nothing to update yet when there's no article at all — the empty
+          state above already points at "+" as the real next action, so
+          this footer would otherwise open onto a title with nothing behind
+          it (no rows, nothing to type into) every time. */}
+      {stock.length > 0 && (
+        <View style={styles.footer}>
+          <TouchableOpacity style={styles.updateBtn} onPress={openUpdateModal}>
+            <Text style={styles.updateBtnText}>Mettre à jour les niveaux</Text>
+          </TouchableOpacity>
+        </View>
+      )}
 
       {/* Update levels modal */}
-      <Modal visible={showUpdateModal} animationType="slide" transparent onRequestClose={() => setShowUpdateModal(false)}>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Mettre à jour le stock</Text>
-            <ScrollView style={{ maxHeight: 400 }}>
-              {stock.map((item) => (
-                <View key={item.id} style={styles.editRow}>
-                  <Text style={styles.editLabel}>{item.name} ({item.unit})</Text>
-                  <TextInput
-                    style={styles.editInput}
-                    keyboardType="decimal-pad"
-                    value={editValues[item.id] ?? ''}
-                    onChangeText={(t) => setEditValues((prev) => ({ ...prev, [item.id]: t }))}
-                  />
-                </View>
-              ))}
-            </ScrollView>
-            <View style={styles.modalActions}>
-              <TouchableOpacity style={styles.cancelBtn} onPress={() => setShowUpdateModal(false)}>
-                <Text style={styles.cancelText}>Annuler</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.confirmBtn, saving && { opacity: 0.6 }]}
-                onPress={handleUpdate}
-                disabled={saving}
-              >
-                <Text style={styles.confirmText}>{saving ? 'Enregistrement…' : 'Confirmer'}</Text>
-              </TouchableOpacity>
+      <AppModal visible={showUpdateModal} onClose={() => setShowUpdateModal(false)} title="Mettre à jour le stock">
+        <ScrollView keyboardShouldPersistTaps="handled" style={{ maxHeight: 400, flexShrink: 1 }}>
+          {stock.map((item) => (
+            <View key={item.id} style={styles.editRow}>
+              <Text style={styles.editLabel}>{item.name} ({item.unit})</Text>
+              <TextInput
+                style={styles.editInput}
+                keyboardType="decimal-pad"
+                value={editValues[item.id] ?? ''}
+                onChangeText={(t) => setEditValues((prev) => ({ ...prev, [item.id]: t }))}
+              />
             </View>
+          ))}
+          <View style={styles.modalActions}>
+            <Button label="Annuler" variant="ghost" onPress={() => setShowUpdateModal(false)} style={{ flex: 1 }} />
+            <Button label="Confirmer" onPress={handleUpdate} loading={saving} style={{ flex: 1 }} />
           </View>
-        </View>
-      </Modal>
+        </ScrollView>
+      </AppModal>
 
       {/* Delete confirm modal */}
-      <Modal visible={!!deleteTarget} transparent animationType="fade" onRequestClose={() => setDeleteTarget(null)}>
-        <View style={styles.confirmOverlay}>
-          <View style={styles.confirmBox}>
-            <Ionicons name="trash-outline" size={32} color={palette.critical} style={{ alignSelf: 'center', marginBottom: 12 }} />
-            <Text style={styles.confirmTitle}>Supprimer cet article ?</Text>
-            <Text style={styles.confirmSub}>
-              {deleteTarget ? `Supprimer "${deleteTarget.name}" du stock ?` : ''}
-            </Text>
-            <TouchableOpacity
-              style={styles.confirmDeleteBtn}
-              onPress={async () => {
-                if (!deleteTarget) return;
-                await deleteStockItem(deleteTarget.id);
-                await load();
-                setDeleteTarget(null);
-              }}
-            >
-              <Text style={styles.confirmDeleteText}>Supprimer</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.confirmCancelBtn} onPress={() => setDeleteTarget(null)}>
-              <Text style={styles.confirmCancelText}>Annuler</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
+      <ConfirmDialog
+        visible={!!deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={async () => {
+          if (!deleteTarget) return;
+          await deleteStockItem(deleteTarget.id);
+          await load();
+          setDeleteTarget(null);
+        }}
+        title="Supprimer cet article ?"
+        message={deleteTarget ? `Supprimer "${deleteTarget.name}" du stock ?` : ''}
+        confirmLabel="Supprimer"
+        icon="trash-outline"
+        tone="danger"
+      />
 
       {/* Add new item modal */}
-      <Modal visible={showAddModal} animationType="slide" transparent onRequestClose={() => setShowAddModal(false)}>
-        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-          <View style={styles.modalOverlay}>
-            <View style={styles.modalCard}>
-              <Text style={styles.modalTitle}>Nouvel article de stock</Text>
-              <ScrollView>
-                <Text style={styles.editLabel}>Nom de l'article *</Text>
-                <TextInput
-                  style={styles.editInput}
-                  placeholder="Ex: Shampoo, Sel, Emballages…"
-                  value={newItemForm.name}
-                  onChangeText={(v) => setNewItemForm((f) => ({ ...f, name: v }))}
-                  autoFocus
-                />
-                <Text style={styles.editLabel}>Unité *</Text>
-                <TextInput
-                  style={styles.editInput}
-                  placeholder="Ex: kg, L, unités, cartons…"
-                  value={newItemForm.unit}
-                  onChangeText={(v) => setNewItemForm((f) => ({ ...f, unit: v }))}
-                />
-                <Text style={styles.editLabel}>Niveau actuel</Text>
-                <TextInput
-                  style={styles.editInput}
-                  keyboardType="decimal-pad"
-                  value={newItemForm.currentLevel}
-                  onChangeText={(v) => setNewItemForm((f) => ({ ...f, currentLevel: v }))}
-                />
-                <Text style={styles.editLabel}>Seuil d'alerte</Text>
-                <TextInput
-                  style={styles.editInput}
-                  keyboardType="decimal-pad"
-                  value={newItemForm.alertThreshold}
-                  onChangeText={(v) => setNewItemForm((f) => ({ ...f, alertThreshold: v }))}
-                />
-              </ScrollView>
-              <View style={styles.modalActions}>
-                <TouchableOpacity style={styles.cancelBtn} onPress={() => setShowAddModal(false)}>
-                  <Text style={styles.cancelText}>Annuler</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.confirmBtn, saving && { opacity: 0.6 }]}
-                  onPress={handleAddItem}
-                  disabled={saving}
-                >
-                  <Text style={styles.confirmText}>{saving ? '…' : 'Ajouter'}</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
+      <AppModal visible={showAddModal} onClose={() => setShowAddModal(false)} title="Nouvel article de stock">
+        <ScrollView style={{ flexShrink: 1 }} keyboardShouldPersistTaps="handled">
+          <Text style={styles.editLabel}>Nom de l'article *</Text>
+          <TextInput
+            style={styles.editInput}
+            placeholder="Ex: Shampoo, Sel, Emballages…"
+            value={newItemForm.name}
+            onChangeText={(v) => setNewItemForm((f) => ({ ...f, name: v }))}
+            autoFocus
+          />
+          <Text style={styles.editLabel}>Unité *</Text>
+          <TextInput
+            style={styles.editInput}
+            placeholder="Ex: kg, L, unités, cartons…"
+            value={newItemForm.unit}
+            onChangeText={(v) => setNewItemForm((f) => ({ ...f, unit: v }))}
+          />
+          <Text style={styles.editLabel}>Niveau actuel</Text>
+          <TextInput
+            style={styles.editInput}
+            keyboardType="decimal-pad"
+            value={newItemForm.currentLevel}
+            onChangeText={(v) => setNewItemForm((f) => ({ ...f, currentLevel: v }))}
+          />
+          <Text style={styles.editLabel}>Seuil d'alerte</Text>
+          <TextInput
+            style={styles.editInput}
+            keyboardType="decimal-pad"
+            value={newItemForm.alertThreshold}
+            onChangeText={(v) => setNewItemForm((f) => ({ ...f, alertThreshold: v }))}
+          />
+          <View style={styles.modalActions}>
+            <Button label="Annuler" variant="ghost" onPress={() => setShowAddModal(false)} style={{ flex: 1 }} />
+            <Button label="Ajouter" onPress={handleAddItem} loading={saving} style={{ flex: 1 }} />
           </View>
-        </KeyboardAvoidingView>
-      </Modal>
+        </ScrollView>
+      </AppModal>
     </View>
   );
 }
@@ -351,20 +349,4 @@ const makeStyles = (palette: Palette) => StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   confirmText: { fontSize: 16, color: palette.white, fontWeight: '700' },
-  confirmOverlay: {
-    flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', padding: 24,
-  },
-  confirmBox: { backgroundColor: palette.card, borderRadius: 16, padding: 24 },
-  confirmTitle: { fontSize: 17, fontWeight: '700', color: palette.ink, textAlign: 'center', marginBottom: 6 },
-  confirmSub: { fontSize: 14, color: palette.muted, textAlign: 'center', marginBottom: 20 },
-  confirmDeleteBtn: {
-    backgroundColor: palette.critical, borderRadius: 12, height: 52,
-    alignItems: 'center', justifyContent: 'center', marginBottom: 10,
-  },
-  confirmDeleteText: { color: palette.white, fontSize: 16, fontWeight: '700' },
-  confirmCancelBtn: {
-    borderRadius: 12, height: 52, borderWidth: 1, borderColor: palette.line,
-    alignItems: 'center', justifyContent: 'center',
-  },
-  confirmCancelText: { fontSize: 16, color: palette.muted, fontWeight: '600' },
 });

@@ -37,6 +37,7 @@ export const syncPurchasesFromSupabase = async (): Promise<void> => {
     unitPrice: r.unit_price,
     totalAmount: r.total_amount,
     amountPaid: r.amount_paid ?? undefined,
+    lastPaymentAt: r.last_payment_at ?? undefined,
     paymentMethod: r.payment_method,
     notes: r.notes ?? undefined,
   }));
@@ -64,9 +65,12 @@ export const addPurchase = async (purchase: Omit<Purchase, 'id' | 'factory_id'>)
     payment_method: item.paymentMethod,
     notes: item.notes ?? null,
   };
-  supabase.from('purchases').insert(row).then(({ error }) => {
-    if (error) enqueueIfNetworkError(error, { table: 'purchases', op: 'insert', values: row, label: 'achat' });
-  });
+  // Awaited — a fire-and-forget insert here races a caller's immediate
+  // post-add reload/re-sync and can lose the new purchase from view even
+  // though it lands fine in Postgres (same bug reproduced and fixed for
+  // store/investors.ts's addInvestor).
+  const { error } = await supabase.from('purchases').insert(row);
+  if (error) await enqueueIfNetworkError(error, { table: 'purchases', op: 'insert', values: row, label: 'achat' });
 
   // Buying raw material actually raises what's on hand — without this a
   // purchase only ever showed up as a cost, never as usable stock. It also
@@ -84,20 +88,18 @@ export const addPurchase = async (purchase: Omit<Purchase, 'id' | 'factory_id'>)
 // sale, applied to what's owed to a supplier instead.
 export const recordPurchasePayment = async (id: string, newAmountPaid: number): Promise<void> => {
   const factoryId = getFactoryId();
+  const paidAt = new Date().toISOString();
   const all = await getPurchases();
-  const updated = all.map((p) => (p.id === id ? { ...p, amountPaid: newAmountPaid } : p));
+  const updated = all.map((p) => (p.id === id ? { ...p, amountPaid: newAmountPaid, lastPaymentAt: paidAt } : p));
   await setCache(updated);
-  supabase.from('purchases').update({ amount_paid: newAmountPaid }).eq('id', id).eq('factory_id', factoryId)
-    .then(({ error }) => {
-      if (error) enqueueIfNetworkError(error, { table: 'purchases', op: 'update', values: { amount_paid: newAmountPaid }, match: { id, factory_id: factoryId }, label: 'achat (paiement)' });
-    });
+  const { error } = await supabase.from('purchases').update({ amount_paid: newAmountPaid, last_payment_at: paidAt }).eq('id', id).eq('factory_id', factoryId);
+  if (error) await enqueueIfNetworkError(error, { table: 'purchases', op: 'update', values: { amount_paid: newAmountPaid, last_payment_at: paidAt }, match: { id, factory_id: factoryId }, label: 'achat (paiement)' });
 };
 
 export const deletePurchase = async (id: string): Promise<void> => {
   const factoryId = getFactoryId();
   const all = await getPurchases();
   await setCache(all.filter((p) => p.id !== id));
-  supabase.from('purchases').delete().eq('id', id).eq('factory_id', factoryId).then(({ error }) => {
-    if (error) enqueueIfNetworkError(error, { table: 'purchases', op: 'delete', match: { id, factory_id: factoryId }, label: 'achat (suppr.)' });
-  });
+  const { error } = await supabase.from('purchases').delete().eq('id', id).eq('factory_id', factoryId);
+  if (error) await enqueueIfNetworkError(error, { table: 'purchases', op: 'delete', match: { id, factory_id: factoryId }, label: 'achat (suppr.)' });
 };

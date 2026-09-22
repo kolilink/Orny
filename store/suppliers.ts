@@ -47,9 +47,12 @@ export const addSupplier = async (supplier: Omit<Supplier, 'id' | 'factory_id'>)
     product: item.product,
     notes: item.notes ?? null,
   };
-  supabase.from('suppliers').insert(row).then(({ error }) => {
-    if (error) enqueueIfNetworkError(error, { table: 'suppliers', op: 'insert', values: row, label: 'fournisseur' });
-  });
+  // Awaited — a fire-and-forget insert here races a caller's immediate
+  // post-add reload/re-sync and can lose the new supplier from view even
+  // though it lands fine in Postgres (same bug reproduced and fixed for
+  // store/investors.ts's addInvestor).
+  const { error } = await supabase.from('suppliers').insert(row);
+  if (error) await enqueueIfNetworkError(error, { table: 'suppliers', op: 'insert', values: row, label: 'fournisseur' });
   return item;
 };
 
@@ -62,17 +65,14 @@ export const updateSupplier = async (id: string, updates: Partial<Omit<Supplier,
   if (updates.product !== undefined) row.product = updates.product;
   if (updates.notes !== undefined) row.notes = updates.notes ?? null;
   const factoryId = getFactoryId();
-  supabase.from('suppliers').update(row).eq('id', id).eq('factory_id', factoryId)
-    .then(({ error }) => {
-      if (error) enqueueIfNetworkError(error, { table: 'suppliers', op: 'update', values: row, match: { id, factory_id: factoryId }, label: 'fournisseur (modif.)' });
-    });
+  const { error } = await supabase.from('suppliers').update(row).eq('id', id).eq('factory_id', factoryId);
+  if (error) await enqueueIfNetworkError(error, { table: 'suppliers', op: 'update', values: row, match: { id, factory_id: factoryId }, label: 'fournisseur (modif.)' });
 };
 
 export const deleteSupplier = async (id: string): Promise<void> => {
   const factoryId = getFactoryId();
   const all = await getSuppliers();
   await setCache(all.filter((s) => s.id !== id));
-  supabase.from('suppliers').delete().eq('id', id).eq('factory_id', factoryId).then(({ error }) => {
-    if (error) enqueueIfNetworkError(error, { table: 'suppliers', op: 'delete', match: { id, factory_id: factoryId }, label: 'fournisseur (suppr.)' });
-  });
+  const { error } = await supabase.from('suppliers').delete().eq('id', id).eq('factory_id', factoryId);
+  if (error) await enqueueIfNetworkError(error, { table: 'suppliers', op: 'delete', match: { id, factory_id: factoryId }, label: 'fournisseur (suppr.)' });
 };

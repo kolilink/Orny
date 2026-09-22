@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
-import { View, Text, TouchableOpacity, Platform, StyleSheet } from 'react-native';
+import { View, TouchableOpacity, Platform, StyleSheet } from 'react-native';
+import { Text } from './ui';
+import { AppModal, Button } from './ui';
 import { Ionicons } from '@expo/vector-icons';
 import { radius, Palette } from '../theme/tokens';
 import { useTheme } from '../theme/ThemeContext';
@@ -53,6 +55,46 @@ export default function DatePickerField({ label, value, onChange }: Props) {
     );
   }
 
+  // Android's declarative <DateTimePicker> maps internally to the same
+  // modal dialog the imperative DateTimePickerAndroid.open() API shows —
+  // "default" lets the OS pick its own native calendar/spinner presentation
+  // per Android version, the most familiar choice, and onChange fires
+  // exactly once (event.type 'set' on confirm, 'dismissed' on cancel), so
+  // closing the picker the instant onChange fires is correct here.
+  if (Platform.OS === 'android') {
+    return (
+      <View style={styles.wrap}>
+        <Text style={styles.label}>{label}</Text>
+        <TouchableOpacity style={styles.btn} onPress={() => setShow(true)}>
+          <Ionicons name="calendar-outline" size={18} color={palette.moss} />
+          <Text style={styles.btnText}>{formatDisplay(value)}</Text>
+        </TouchableOpacity>
+        {show && DateTimePicker && (
+          <DateTimePicker
+            value={date}
+            mode="date"
+            display="default"
+            onChange={(event: any, selected?: Date) => {
+              setShow(false);
+              if (event?.type === 'set' && selected) onChange(toYMD(selected));
+            }}
+          />
+        )}
+      </View>
+    );
+  }
+
+  // iOS's "spinner" style has no dialog chrome of its own — it's an inline
+  // wheel widget that fires onChange continuously as each column (day/
+  // month/year) is scrolled, with no built-in "done" step. The previous
+  // version called setShow(false) straight inside onChange, so the picker
+  // vanished the instant the user moved a single wheel one tick — often
+  // before they'd touched the other two columns at all, which is exactly
+  // what read as "weird." Fixed by never closing from onChange: the value
+  // updates live as they scroll (matching every reference implementation of
+  // this display mode), and an explicit "Terminé" button — inside a real
+  // sheet, since the bare picker has no dismiss affordance of its own — is
+  // the only thing that closes it.
   return (
     <View style={styles.wrap}>
       <Text style={styles.label}>{label}</Text>
@@ -60,17 +102,19 @@ export default function DatePickerField({ label, value, onChange }: Props) {
         <Ionicons name="calendar-outline" size={18} color={palette.moss} />
         <Text style={styles.btnText}>{formatDisplay(value)}</Text>
       </TouchableOpacity>
-      {show && DateTimePicker && (
-        <DateTimePicker
-          value={date}
-          mode="date"
-          display="spinner"
-          onChange={(_: any, selected?: Date) => {
-            setShow(false);
-            if (selected) onChange(toYMD(selected));
-          }}
-        />
-      )}
+      <AppModal visible={show} onClose={() => setShow(false)} title={label}>
+        {DateTimePicker && (
+          <DateTimePicker
+            value={date}
+            mode="date"
+            display="spinner"
+            onChange={(_: any, selected?: Date) => {
+              if (selected) onChange(toYMD(selected));
+            }}
+          />
+        )}
+        <Button label="Terminé" onPress={() => setShow(false)} fullWidth style={{ marginTop: 8 }} />
+      </AppModal>
     </View>
   );
 }

@@ -1,8 +1,6 @@
 import React, { useState } from 'react';
-import {
-  View, Text, TextInput, TouchableOpacity, StyleSheet,
-  ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView, Alert,
-} from 'react-native';
+import { View, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView, Alert } from 'react-native';
+import { Text } from '../../components/ui';
 import { useAuth } from '../../context/AuthContext';
 import { toFrench } from '../../utils/errors';
 import { Palette } from '../../theme/tokens';

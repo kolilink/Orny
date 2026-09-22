@@ -58,9 +58,18 @@ export const addInvestor = async (
     notes: newInvestor.notes ?? null,
     user_id: newInvestor.userId ?? null,
   };
-  supabase.from('investors').insert(row).then(({ error }) => {
-    if (error) enqueueIfNetworkError(error, { table: 'investors', op: 'insert', values: row, label: 'investisseur' });
-  });
+  // Awaited (not fire-and-forget): a caller that immediately re-syncs from
+  // Supabase right after this resolves (every add-then-load() screen does)
+  // would otherwise race this insert's own network round trip — the sync's
+  // SELECT can return before this INSERT commits, overwriting the correct
+  // optimistic cache above with a server list that doesn't have the new row
+  // yet, silently dropping the just-added investor from view. Reproduced
+  // live: the row landed in Postgres every time, but the list kept showing
+  // "Aucun investisseur" because the very next sync clobbered the cache
+  // first. Awaiting here guarantees the insert is durable before any caller
+  // can start that re-sync.
+  const { error } = await supabase.from('investors').insert(row);
+  if (error) await enqueueIfNetworkError(error, { table: 'investors', op: 'insert', values: row, label: 'investisseur' });
 
   return newInvestor;
 };
@@ -80,10 +89,8 @@ export const updateInvestor = async (
   if (updates.userId !== undefined) row.user_id = updates.userId ?? null;
 
   const factoryId = getFactoryId();
-  supabase.from('investors').update(row).eq('id', id).eq('factory_id', factoryId)
-    .then(({ error }) => {
-      if (error) enqueueIfNetworkError(error, { table: 'investors', op: 'update', values: row, match: { id, factory_id: factoryId }, label: 'investisseur (modif.)' });
-    });
+  const { error } = await supabase.from('investors').update(row).eq('id', id).eq('factory_id', factoryId);
+  if (error) await enqueueIfNetworkError(error, { table: 'investors', op: 'update', values: row, match: { id, factory_id: factoryId }, label: 'investisseur (modif.)' });
 };
 
 export const deleteInvestor = async (id: string): Promise<void> => {

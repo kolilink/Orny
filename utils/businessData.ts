@@ -6,8 +6,9 @@ import { getExpenses } from '../store/expenses';
 import { getWeeklyTarget } from '../store/weeklyTarget';
 import { getMachines } from '../store/machines';
 import { saleDebt } from '../types';
-import { isThisWeek, daysAgo, toDateString } from './dates';
+import { isThisWeek, isLastWeek, daysAgo, toDateString } from './dates';
 import { computeRunrates } from './runrate';
+import { stockSeverity } from './stockAlerts';
 
 function getMonthStart(): string {
   const d = new Date();
@@ -64,7 +65,7 @@ export interface BusinessSnapshot {
   };
 
   // Empty until the factory actually enters machines (screens/Machines/) —
-  // present from day one so Orny AI picks it up automatically the moment
+  // present from day one so Claude picks it up automatically the moment
   // real data exists, with no further code changes needed.
   machines: {
     total: number;
@@ -85,6 +86,16 @@ export interface BusinessSnapshot {
     expensesThisMonth: number;
     netProfitThisMonth: number;
   };
+
+  // This week vs. the calendar week immediately before it — a flat
+  // snapshot can't tell Claude whether "50 000 GNF today" is a good or
+  // bad number; a real trend can. null (not 0) when last week had nothing
+  // to compare against, so the AI reads "no baseline" rather than a
+  // misleading "-100%".
+  trend: {
+    revenueVsLastWeekPct: number | null;
+    unitsProducedVsLastWeekPct: number | null;
+  };
 }
 
 export async function getBusinessSnapshot(): Promise<BusinessSnapshot> {
@@ -104,6 +115,7 @@ export async function getBusinessSnapshot(): Promise<BusinessSnapshot> {
 
   const todaySales = sales.filter(s => s.date === today);
   const weekSales = sales.filter(s => isThisWeek(s.date));
+  const lastWeekSales = sales.filter(s => isLastWeek(s.date));
   const monthSales = sales.filter(s => isThisMonth(s.date));
   const last30Sales = sales.filter(s => s.date >= day30Ago && s.date <= today);
 
@@ -149,6 +161,7 @@ export async function getBusinessSnapshot(): Promise<BusinessSnapshot> {
 
   const todayBatches = batches.filter(b => b.date === today);
   const weekBatches = batches.filter(b => isThisWeek(b.date));
+  const lastWeekBatches = batches.filter(b => isLastWeek(b.date));
   const monthBatches = batches.filter(b => isThisMonth(b.date));
 
   const sumUnits = (arr: typeof batches) => arr.reduce((a, b) => a + b.unitsProduced, 0);
@@ -187,9 +200,7 @@ export async function getBusinessSnapshot(): Promise<BusinessSnapshot> {
   const runrateById = new Map(computeRunrates(stock, batches, sales).map(r => [r.id, r]));
 
   const stockItems: StockSnapshot[] = stock.map(item => {
-    let status: 'ok' | 'low' | 'critical' = 'ok';
-    if (item.currentLevel <= 0) status = 'critical';
-    else if (item.currentLevel <= item.alertThreshold) status = 'low';
+    const status = stockSeverity(item.currentLevel, item.alertThreshold);
     const runrate = runrateById.get(item.id);
     return {
       name: item.name,
@@ -218,6 +229,15 @@ export async function getBusinessSnapshot(): Promise<BusinessSnapshot> {
   };
 
   const weekRevenue = sumRevenue(weekSales);
+  const lastWeekRevenue = sumRevenue(lastWeekSales);
+  const weekUnitsForTrend = sumUnits(weekBatches);
+  const lastWeekUnits = sumUnits(lastWeekBatches);
+  const revenueVsLastWeekPct = lastWeekRevenue > 0
+    ? Math.round(((weekRevenue - lastWeekRevenue) / lastWeekRevenue) * 100)
+    : null;
+  const unitsProducedVsLastWeekPct = lastWeekUnits > 0
+    ? Math.round(((weekUnitsForTrend - lastWeekUnits) / lastWeekUnits) * 100)
+    : null;
   const weekBatchCount = weekBatches.length;
   const allTimeRevenue = sumRevenue(sales);
   const allTimeDebt = sumDebt(sales);
@@ -307,6 +327,11 @@ export async function getBusinessSnapshot(): Promise<BusinessSnapshot> {
       revenuePerBatch: weekBatchCount > 0 ? Math.round(weekRevenue / weekBatchCount) : 0,
       expensesThisMonth: monthExpenses,
       netProfitThisMonth,
+    },
+
+    trend: {
+      revenueVsLastWeekPct,
+      unitsProducedVsLastWeekPct,
     },
   };
 }

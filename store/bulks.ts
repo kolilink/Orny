@@ -30,6 +30,7 @@ export const syncBulksFromSupabase = async (): Promise<void> => {
     flavorId: r.flavor_id,
     bagCount: r.bag_count,
     unitPrice: r.unit_price,
+    recipePerUnit: r.recipe_per_unit ?? [],
   }));
   await setCache(bulks);
 };
@@ -56,10 +57,14 @@ export const addBulk = async (
     flavor_id: newBulk.flavorId ?? null,
     bag_count: newBulk.bagCount,
     unit_price: newBulk.unitPrice,
+    recipe_per_unit: [],
   };
-  supabase.from('bulk_products').insert(row).then(({ error }) => {
-    if (error) enqueueIfNetworkError(error, { table: 'bulk_products', op: 'insert', values: row, label: 'lot' });
-  });
+  // Awaited — a fire-and-forget insert here races a caller's immediate
+  // post-add reload/re-sync and can lose the new bulk from view even
+  // though it lands fine in Postgres (same bug reproduced and fixed for
+  // store/investors.ts's addInvestor).
+  const { error } = await supabase.from('bulk_products').insert(row);
+  if (error) await enqueueIfNetworkError(error, { table: 'bulk_products', op: 'insert', values: row, label: 'lot' });
 
   return newBulk;
 };
@@ -76,22 +81,19 @@ export const updateBulk = async (
   if (updates.flavorId !== undefined) row.flavor_id = updates.flavorId;
   if (updates.bagCount !== undefined) row.bag_count = updates.bagCount;
   if (updates.unitPrice !== undefined) row.unit_price = updates.unitPrice;
+  if (updates.recipePerUnit !== undefined) row.recipe_per_unit = updates.recipePerUnit;
 
   const factoryId = getFactoryId();
-  supabase.from('bulk_products').update(row).eq('id', id).eq('factory_id', factoryId)
-    .then(({ error }) => {
-      if (error) enqueueIfNetworkError(error, { table: 'bulk_products', op: 'update', values: row, match: { id, factory_id: factoryId }, label: 'lot (modif.)' });
-    });
+  const { error } = await supabase.from('bulk_products').update(row).eq('id', id).eq('factory_id', factoryId);
+  if (error) await enqueueIfNetworkError(error, { table: 'bulk_products', op: 'update', values: row, match: { id, factory_id: factoryId }, label: 'lot (modif.)' });
 };
 
 export const deleteBulk = async (id: string): Promise<void> => {
   const bulks = await getBulks();
   await setCache(bulks.filter((b) => b.id !== id));
   const factoryId = getFactoryId();
-  supabase.from('bulk_products').delete().eq('id', id).eq('factory_id', factoryId)
-    .then(({ error }) => {
-      if (error) enqueueIfNetworkError(error, { table: 'bulk_products', op: 'delete', match: { id, factory_id: factoryId }, label: 'lot (suppr.)' });
-    });
+  const { error } = await supabase.from('bulk_products').delete().eq('id', id).eq('factory_id', factoryId);
+  if (error) await enqueueIfNetworkError(error, { table: 'bulk_products', op: 'delete', match: { id, factory_id: factoryId }, label: 'lot (suppr.)' });
 };
 
 export const setBulks = async (bulks: BulkProduct[]): Promise<void> => {

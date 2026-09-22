@@ -38,9 +38,12 @@ export const addBatch = async (
     notes: newBatch.notes ?? null,
     created_at: now,
   };
-  supabase.from('production_batches_v2').insert(row).then(({ error }) => {
-    if (error) enqueueIfNetworkError(error, { table: 'production_batches_v2', op: 'insert', values: row, label: 'lot de production' });
-  });
+  // Awaited — a fire-and-forget insert here races a caller's immediate
+  // post-add reload/re-sync and can lose the new batch from view even
+  // though it lands fine in Postgres (same bug reproduced and fixed for
+  // store/investors.ts's addInvestor).
+  const { error } = await supabase.from('production_batches_v2').insert(row);
+  if (error) await enqueueIfNetworkError(error, { table: 'production_batches_v2', op: 'insert', values: row, label: 'lot de production' });
 
   return newBatch;
 };

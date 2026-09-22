@@ -1,0 +1,238 @@
+export interface Country {
+  code: string;   // ISO 3166-1 alpha-2
+  name: string;   // French name
+  flag: string;   // Flag emoji
+  dial: string;   // Dial code with +
+  digits: number; // Expected local subscriber number length (no leading zero)
+}
+
+export const PINNED_CODES = ['GN', 'CI', 'SN', 'ML', 'BF', 'GH', 'NG', 'CM', 'FR', 'US'];
+
+export function detectCountryCode(): string {
+  try {
+    const locale = Intl.DateTimeFormat().resolvedOptions().locale;
+    const parts = locale.split('-');
+    if (parts.length >= 2) {
+      const region = parts[parts.length - 1].toUpperCase();
+      if (region.length === 2) return region;
+    }
+  } catch {}
+  return 'GN';
+}
+
+// Cached promise — only one fetch per app session regardless of how many PhoneInputs mount
+let _ipPromise: Promise<string> | null = null;
+
+export function detectCountryCodeAsync(): Promise<string> {
+  if (!_ipPromise) {
+    _ipPromise = (async () => {
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 3000);
+        const res = await fetch('https://ipinfo.io/country', { signal: controller.signal });
+        clearTimeout(timer);
+        if (res.ok) {
+          const code = (await res.text()).trim().toUpperCase();
+          if (/^[A-Z]{2}$/.test(code)) return code;
+        }
+      } catch {}
+      return detectCountryCode(); // locale fallback
+    })();
+  }
+  return _ipPromise;
+}
+
+export const ALL_COUNTRIES: Country[] = [
+  // ── West Africa (pinned) ─────────────────────────────────────────────────
+  { code: 'GN', name: 'Guinée',               flag: '🇬🇳', dial: '+224', digits: 9  },
+  { code: 'CI', name: "Côte d'Ivoire",        flag: '🇨🇮', dial: '+225', digits: 10 },
+  { code: 'SN', name: 'Sénégal',              flag: '🇸🇳', dial: '+221', digits: 9  },
+  { code: 'ML', name: 'Mali',                 flag: '🇲🇱', dial: '+223', digits: 8  },
+  { code: 'BF', name: 'Burkina Faso',         flag: '🇧🇫', dial: '+226', digits: 8  },
+  { code: 'GH', name: 'Ghana',                flag: '🇬🇭', dial: '+233', digits: 9  },
+  { code: 'NG', name: 'Nigeria',              flag: '🇳🇬', dial: '+234', digits: 10 },
+  { code: 'CM', name: 'Cameroun',             flag: '🇨🇲', dial: '+237', digits: 9  },
+  // ── Europe & North America (pinned) ──────────────────────────────────────
+  { code: 'FR', name: 'France',               flag: '🇫🇷', dial: '+33',  digits: 9  },
+  { code: 'US', name: 'États-Unis',           flag: '🇺🇸', dial: '+1',   digits: 10 },
+  // ── Africa ───────────────────────────────────────────────────────────────
+  { code: 'DZ', name: 'Algérie',              flag: '🇩🇿', dial: '+213', digits: 9  },
+  { code: 'AO', name: 'Angola',               flag: '🇦🇴', dial: '+244', digits: 9  },
+  { code: 'BJ', name: 'Bénin',                flag: '🇧🇯', dial: '+229', digits: 8  },
+  { code: 'BW', name: 'Botswana',             flag: '🇧🇼', dial: '+267', digits: 8  },
+  { code: 'BI', name: 'Burundi',              flag: '🇧🇮', dial: '+257', digits: 8  },
+  { code: 'CV', name: 'Cap-Vert',             flag: '🇨🇻', dial: '+238', digits: 7  },
+  { code: 'CF', name: 'Centrafrique',         flag: '🇨🇫', dial: '+236', digits: 8  },
+  { code: 'KM', name: 'Comores',              flag: '🇰🇲', dial: '+269', digits: 7  },
+  { code: 'CG', name: 'Congo-Brazzaville',    flag: '🇨🇬', dial: '+242', digits: 9  },
+  { code: 'CD', name: 'Congo-Kinshasa',       flag: '🇨🇩', dial: '+243', digits: 9  },
+  { code: 'DJ', name: 'Djibouti',             flag: '🇩🇯', dial: '+253', digits: 8  },
+  { code: 'EG', name: 'Égypte',               flag: '🇪🇬', dial: '+20',  digits: 10 },
+  { code: 'ER', name: 'Érythrée',             flag: '🇪🇷', dial: '+291', digits: 7  },
+  { code: 'ET', name: 'Éthiopie',             flag: '🇪🇹', dial: '+251', digits: 9  },
+  { code: 'GA', name: 'Gabon',                flag: '🇬🇦', dial: '+241', digits: 8  },
+  { code: 'GM', name: 'Gambie',               flag: '🇬🇲', dial: '+220', digits: 7  },
+  { code: 'GW', name: 'Guinée-Bissau',        flag: '🇬🇼', dial: '+245', digits: 9  },
+  { code: 'GQ', name: 'Guinée équatoriale',   flag: '🇬🇶', dial: '+240', digits: 9  },
+  { code: 'KE', name: 'Kenya',                flag: '🇰🇪', dial: '+254', digits: 9  },
+  { code: 'LS', name: 'Lesotho',              flag: '🇱🇸', dial: '+266', digits: 8  },
+  { code: 'LR', name: 'Liberia',              flag: '🇱🇷', dial: '+231', digits: 8  },
+  { code: 'LY', name: 'Libye',                flag: '🇱🇾', dial: '+218', digits: 9  },
+  { code: 'MG', name: 'Madagascar',           flag: '🇲🇬', dial: '+261', digits: 9  },
+  { code: 'MW', name: 'Malawi',               flag: '🇲🇼', dial: '+265', digits: 9  },
+  { code: 'MR', name: 'Mauritanie',           flag: '🇲🇷', dial: '+222', digits: 8  },
+  { code: 'MU', name: 'Maurice',              flag: '🇲🇺', dial: '+230', digits: 8  },
+  { code: 'MA', name: 'Maroc',                flag: '🇲🇦', dial: '+212', digits: 9  },
+  { code: 'MZ', name: 'Mozambique',           flag: '🇲🇿', dial: '+258', digits: 9  },
+  { code: 'NA', name: 'Namibie',              flag: '🇳🇦', dial: '+264', digits: 9  },
+  { code: 'NE', name: 'Niger',                flag: '🇳🇪', dial: '+227', digits: 8  },
+  { code: 'RW', name: 'Rwanda',               flag: '🇷🇼', dial: '+250', digits: 9  },
+  { code: 'ST', name: 'São Tomé-et-Príncipe', flag: '🇸🇹', dial: '+239', digits: 7  },
+  { code: 'SC', name: 'Seychelles',           flag: '🇸🇨', dial: '+248', digits: 7  },
+  { code: 'SL', name: 'Sierra Leone',         flag: '🇸🇱', dial: '+232', digits: 8  },
+  { code: 'SO', name: 'Somalie',              flag: '🇸🇴', dial: '+252', digits: 8  },
+  { code: 'ZA', name: 'Afrique du Sud',       flag: '🇿🇦', dial: '+27',  digits: 9  },
+  { code: 'SS', name: 'Soudan du Sud',        flag: '🇸🇸', dial: '+211', digits: 9  },
+  { code: 'SD', name: 'Soudan',               flag: '🇸🇩', dial: '+249', digits: 9  },
+  { code: 'SZ', name: 'Eswatini',             flag: '🇸🇿', dial: '+268', digits: 8  },
+  { code: 'TZ', name: 'Tanzanie',             flag: '🇹🇿', dial: '+255', digits: 9  },
+  { code: 'TD', name: 'Tchad',                flag: '🇹🇩', dial: '+235', digits: 8  },
+  { code: 'TG', name: 'Togo',                 flag: '🇹🇬', dial: '+228', digits: 8  },
+  { code: 'TN', name: 'Tunisie',              flag: '🇹🇳', dial: '+216', digits: 8  },
+  { code: 'UG', name: 'Ouganda',              flag: '🇺🇬', dial: '+256', digits: 9  },
+  { code: 'ZM', name: 'Zambie',               flag: '🇿🇲', dial: '+260', digits: 9  },
+  { code: 'ZW', name: 'Zimbabwe',             flag: '🇿🇼', dial: '+263', digits: 9  },
+  // ── Europe ───────────────────────────────────────────────────────────────
+  { code: 'AL', name: 'Albanie',              flag: '🇦🇱', dial: '+355', digits: 9  },
+  { code: 'DE', name: 'Allemagne',            flag: '🇩🇪', dial: '+49',  digits: 10 },
+  { code: 'AD', name: 'Andorre',              flag: '🇦🇩', dial: '+376', digits: 6  },
+  { code: 'AT', name: 'Autriche',             flag: '🇦🇹', dial: '+43',  digits: 10 },
+  { code: 'BY', name: 'Biélorussie',          flag: '🇧🇾', dial: '+375', digits: 9  },
+  { code: 'BE', name: 'Belgique',             flag: '🇧🇪', dial: '+32',  digits: 9  },
+  { code: 'BA', name: 'Bosnie-Herzégovine',   flag: '🇧🇦', dial: '+387', digits: 8  },
+  { code: 'BG', name: 'Bulgarie',             flag: '🇧🇬', dial: '+359', digits: 9  },
+  { code: 'HR', name: 'Croatie',              flag: '🇭🇷', dial: '+385', digits: 9  },
+  { code: 'CY', name: 'Chypre',               flag: '🇨🇾', dial: '+357', digits: 8  },
+  { code: 'CZ', name: 'Tchéquie',             flag: '🇨🇿', dial: '+420', digits: 9  },
+  { code: 'DK', name: 'Danemark',             flag: '🇩🇰', dial: '+45',  digits: 8  },
+  { code: 'EE', name: 'Estonie',              flag: '🇪🇪', dial: '+372', digits: 8  },
+  { code: 'FI', name: 'Finlande',             flag: '🇫🇮', dial: '+358', digits: 9  },
+  { code: 'GR', name: 'Grèce',                flag: '🇬🇷', dial: '+30',  digits: 10 },
+  { code: 'HU', name: 'Hongrie',              flag: '🇭🇺', dial: '+36',  digits: 9  },
+  { code: 'IS', name: 'Islande',              flag: '🇮🇸', dial: '+354', digits: 7  },
+  { code: 'IE', name: 'Irlande',              flag: '🇮🇪', dial: '+353', digits: 9  },
+  { code: 'IT', name: 'Italie',               flag: '🇮🇹', dial: '+39',  digits: 10 },
+  { code: 'LV', name: 'Lettonie',             flag: '🇱🇻', dial: '+371', digits: 8  },
+  { code: 'LI', name: 'Liechtenstein',        flag: '🇱🇮', dial: '+423', digits: 7  },
+  { code: 'LT', name: 'Lituanie',             flag: '🇱🇹', dial: '+370', digits: 8  },
+  { code: 'LU', name: 'Luxembourg',           flag: '🇱🇺', dial: '+352', digits: 9  },
+  { code: 'MT', name: 'Malte',                flag: '🇲🇹', dial: '+356', digits: 8  },
+  { code: 'MD', name: 'Moldavie',             flag: '🇲🇩', dial: '+373', digits: 8  },
+  { code: 'MC', name: 'Monaco',               flag: '🇲🇨', dial: '+377', digits: 9  },
+  { code: 'ME', name: 'Monténégro',           flag: '🇲🇪', dial: '+382', digits: 8  },
+  { code: 'NO', name: 'Norvège',              flag: '🇳🇴', dial: '+47',  digits: 8  },
+  { code: 'NL', name: 'Pays-Bas',             flag: '🇳🇱', dial: '+31',  digits: 9  },
+  { code: 'PL', name: 'Pologne',              flag: '🇵🇱', dial: '+48',  digits: 9  },
+  { code: 'PT', name: 'Portugal',             flag: '🇵🇹', dial: '+351', digits: 9  },
+  { code: 'RO', name: 'Roumanie',             flag: '🇷🇴', dial: '+40',  digits: 9  },
+  { code: 'GB', name: 'Royaume-Uni',          flag: '🇬🇧', dial: '+44',  digits: 10 },
+  { code: 'RU', name: 'Russie',               flag: '🇷🇺', dial: '+7',   digits: 10 },
+  { code: 'SM', name: 'Saint-Marin',          flag: '🇸🇲', dial: '+378', digits: 9  },
+  { code: 'RS', name: 'Serbie',               flag: '🇷🇸', dial: '+381', digits: 9  },
+  { code: 'SK', name: 'Slovaquie',            flag: '🇸🇰', dial: '+421', digits: 9  },
+  { code: 'SI', name: 'Slovénie',             flag: '🇸🇮', dial: '+386', digits: 8  },
+  { code: 'ES', name: 'Espagne',              flag: '🇪🇸', dial: '+34',  digits: 9  },
+  { code: 'SE', name: 'Suède',                flag: '🇸🇪', dial: '+46',  digits: 9  },
+  { code: 'CH', name: 'Suisse',               flag: '🇨🇭', dial: '+41',  digits: 9  },
+  { code: 'UA', name: 'Ukraine',              flag: '🇺🇦', dial: '+380', digits: 9  },
+  // ── Americas ─────────────────────────────────────────────────────────────
+  { code: 'AG', name: 'Antigua-et-Barbuda',   flag: '🇦🇬', dial: '+1',   digits: 10 },
+  { code: 'AR', name: 'Argentine',            flag: '🇦🇷', dial: '+54',  digits: 10 },
+  { code: 'BS', name: 'Bahamas',              flag: '🇧🇸', dial: '+1',   digits: 10 },
+  { code: 'BB', name: 'Barbade',              flag: '🇧🇧', dial: '+1',   digits: 10 },
+  { code: 'BZ', name: 'Belize',               flag: '🇧🇿', dial: '+501', digits: 7  },
+  { code: 'BO', name: 'Bolivie',              flag: '🇧🇴', dial: '+591', digits: 8  },
+  { code: 'BR', name: 'Brésil',               flag: '🇧🇷', dial: '+55',  digits: 11 },
+  { code: 'CA', name: 'Canada',               flag: '🇨🇦', dial: '+1',   digits: 10 },
+  { code: 'CL', name: 'Chili',                flag: '🇨🇱', dial: '+56',  digits: 9  },
+  { code: 'CO', name: 'Colombie',             flag: '🇨🇴', dial: '+57',  digits: 10 },
+  { code: 'CR', name: 'Costa Rica',           flag: '🇨🇷', dial: '+506', digits: 8  },
+  { code: 'CU', name: 'Cuba',                 flag: '🇨🇺', dial: '+53',  digits: 8  },
+  { code: 'DM', name: 'Dominique',            flag: '🇩🇲', dial: '+1',   digits: 10 },
+  { code: 'DO', name: 'Rép. Dominicaine',     flag: '🇩🇴', dial: '+1',   digits: 10 },
+  { code: 'EC', name: 'Équateur',             flag: '🇪🇨', dial: '+593', digits: 9  },
+  { code: 'SV', name: 'El Salvador',          flag: '🇸🇻', dial: '+503', digits: 8  },
+  { code: 'GD', name: 'Grenade',              flag: '🇬🇩', dial: '+1',   digits: 10 },
+  { code: 'GT', name: 'Guatemala',            flag: '🇬🇹', dial: '+502', digits: 8  },
+  { code: 'GY', name: 'Guyana',               flag: '🇬🇾', dial: '+592', digits: 7  },
+  { code: 'HT', name: 'Haïti',                flag: '🇭🇹', dial: '+509', digits: 8  },
+  { code: 'HN', name: 'Honduras',             flag: '🇭🇳', dial: '+504', digits: 8  },
+  { code: 'JM', name: 'Jamaïque',             flag: '🇯🇲', dial: '+1',   digits: 10 },
+  { code: 'MX', name: 'Mexique',              flag: '🇲🇽', dial: '+52',  digits: 10 },
+  { code: 'NI', name: 'Nicaragua',            flag: '🇳🇮', dial: '+505', digits: 8  },
+  { code: 'PA', name: 'Panama',               flag: '🇵🇦', dial: '+507', digits: 8  },
+  { code: 'PY', name: 'Paraguay',             flag: '🇵🇾', dial: '+595', digits: 9  },
+  { code: 'PE', name: 'Pérou',                flag: '🇵🇪', dial: '+51',  digits: 9  },
+  { code: 'KN', name: 'Saint-Kitts-et-Nevis', flag: '🇰🇳', dial: '+1',   digits: 10 },
+  { code: 'LC', name: 'Sainte-Lucie',         flag: '🇱🇨', dial: '+1',   digits: 10 },
+  { code: 'VC', name: 'Saint-Vincent',        flag: '🇻🇨', dial: '+1',   digits: 10 },
+  { code: 'SR', name: 'Suriname',             flag: '🇸🇷', dial: '+597', digits: 7  },
+  { code: 'TT', name: 'Trinité-et-Tobago',    flag: '🇹🇹', dial: '+1',   digits: 10 },
+  { code: 'UY', name: 'Uruguay',              flag: '🇺🇾', dial: '+598', digits: 9  },
+  { code: 'VE', name: 'Venezuela',            flag: '🇻🇪', dial: '+58',  digits: 10 },
+  // ── Middle East ───────────────────────────────────────────────────────────
+  { code: 'AF', name: 'Afghanistan',          flag: '🇦🇫', dial: '+93',  digits: 9  },
+  { code: 'SA', name: 'Arabie Saoudite',      flag: '🇸🇦', dial: '+966', digits: 9  },
+  { code: 'AZ', name: 'Azerbaïdjan',          flag: '🇦🇿', dial: '+994', digits: 9  },
+  { code: 'BH', name: 'Bahreïn',              flag: '🇧🇭', dial: '+973', digits: 8  },
+  { code: 'AM', name: 'Arménie',              flag: '🇦🇲', dial: '+374', digits: 8  },
+  { code: 'GE', name: 'Géorgie',              flag: '🇬🇪', dial: '+995', digits: 9  },
+  { code: 'IQ', name: 'Irak',                 flag: '🇮🇶', dial: '+964', digits: 10 },
+  { code: 'IR', name: 'Iran',                 flag: '🇮🇷', dial: '+98',  digits: 10 },
+  { code: 'IL', name: 'Israël',               flag: '🇮🇱', dial: '+972', digits: 9  },
+  { code: 'JO', name: 'Jordanie',             flag: '🇯🇴', dial: '+962', digits: 9  },
+  { code: 'KW', name: 'Koweït',               flag: '🇰🇼', dial: '+965', digits: 8  },
+  { code: 'LB', name: 'Liban',                flag: '🇱🇧', dial: '+961', digits: 8  },
+  { code: 'OM', name: 'Oman',                 flag: '🇴🇲', dial: '+968', digits: 8  },
+  { code: 'PS', name: 'Palestine',            flag: '🇵🇸', dial: '+970', digits: 9  },
+  { code: 'QA', name: 'Qatar',                flag: '🇶🇦', dial: '+974', digits: 8  },
+  { code: 'SY', name: 'Syrie',                flag: '🇸🇾', dial: '+963', digits: 9  },
+  { code: 'TR', name: 'Turquie',              flag: '🇹🇷', dial: '+90',  digits: 10 },
+  { code: 'AE', name: 'Émirats arabes unis',  flag: '🇦🇪', dial: '+971', digits: 9  },
+  { code: 'YE', name: 'Yémen',                flag: '🇾🇪', dial: '+967', digits: 9  },
+  // ── Asia & Pacific ───────────────────────────────────────────────────────
+  { code: 'AU', name: 'Australie',            flag: '🇦🇺', dial: '+61',  digits: 9  },
+  { code: 'BD', name: 'Bangladesh',           flag: '🇧🇩', dial: '+880', digits: 10 },
+  { code: 'BT', name: 'Bhoutan',              flag: '🇧🇹', dial: '+975', digits: 8  },
+  { code: 'BN', name: 'Brunei',               flag: '🇧🇳', dial: '+673', digits: 7  },
+  { code: 'KH', name: 'Cambodge',             flag: '🇰🇭', dial: '+855', digits: 9  },
+  { code: 'CN', name: 'Chine',                flag: '🇨🇳', dial: '+86',  digits: 11 },
+  { code: 'KP', name: 'Corée du Nord',        flag: '🇰🇵', dial: '+850', digits: 8  },
+  { code: 'KR', name: 'Corée du Sud',         flag: '🇰🇷', dial: '+82',  digits: 10 },
+  { code: 'FJ', name: 'Fidji',                flag: '🇫🇯', dial: '+679', digits: 7  },
+  { code: 'IN', name: 'Inde',                 flag: '🇮🇳', dial: '+91',  digits: 10 },
+  { code: 'ID', name: 'Indonésie',            flag: '🇮🇩', dial: '+62',  digits: 10 },
+  { code: 'JP', name: 'Japon',                flag: '🇯🇵', dial: '+81',  digits: 10 },
+  { code: 'KZ', name: 'Kazakhstan',           flag: '🇰🇿', dial: '+7',   digits: 10 },
+  { code: 'KG', name: 'Kirghizistan',         flag: '🇰🇬', dial: '+996', digits: 9  },
+  { code: 'LA', name: 'Laos',                 flag: '🇱🇦', dial: '+856', digits: 9  },
+  { code: 'MY', name: 'Malaisie',             flag: '🇲🇾', dial: '+60',  digits: 9  },
+  { code: 'MV', name: 'Maldives',             flag: '🇲🇻', dial: '+960', digits: 7  },
+  { code: 'MN', name: 'Mongolie',             flag: '🇲🇳', dial: '+976', digits: 8  },
+  { code: 'MM', name: 'Myanmar',              flag: '🇲🇲', dial: '+95',  digits: 9  },
+  { code: 'NP', name: 'Népal',                flag: '🇳🇵', dial: '+977', digits: 10 },
+  { code: 'NZ', name: 'Nouvelle-Zélande',     flag: '🇳🇿', dial: '+64',  digits: 9  },
+  { code: 'PK', name: 'Pakistan',             flag: '🇵🇰', dial: '+92',  digits: 10 },
+  { code: 'PG', name: 'Papouasie-N.-Guinée',  flag: '🇵🇬', dial: '+675', digits: 8  },
+  { code: 'PH', name: 'Philippines',          flag: '🇵🇭', dial: '+63',  digits: 10 },
+  { code: 'SG', name: 'Singapour',            flag: '🇸🇬', dial: '+65',  digits: 8  },
+  { code: 'LK', name: 'Sri Lanka',            flag: '🇱🇰', dial: '+94',  digits: 9  },
+  { code: 'TJ', name: 'Tadjikistan',          flag: '🇹🇯', dial: '+992', digits: 9  },
+  { code: 'TW', name: 'Taïwan',               flag: '🇹🇼', dial: '+886', digits: 9  },
+  { code: 'TH', name: 'Thaïlande',            flag: '🇹🇭', dial: '+66',  digits: 9  },
+  { code: 'TL', name: 'Timor-Leste',          flag: '🇹🇱', dial: '+670', digits: 8  },
+  { code: 'TM', name: 'Turkménistan',         flag: '🇹🇲', dial: '+993', digits: 8  },
+  { code: 'UZ', name: 'Ouzbékistan',          flag: '🇺🇿', dial: '+998', digits: 9  },
+  { code: 'VU', name: 'Vanuatu',              flag: '🇻🇺', dial: '+678', digits: 7  },
+  { code: 'VN', name: 'Vietnam',              flag: '🇻🇳', dial: '+84',  digits: 9  },
+];

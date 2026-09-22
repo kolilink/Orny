@@ -1,15 +1,29 @@
 import React, { useState, useCallback } from 'react';
-import { View, Text, StyleSheet, ScrollView, RefreshControl } from 'react-native';
+import { View, StyleSheet, ScrollView, RefreshControl } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
-import { getSales } from '../../store/sales';
-import { getExpenses } from '../../store/expenses';
-import { getPurchases } from '../../store/purchases';
-import { Sale, Expense, Purchase, purchaseDebt } from '../../types';
+import { getSales, syncSalesFromSupabase } from '../../store/sales';
+import { getExpenses, syncExpensesFromSupabase } from '../../store/expenses';
+import { getPurchases, syncPurchasesFromSupabase } from '../../store/purchases';
+import { getInvestmentEntries, syncInvestmentEntriesFromSupabase } from '../../store/investmentEntries';
+import { getDistributions, syncDistributionsFromSupabase } from '../../store/investorDistributions';
+import { supabase } from '../../lib/supabase';
+import { Sale, Expense, Purchase, InvestmentEntry, InvestorDistribution, purchaseDebt } from '../../types';
 import { formatGNF } from '../../utils/format';
-import { computePeriodProfit } from '../../utils/finance';
-import { tabularNums, Palette } from '../../theme/tokens';
+import { computePeriodProfit, computeCashOnHand } from '../../utils/finance';
+import { useAuth } from '../../context/AuthContext';
+import { tabularNums, typography, Palette } from '../../theme/tokens';
 import { useTheme } from '../../theme/ThemeContext';
+import { CountUpNumber, Text } from '../../components/ui';
+
+type InvestorHeadline = {
+  revenueThisMonth: number;
+  profitThisMonth: number;
+  profitMethod: 'cogs' | 'approx';
+  revenueLastMonth: number;
+  profitLastMonth: number;
+  cashOnHand: number;
+};
 
 const PAYMENT_LABELS: Record<string, string> = {
   cash: 'Cash',
@@ -24,27 +38,85 @@ const PAYMENT_LABELS: Record<string, string> = {
 // severity signal.
 const ORANGE_MONEY_BRAND = '#EF9F27';
 
+// credit is a payment method, not a warning — see the identical note in
+// screens/Ventes/index.tsx.
 const makePaymentColors = (palette: Palette): Record<string, string> => ({
   cash: palette.moss,
   orange_money: ORANGE_MONEY_BRAND,
-  credit: palette.critical,
+  credit: palette.violet,
 });
 
 export default function ReportsScreen() {
   const { palette } = useTheme();
   const styles = makeStyles(palette);
   const PAYMENT_COLORS = makePaymentColors(palette);
+  const { membership } = useAuth();
+  // Trésorerie mixes in capital movements (injections/distributions) that an
+  // inspecteur has no read access to (see db/update15.sql) — showing it to
+  // that role would silently understate the real figure. Same gate this
+  // number carried on the old Dashboard screen before it moved here.
+  const canSeeCashPosition = membership?.role !== 'inspecteur';
+  // Investor reads a reduced set of headline numbers via a SECURITY DEFINER
+  // RPC (db/update27.sql) instead of the raw tables below — their RLS
+  // access to sales/expenses/purchases/etc. was deliberately removed
+  // alongside this (see the migration's own header comment), so this
+  // branch isn't just a display choice, it's the only path that still
+  // works for that role at all.
+  const isInvestor = membership?.role === 'investor';
   const [sales, setSalesState] = useState<Sale[]>([]);
   const [expenses, setExpensesState] = useState<Expense[]>([]);
   const [purchases, setPurchasesState] = useState<Purchase[]>([]);
+  const [entries, setEntriesState] = useState<InvestmentEntry[]>([]);
+  const [distributions, setDistributionsState] = useState<InvestorDistribution[]>([]);
+  const [investorHeadline, setInvestorHeadline] = useState<InvestorHeadline | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
+  // Cache-first: this used to only ever read the local cache, with no sync
+  // call of its own — it silently relied on some other screen (Ventes,
+  // Expenses, Fournisseurs, Investors) having synced first. Reports is now
+  // the landing screen for investor/inspecteur roles, so it can no longer
+  // assume another screen already ran; it renders cache instantly, then
+  // syncs every store it reads and re-renders once the fresh numbers land.
   const load = useCallback(async () => {
-    const [s, exp, pur] = await Promise.all([getSales(), getExpenses(), getPurchases()]);
+    if (isInvestor) {
+      if (!membership) return;
+      const { data, error } = await supabase.rpc('get_investor_headline_report', { p_factory_id: membership.factoryId });
+      if (!error && data && data.length > 0) {
+        const row = data[0];
+        setInvestorHeadline({
+          revenueThisMonth: row.revenue_this_month,
+          profitThisMonth: row.profit_this_month,
+          profitMethod: row.profit_method,
+          revenueLastMonth: row.revenue_last_month,
+          profitLastMonth: row.profit_last_month,
+          cashOnHand: row.cash_on_hand,
+        });
+      }
+      return;
+    }
+
+    const [s, exp, pur, ent, dist] = await Promise.all([
+      getSales(), getExpenses(), getPurchases(), getInvestmentEntries(), getDistributions(),
+    ]);
     setSalesState(s);
     setExpensesState(exp);
     setPurchasesState(pur);
-  }, []);
+    setEntriesState(ent);
+    setDistributionsState(dist);
+
+    await Promise.all([
+      syncSalesFromSupabase(), syncExpensesFromSupabase(), syncPurchasesFromSupabase(),
+      syncInvestmentEntriesFromSupabase(), syncDistributionsFromSupabase(),
+    ]);
+    const [freshS, freshExp, freshPur, freshEnt, freshDist] = await Promise.all([
+      getSales(), getExpenses(), getPurchases(), getInvestmentEntries(), getDistributions(),
+    ]);
+    setSalesState(freshS);
+    setExpensesState(freshExp);
+    setPurchasesState(freshPur);
+    setEntriesState(freshEnt);
+    setDistributionsState(freshDist);
+  }, [isInvestor, membership]);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
@@ -62,32 +134,6 @@ export default function ReportsScreen() {
   sales.forEach((s) => {
     byPayment[s.paymentMethod] = (byPayment[s.paymentMethod] ?? 0) + s.totalAmount;
   });
-
-  const byClient: Record<string, number> = {};
-  sales.forEach((s) => {
-    byClient[s.clientName] = (byClient[s.clientName] ?? 0) + s.totalAmount;
-  });
-  const topClients = Object.entries(byClient)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 5);
-
-  // Monthly history — all months that have sales, expenses, or purchases.
-  // Profit per month goes through the same computePeriodProfit Dashboard
-  // uses, so a month's figure here can never quietly disagree with what
-  // Dashboard would show for that same window.
-  const monthKeys = new Set<string>();
-  sales.forEach((s) => monthKeys.add(s.date.slice(0, 7)));
-  expenses.forEach((e) => monthKeys.add(e.date.slice(0, 7)));
-  purchases.forEach((p) => monthKeys.add(p.date.slice(0, 7)));
-  const monthlyHistory = Array.from(monthKeys)
-    .sort((a, b) => b.localeCompare(a))
-    .map((ym) => {
-      const monthSales = sales.filter((s) => s.date.startsWith(ym));
-      const monthExpenses = expenses.filter((e) => e.date.startsWith(ym));
-      const monthPurchases = purchases.filter((p) => p.date.startsWith(ym));
-      const p = computePeriodProfit(monthSales, monthExpenses, monthPurchases);
-      return { ym, rev: p.revenue, costs: p.cogs + p.otherExpenses, profit: p.profit };
-    });
 
   const now = new Date();
   const thisMonthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
@@ -113,6 +159,70 @@ export default function ReportsScreen() {
   const netProfit = thisMonthProfit.profit;
   const lastNetProfit = lastMonthProfit.profit;
 
+  // Real liquid position — collected minus paid out, across every source of
+  // cash movement (sales, expenses, purchases, capital injections/
+  // distributions), not just non-credit sales with nothing subtracted.
+  // Moved here from the retired Dashboard tab — this is now its only home.
+  const tresorerie = computeCashOnHand(sales, expenses, purchases, entries, distributions);
+
+  // Investor sees a deliberately shorter screen: profit + trend and cash on
+  // hand only — no payment-method breakdown, no credit-outstanding/
+  // supplier-debt row, since those are operational detail this role's RLS
+  // access no longer reaches (see the RPC branch in load() above). Reuses
+  // the same card/hero styles as the full view below, just with less on
+  // the page, not a visually different screen.
+  if (isInvestor) {
+    const h = investorHeadline;
+    const invMonthDiff = h && h.revenueLastMonth > 0 ? ((h.revenueThisMonth - h.revenueLastMonth) / h.revenueLastMonth) * 100 : 0;
+    return (
+      <ScrollView
+        style={styles.container}
+        contentContainerStyle={styles.content}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={palette.moss} />}
+      >
+        <View style={[styles.card, styles.heroCard]}>
+          <Text style={styles.heroLabel}>BÉNÉFICE NET · CE MOIS</Text>
+          {h ? (
+            <>
+              <CountUpNumber
+                value={h.profitThisMonth}
+                formatter={formatGNF}
+                style={[styles.heroValue, { color: h.profitThisMonth >= 0 ? palette.moss : palette.critical }]}
+              />
+              {h.revenueLastMonth > 0 && (
+                <View style={styles.heroCompareRow}>
+                  <Text style={styles.heroCompareLabel}>Mois dernier : {formatGNF(h.profitLastMonth)}</Text>
+                  <Text style={[styles.heroCompareValue, { color: invMonthDiff >= 0 ? palette.moss : palette.critical }]}>
+                    {invMonthDiff >= 0 ? '+' : ''}{invMonthDiff.toFixed(1)} %
+                  </Text>
+                </View>
+              )}
+              <View style={styles.heroDivider} />
+              <StatRow label="Chiffre d'affaires" value={formatGNF(h.revenueThisMonth)} />
+              {h.profitMethod === 'approx' && (
+                <View style={styles.footnoteRow}>
+                  <Ionicons name="information-circle-outline" size={13} color={palette.muted} />
+                  <Text style={styles.footnote}>Estimation — certaines ventes de ce mois n'ont pas de coût réel enregistré.</Text>
+                </View>
+              )}
+            </>
+          ) : (
+            <Text style={styles.empty}>Chargement…</Text>
+          )}
+        </View>
+
+        {canSeeCashPosition && h && (
+          <View style={styles.secondaryRow}>
+            <View style={styles.secondaryStat}>
+              <Text style={styles.secondaryLabel}>Trésorerie</Text>
+              <Text style={styles.secondaryValue}>{formatGNF(h.cashOnHand)}</Text>
+            </View>
+          </View>
+        )}
+      </ScrollView>
+    );
+  }
+
   return (
     <ScrollView
       style={styles.container}
@@ -126,10 +236,12 @@ export default function ReportsScreen() {
           leading with revenue (the old "Vue globale" card) doesn't actually
           answer the question that matters. */}
       <View style={[styles.card, styles.heroCard]}>
-        <Text style={styles.heroLabel}>Bénéfice net · ce mois</Text>
-        <Text style={[styles.heroValue, { color: netProfit >= 0 ? palette.moss : palette.critical }]}>
-          {formatGNF(netProfit)}
-        </Text>
+        <Text style={styles.heroLabel}>BÉNÉFICE NET · CE MOIS</Text>
+        <CountUpNumber
+          value={netProfit}
+          formatter={formatGNF}
+          style={[styles.heroValue, { color: netProfit >= 0 ? palette.moss : palette.critical }]}
+        />
         {lastMonthExpTotal > 0 && (
           <View style={styles.heroCompareRow}>
             <Text style={styles.heroCompareLabel}>Mois dernier : {formatGNF(lastNetProfit)}</Text>
@@ -167,23 +279,44 @@ export default function ReportsScreen() {
         )}
       </View>
 
+      {/* Trésorerie — always shown (unlike the conditional row below), since
+          "how much cash do I actually have" is a live balance, not a
+          settle-to-zero risk. */}
+      {canSeeCashPosition && (
+        <View style={styles.secondaryRow}>
+          <View style={styles.secondaryStat}>
+            <Text style={styles.secondaryLabel}>Trésorerie</Text>
+            <Text style={styles.secondaryValue}>{formatGNF(tresorerie)}</Text>
+          </View>
+        </View>
+      )}
+
       {/* Two real cash-flow risks — money the factory is owed, and money
           it owes. Kept small and secondary, not buried in a 6-row wall of
-          stats the way the old "Vue globale" card had them. */}
-      <View style={styles.secondaryRow}>
-        <View style={styles.secondaryStat}>
-          <Text style={styles.secondaryLabel}>En crédit (à recevoir)</Text>
-          <Text style={[styles.secondaryValue, { color: totalCredit > 0 ? palette.critical : palette.ink }]}>
-            {formatGNF(totalCredit)}
-          </Text>
+          stats the way the old "Vue globale" card had them. Shown only
+          when actually non-zero — a settled 0/0 state has nothing
+          actionable to surface here, same rule as the Fournisseurs debt
+          banner. */}
+      {(totalCredit > 0 || totalOwedToSuppliers > 0) && (
+        <View style={styles.secondaryRow}>
+          {totalCredit > 0 && (
+            <View style={styles.secondaryStat}>
+              <Text style={styles.secondaryLabel}>En crédit (à recevoir)</Text>
+              <Text style={[styles.secondaryValue, { color: palette.critical }]}>
+                {formatGNF(totalCredit)}
+              </Text>
+            </View>
+          )}
+          {totalOwedToSuppliers > 0 && (
+            <View style={styles.secondaryStat}>
+              <Text style={styles.secondaryLabel}>Dû aux fournisseurs</Text>
+              <Text style={[styles.secondaryValue, { color: palette.caution }]}>
+                {formatGNF(totalOwedToSuppliers)}
+              </Text>
+            </View>
+          )}
         </View>
-        <View style={styles.secondaryStat}>
-          <Text style={styles.secondaryLabel}>Dû aux fournisseurs</Text>
-          <Text style={[styles.secondaryValue, { color: totalOwedToSuppliers > 0 ? palette.caution : palette.ink }]}>
-            {formatGNF(totalOwedToSuppliers)}
-          </Text>
-        </View>
-      </View>
+      )}
 
       <View style={styles.card}>
         <Text style={styles.cardTitle}>Par mode de paiement</Text>
@@ -203,54 +336,8 @@ export default function ReportsScreen() {
           <Text style={styles.empty}>Aucune vente enregistrée</Text>
         )}
       </View>
-
-      <View style={styles.card}>
-        <Text style={styles.cardTitle}>Top 5 clients</Text>
-        {topClients.map(([name, amount], i) => (
-          <View key={name} style={styles.clientRow}>
-            <Text style={styles.rank}>#{i + 1}</Text>
-            <Text style={styles.clientName}>{name}</Text>
-            <Text style={styles.clientAmount}>{formatGNF(amount)}</Text>
-          </View>
-        ))}
-        {topClients.length === 0 && (
-          <Text style={styles.empty}>Aucune vente enregistrée</Text>
-        )}
-      </View>
-
-      <View style={styles.card}>
-        <Text style={styles.cardTitle}>Historique mensuel</Text>
-        {monthlyHistory.length === 0 && (
-          <Text style={styles.empty}>Aucune donnée enregistrée</Text>
-        )}
-        {/* column headers */}
-        {monthlyHistory.length > 0 && (
-          <View style={styles.histRow}>
-            <Text style={[styles.histCell, styles.histMonth, { color: palette.muted, fontSize: 11 }]}>MOIS</Text>
-            <Text style={[styles.histCell, { color: palette.muted, fontSize: 11 }]}>VENTES</Text>
-            <Text style={[styles.histCell, { color: palette.muted, fontSize: 11 }]}>COÛTS</Text>
-            <Text style={[styles.histCell, { color: palette.muted, fontSize: 11 }]}>PROFIT</Text>
-          </View>
-        )}
-        {monthlyHistory.map(({ ym, rev, costs, profit }) => (
-          <View key={ym} style={[styles.histRow, ym === thisMonthStr && styles.histRowActive]}>
-            <Text style={[styles.histCell, styles.histMonth]}>{monthLabel(ym)}</Text>
-            <Text style={styles.histCell}>{formatGNF(rev)}</Text>
-            <Text style={[styles.histCell, costs === 0 && { color: palette.muted }]}>{costs > 0 ? formatGNF(costs) : '—'}</Text>
-            <Text style={[styles.histCell, { color: profit >= 0 ? palette.moss : palette.critical, fontWeight: '700' }]}>
-              {costs > 0 ? formatGNF(profit) : '—'}
-            </Text>
-          </View>
-        ))}
-      </View>
     </ScrollView>
   );
-}
-
-function monthLabel(ym: string) {
-  const [y, m] = ym.split('-');
-  const months = ['Jan','Fév','Mar','Avr','Mai','Juin','Juil','Août','Sep','Oct','Nov','Déc'];
-  return `${months[parseInt(m, 10) - 1]} ${y}`;
 }
 
 function StatRow({ label, value, valueColor }: { label: string; value: string; valueColor?: string }) {
@@ -275,8 +362,8 @@ const makeStyles = (palette: Palette) => StyleSheet.create({
   },
   cardTitle: { fontSize: 15, fontWeight: '700', color: palette.ink, marginBottom: 10 },
   heroCard: { gap: 0, paddingTop: 20 },
-  heroLabel: { fontSize: 13, color: palette.muted, fontWeight: '600' },
-  heroValue: { fontSize: 34, fontWeight: '800', marginTop: 4, ...tabularNums },
+  heroLabel: { ...typography.eyebrow, color: palette.muted },
+  heroValue: { ...typography.heroNumber, marginTop: 6, ...tabularNums },
   heroCompareRow: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 10,
   },
@@ -304,21 +391,7 @@ const makeStyles = (palette: Palette) => StyleSheet.create({
   paymentLabel: { flex: 1, fontSize: 14, color: palette.ink },
   paymentAmount: { fontSize: 14, fontWeight: '600', color: palette.ink, ...tabularNums },
   paymentPct: { fontSize: 12, color: palette.muted, width: 36, textAlign: 'right' },
-  clientRow: {
-    flexDirection: 'row', alignItems: 'center', paddingVertical: 10,
-    borderBottomWidth: 1, borderColor: palette.line, gap: 10,
-  },
-  rank: { fontSize: 13, fontWeight: '700', color: palette.muted, width: 24 },
-  clientName: { flex: 1, fontSize: 14, color: palette.ink, fontWeight: '500' },
-  clientAmount: { fontSize: 14, fontWeight: '600', color: palette.ink, ...tabularNums },
   empty: { fontSize: 14, color: palette.muted, textAlign: 'center', paddingVertical: 12 },
   footnoteRow: { flexDirection: 'row', gap: 6, marginTop: 10, alignItems: 'flex-start' },
   footnote: { flex: 1, fontSize: 11, color: palette.muted, lineHeight: 16 },
-  histRow: {
-    flexDirection: 'row', alignItems: 'center',
-    paddingVertical: 9, borderBottomWidth: 1, borderColor: palette.line,
-  },
-  histRowActive: { backgroundColor: palette.mossSoft, marginHorizontal: -16, paddingHorizontal: 16 },
-  histCell: { flex: 1, fontSize: 12, color: palette.ink, textAlign: 'right', ...tabularNums },
-  histMonth: { flex: 1.2, textAlign: 'left', fontWeight: '600', color: palette.ink },
 });

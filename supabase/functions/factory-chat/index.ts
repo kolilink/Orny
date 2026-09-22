@@ -1,6 +1,6 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
-// Server-side home for Orny AI's model calls — the Groq API key never
+// Server-side home for Claude's model calls — the Groq API key never
 // reaches the client, and the client never talks to Groq directly.
 //
 // The business snapshot itself is still built client-side from the app's
@@ -11,9 +11,23 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 // job is the privileged part: spending the shared Groq key, after confirming
 // the caller is a real member of the factory they claim to be asking about.
 
-const GROQ_MODEL = 'llama-3.3-70b-versatile'
-const MAX_TOKENS = 1024
-const MAX_MESSAGES = 40
+// llama-3.3-70b-versatile was retired from Groq's catalog (confirmed via a
+// direct call: 404 model_not_found, even though the API key itself is
+// valid — GET /openai/v1/models no longer lists any meta-llama chat model
+// at all). openai/gpt-oss-120b is Groq's current closest-tier open-weight
+// replacement. It's a reasoning model — unlike Llama 3.3, part of its
+// output is a separate internal "reasoning" field that consumes completion
+// tokens before the real answer starts, so MAX_TOKENS is raised (1024 was
+// tuned for a non-reasoning model and left too little headroom for a
+// longer analysis reply to finish after the reasoning phase).
+const GROQ_MODEL = 'openai/gpt-oss-120b'
+const MAX_TOKENS = 2048
+// The client (screens/Coach/index.tsx) already trims what it resends to
+// the last ~30 messages before ever calling this function — this is a
+// backstop against a single runaway session, not the real limit. Kept
+// comfortably above that client-side window so a normal long conversation
+// never actually hits it.
+const MAX_MESSAGES = 60
 
 interface ChatMessage {
   role: 'user' | 'assistant'
@@ -45,7 +59,7 @@ Deno.serve(async (req) => {
   const groqKey = Deno.env.get('GROQ_API_KEY')
 
   if (!groqKey) {
-    return json({ error: "Orny AI n'est pas encore configuré (clé Groq manquante)." }, 500)
+    return json({ error: "Claude n'est pas encore configuré (clé Groq manquante)." }, 500)
   }
 
   // JWT-scoped client — every query below runs under the caller's own RLS,
@@ -68,7 +82,7 @@ Deno.serve(async (req) => {
     return json({ error: 'Champs manquants.' }, 400)
   }
   if (payload.messages.length > MAX_MESSAGES) {
-    return json({ error: 'Conversation trop longue — rafraîchissez le bilan.' }, 400)
+    return json({ error: 'Conversation trop longue — démarrez une nouvelle conversation.' }, 400)
   }
 
   const { data: membership } = await callerClient
@@ -98,7 +112,7 @@ Deno.serve(async (req) => {
   if (!groqRes.ok) {
     const errText = await groqRes.text().catch(() => '')
     console.error('Groq call failed', groqRes.status, errText)
-    return json({ error: 'Orny AI est momentanément indisponible. Réessayez dans un instant.' }, 502)
+    return json({ error: 'Claude est momentanément indisponible. Réessayez dans un instant.' }, 502)
   }
 
   const data = await groqRes.json()

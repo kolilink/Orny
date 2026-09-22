@@ -1,0 +1,21 @@
+-- update21.sql
+-- Adds production_products.recipe_per_unit — a real, reusable formula
+-- (quantity of each raw material needed to produce ONE unit of this
+-- product), replacing the old last_recipe's actual behavior: last_recipe
+-- only ever stored the *absolute* quantities typed on the most recent
+-- batch, so producing a bigger or smaller batch than last time meant
+-- manually recalculating every single ingredient by hand — there was
+-- nothing to scale from. See "Production — reusable formulas" in
+-- CLAUDE.md for the full design.
+--
+-- New column, not a rename of last_recipe: the two mean genuinely different
+-- things (absolute last-used amounts vs. a per-unit ratio), and treating
+-- old last_recipe data as if it were already per-unit would silently
+-- compute wrong ingredient quantities for every existing product. No
+-- backfill either, deliberately — a product's formula is established
+-- automatically from its very next real batch (see
+-- screens/Production/index.tsx's doSave), so every product self-heals to a
+-- correct formula on first use with zero manual setup, rather than risking
+-- a wrong one computed from ambiguous historical data. last_recipe itself
+-- is left in place, unused going forward, rather than dropped.
+alter table production_products add column if not exists recipe_per_unit jsonb not null default '[]';

@@ -66,9 +66,12 @@ export const initStock = async (levels: Record<string, number>): Promise<StockIt
     alert_threshold: item.alertThreshold,
     last_updated: item.lastUpdated,
   }));
-  supabase.from('stock_items').upsert(rows).then(({ error }) => {
-    if (error) enqueueIfNetworkError(error, { table: 'stock_items', op: 'upsert', values: rows, label: 'stock (init)' });
-  });
+  // Awaited — a fire-and-forget write here races a caller's immediate
+  // post-write reload/re-sync and can lose the update from view even
+  // though it lands fine in Postgres (same bug reproduced and fixed for
+  // store/investors.ts's addInvestor).
+  const { error } = await supabase.from('stock_items').upsert(rows);
+  if (error) await enqueueIfNetworkError(error, { table: 'stock_items', op: 'upsert', values: rows, label: 'stock (init)' });
 
   return items;
 };
@@ -95,9 +98,8 @@ export const updateStock = async (updates: Record<string, number>): Promise<Stoc
       alert_threshold: item.alertThreshold,
       last_updated: item.lastUpdated,
     }));
-    supabase.from('stock_items').upsert(rows).then(({ error }) => {
-      if (error) enqueueIfNetworkError(error, { table: 'stock_items', op: 'upsert', values: rows, label: 'stock (mise à jour)' });
-    });
+    const { error } = await supabase.from('stock_items').upsert(rows);
+    if (error) await enqueueIfNetworkError(error, { table: 'stock_items', op: 'upsert', values: rows, label: 'stock (mise à jour)' });
   }
 
   return updated;
@@ -120,9 +122,8 @@ export const addStockItem = async (
     alert_threshold: newItem.alertThreshold,
     last_updated: newItem.lastUpdated,
   };
-  supabase.from('stock_items').insert(row).then(({ error }) => {
-    if (error) enqueueIfNetworkError(error, { table: 'stock_items', op: 'insert', values: row, label: 'stock (ajout)' });
-  });
+  const { error } = await supabase.from('stock_items').insert(row);
+  if (error) await enqueueIfNetworkError(error, { table: 'stock_items', op: 'insert', values: row, label: 'stock (ajout)' });
 
   return newItem;
 };
@@ -131,10 +132,8 @@ export const deleteStockItem = async (id: string): Promise<void> => {
   const factoryId = getFactoryId();
   const stock = await getStock();
   await setCache(stock.filter((i) => i.id !== id));
-  supabase.from('stock_items').delete().eq('id', id).eq('factory_id', factoryId)
-    .then(({ error }) => {
-      if (error) enqueueIfNetworkError(error, { table: 'stock_items', op: 'delete', match: { id, factory_id: factoryId }, label: 'stock (suppr.)' });
-    });
+  const { error } = await supabase.from('stock_items').delete().eq('id', id).eq('factory_id', factoryId);
+  if (error) await enqueueIfNetworkError(error, { table: 'stock_items', op: 'delete', match: { id, factory_id: factoryId }, label: 'stock (suppr.)' });
 };
 
 export type StockShortfall = { id: string; name: string; unit: string; available: number; needed: number };
@@ -194,9 +193,8 @@ export const deductStock = async (deductions: Record<string, number>): Promise<v
       alert_threshold: item.alertThreshold,
       last_updated: item.lastUpdated,
     }));
-    supabase.from('stock_items').upsert(rows).then(({ error }) => {
-      if (error) enqueueIfNetworkError(error, { table: 'stock_items', op: 'upsert', values: rows, label: 'stock (déduction)' });
-    });
+    const { error } = await supabase.from('stock_items').upsert(rows);
+    if (error) await enqueueIfNetworkError(error, { table: 'stock_items', op: 'upsert', values: rows, label: 'stock (déduction)' });
   }
 };
 
@@ -233,7 +231,6 @@ export const recordStockAddition = async (id: string, qtyAdded: number, unitCost
     last_updated: item.lastUpdated,
     avg_cost: item.avgCost,
   };
-  supabase.from('stock_items').upsert(row).then(({ error }) => {
-    if (error) enqueueIfNetworkError(error, { table: 'stock_items', op: 'upsert', values: row, label: 'stock (coût)' });
-  });
+  const { error } = await supabase.from('stock_items').upsert(row);
+  if (error) await enqueueIfNetworkError(error, { table: 'stock_items', op: 'upsert', values: row, label: 'stock (coût)' });
 };

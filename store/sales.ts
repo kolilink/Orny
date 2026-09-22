@@ -40,6 +40,7 @@ export const syncSalesFromSupabase = async (): Promise<void> => {
     amountPaid: r.amount_paid,
     paymentMethod: r.payment_method,
     costAmount: r.cost_amount,
+    createdBy: r.created_by ?? undefined,
   }));
   await setCache(sales);
 };
@@ -65,10 +66,14 @@ export const addSale = async (sale: Omit<Sale, 'id' | 'factory_id'>): Promise<Sa
     amount_paid: newSale.amountPaid,
     payment_method: newSale.paymentMethod,
     cost_amount: newSale.costAmount ?? null,
+    created_by: newSale.createdBy ?? null,
   };
-  supabase.from('sales').insert(row).then(({ error }) => {
-    if (error) enqueueIfNetworkError(error, { table: 'sales', op: 'insert', values: row, label: 'vente' });
-  });
+  // Awaited — a fire-and-forget insert here races a caller's immediate
+  // post-add reload/re-sync and can lose the new sale from view even
+  // though it lands fine in Postgres (same bug reproduced and fixed for
+  // store/investors.ts's addInvestor).
+  const { error } = await supabase.from('sales').insert(row);
+  if (error) await enqueueIfNetworkError(error, { table: 'sales', op: 'insert', values: row, label: 'vente' });
 
   return newSale;
 };
@@ -90,20 +95,16 @@ export const updateSale = async (id: string, updates: Partial<Omit<Sale, 'id' | 
   row.updated_at = new Date().toISOString();
   const factoryId = getFactoryId();
 
-  supabase.from('sales').update(row).eq('id', id).eq('factory_id', factoryId)
-    .then(({ error }) => {
-      if (error) enqueueIfNetworkError(error, { table: 'sales', op: 'update', values: row, match: { id, factory_id: factoryId }, label: 'vente (modif.)' });
-    });
+  const { error } = await supabase.from('sales').update(row).eq('id', id).eq('factory_id', factoryId);
+  if (error) await enqueueIfNetworkError(error, { table: 'sales', op: 'update', values: row, match: { id, factory_id: factoryId }, label: 'vente (modif.)' });
 };
 
 export const deleteSale = async (id: string): Promise<void> => {
   const sales = await getSales();
   await setCache(sales.filter((s) => s.id !== id));
   const factoryId = getFactoryId();
-  supabase.from('sales').delete().eq('id', id).eq('factory_id', factoryId)
-    .then(({ error }) => {
-      if (error) enqueueIfNetworkError(error, { table: 'sales', op: 'delete', match: { id, factory_id: factoryId }, label: 'vente (suppr.)' });
-    });
+  const { error } = await supabase.from('sales').delete().eq('id', id).eq('factory_id', factoryId);
+  if (error) await enqueueIfNetworkError(error, { table: 'sales', op: 'delete', match: { id, factory_id: factoryId }, label: 'vente (suppr.)' });
 };
 
 export const setSales = async (sales: Sale[]): Promise<void> => {

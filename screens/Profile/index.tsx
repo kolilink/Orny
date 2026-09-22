@@ -1,29 +1,15 @@
 import React, { useState, useEffect } from 'react';
-import {
-  View, Text, StyleSheet, TextInput, TouchableOpacity,
-  Image, ScrollView, ActivityIndicator, Alert,
-  KeyboardAvoidingView, Platform, Modal, Switch,
-} from 'react-native';
+import { View, StyleSheet, TextInput, TouchableOpacity, Image, ScrollView, ActivityIndicator, Alert, KeyboardAvoidingView, Platform } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useAuth } from '../../context/AuthContext';
-import { getProfile, saveProfile, saveAvatarFromUri, saveVoicePreferences } from '../../store/profile';
-import { LANGUAGE_LABELS, LanguageCode } from '../../utils/voice';
+import { useAuth, ROLE_LABELS } from '../../context/AuthContext';
+import { getProfile, saveProfile, saveAvatarFromUri } from '../../store/profile';
 import { Palette } from '../../theme/tokens';
 import { useTheme, ColorSchemePreference } from '../../theme/ThemeContext';
-
-const LANGUAGE_OPTIONS: LanguageCode[] = ['fr', 'pt', 'es', 'en'];
-
-const ROLE_LABELS: Record<string, string> = {
-  admin: 'Administrateur',
-  employee: 'Employé',
-  investor: 'Investisseur',
-  vendeur: 'Vendeur',
-  inspecteur: 'Inspecteur',
-};
+import { AppModal, Text } from '../../components/ui';
 
 const THEME_OPTIONS: { key: ColorSchemePreference; label: string }[] = [
   { key: 'light', label: 'Clair' },
@@ -56,30 +42,15 @@ export default function ProfileScreen() {
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
   const [photoModal, setPhotoModal] = useState(false);
-  const [preferredLanguage, setPreferredLanguage] = useState<LanguageCode | null>(null);
-  const [voiceAutoplay, setVoiceAutoplay] = useState(false);
 
   useEffect(() => {
     if (!user) return;
     getProfile(user.id).then(p => {
       setDisplayName(p.displayName);
       setAvatarUri(p.avatarUri);
-      setPreferredLanguage(p.preferredLanguage);
-      setVoiceAutoplay(p.voiceAutoplay);
       setLoading(false);
     });
   }, [user?.id]);
-
-  function updateVoicePrefs(next: { preferredLanguage?: LanguageCode | null; voiceAutoplay?: boolean }) {
-    if (!user) return;
-    const merged = {
-      preferredLanguage: next.preferredLanguage !== undefined ? next.preferredLanguage : preferredLanguage,
-      voiceAutoplay: next.voiceAutoplay !== undefined ? next.voiceAutoplay : voiceAutoplay,
-    };
-    setPreferredLanguage(merged.preferredLanguage);
-    setVoiceAutoplay(merged.voiceAutoplay);
-    saveVoicePreferences(user.id, merged).catch(() => {});
-  }
 
   async function pickFromLibrary() {
     setPhotoModal(false);
@@ -212,47 +183,12 @@ export default function ProfileScreen() {
           )}
         </View>
 
-        {/* Orny AI voice preferences */}
+        {/* Paramètres — personal preferences only (Claude's own language/
+            lecture-automatique controls live on that screen itself,
+            not here — this screen is just picture, name, email, role, and
+            display preferences). */}
         <View style={styles.card}>
-          <Text style={styles.label}>Langue d'Orny AI (voix)</Text>
-          <Text style={styles.voiceHint}>
-            Utilisée pour lire les réponses d'Orny AI à voix haute. Laissez vide pour détecter automatiquement la langue à chaque question.
-          </Text>
-          <View style={styles.langRow}>
-            {LANGUAGE_OPTIONS.map(code => {
-              const active = preferredLanguage === code;
-              return (
-                <TouchableOpacity
-                  key={code}
-                  style={[styles.langChip, active && styles.langChipActive]}
-                  onPress={() => updateVoicePrefs({ preferredLanguage: active ? null : code })}
-                >
-                  <Text style={[styles.langChipText, active && styles.langChipTextActive]}>
-                    {LANGUAGE_LABELS[code]}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-
-          <View style={styles.switchRow}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.switchLabel}>Lire les réponses automatiquement</Text>
-              <Text style={styles.voiceHint}>
-                Chaque réponse d'Orny AI sera lue à voix haute dès son arrivée — utile si vous préférez écouter plutôt que lire.
-              </Text>
-            </View>
-            <Switch
-              value={voiceAutoplay}
-              onValueChange={(v) => updateVoicePrefs({ voiceAutoplay: v })}
-              trackColor={{ false: palette.line, true: palette.moss }}
-            />
-          </View>
-        </View>
-
-        {/* Apparence */}
-        <View style={styles.card}>
-          <Text style={styles.label}>Apparence</Text>
+          <Text style={styles.label}>Paramètres</Text>
           <View style={styles.langRow}>
             {THEME_OPTIONS.map(opt => {
               const active = colorScheme === opt.key;
@@ -282,33 +218,28 @@ export default function ProfileScreen() {
         </TouchableOpacity>
       </ScrollView>
 
-      {/* Photo picker modal — replaces Alert.alert (broken on web) */}
-      <Modal visible={photoModal} transparent animationType="fade" onRequestClose={() => setPhotoModal(false)}>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalBox}>
-            <Text style={styles.modalTitle}>Photo de profil</Text>
-            <TouchableOpacity style={styles.modalOption} onPress={pickFromLibrary}>
-              <Ionicons name="images-outline" size={22} color={palette.moss} style={{ marginRight: 14 }} />
-              <Text style={styles.modalOptionText}>Galerie photo</Text>
-            </TouchableOpacity>
-            {Platform.OS !== 'web' && (
-              <TouchableOpacity style={styles.modalOption} onPress={pickFromCamera}>
-                <Ionicons name="camera-outline" size={22} color={palette.moss} style={{ marginRight: 14 }} />
-                <Text style={styles.modalOptionText}>Appareil photo</Text>
-              </TouchableOpacity>
-            )}
-            {avatarUri && (
-              <TouchableOpacity style={styles.modalOption} onPress={removeAvatar}>
-                <Ionicons name="trash-outline" size={22} color={palette.critical} style={{ marginRight: 14 }} />
-                <Text style={[styles.modalOptionText, { color: palette.critical }]}>Supprimer la photo</Text>
-              </TouchableOpacity>
-            )}
-            <TouchableOpacity style={[styles.modalOption, { borderBottomWidth: 0 }]} onPress={() => setPhotoModal(false)}>
-              <Text style={[styles.modalOptionText, { color: palette.muted }]}>Annuler</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
+      {/* Photo picker — replaces Alert.alert (broken on web) */}
+      <AppModal visible={photoModal} onClose={() => setPhotoModal(false)} title="Photo de profil">
+        <TouchableOpacity
+          style={[styles.modalOption, Platform.OS === 'web' && !avatarUri && styles.modalOptionLast]}
+          onPress={pickFromLibrary}
+        >
+          <Ionicons name="images-outline" size={22} color={palette.moss} style={{ marginRight: 14 }} />
+          <Text style={styles.modalOptionText}>Galerie photo</Text>
+        </TouchableOpacity>
+        {Platform.OS !== 'web' && (
+          <TouchableOpacity style={[styles.modalOption, !avatarUri && styles.modalOptionLast]} onPress={pickFromCamera}>
+            <Ionicons name="camera-outline" size={22} color={palette.moss} style={{ marginRight: 14 }} />
+            <Text style={styles.modalOptionText}>Appareil photo</Text>
+          </TouchableOpacity>
+        )}
+        {avatarUri && (
+          <TouchableOpacity style={[styles.modalOption, styles.modalOptionLast]} onPress={removeAvatar}>
+            <Ionicons name="trash-outline" size={22} color={palette.critical} style={{ marginRight: 14 }} />
+            <Text style={[styles.modalOptionText, { color: palette.critical }]}>Supprimer la photo</Text>
+          </TouchableOpacity>
+        )}
+      </AppModal>
     </KeyboardAvoidingView>
   );
 }
@@ -358,7 +289,6 @@ const makeStyles = (palette: Palette) => StyleSheet.create({
   readOnly: { backgroundColor: palette.line, justifyContent: 'center' },
   readOnlyText: { fontSize: 15, color: palette.muted },
 
-  voiceHint: { fontSize: 12, color: palette.muted, lineHeight: 17, marginBottom: 12 },
   langRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 4 },
   langChip: {
     paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20,
@@ -367,11 +297,6 @@ const makeStyles = (palette: Palette) => StyleSheet.create({
   langChipActive: { backgroundColor: palette.moss, borderColor: palette.moss },
   langChipText: { fontSize: 13, fontWeight: '600', color: palette.ink },
   langChipTextActive: { color: palette.white },
-  switchRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 12,
-    marginTop: 16, paddingTop: 16, borderTopWidth: 1, borderColor: palette.line,
-  },
-  switchLabel: { fontSize: 14, fontWeight: '600', color: palette.ink, marginBottom: 4 },
 
   saveBtn: {
     width: '100%', backgroundColor: palette.moss,
@@ -379,9 +304,7 @@ const makeStyles = (palette: Palette) => StyleSheet.create({
   },
   saveBtnText: { fontSize: 16, fontWeight: '700', color: palette.white },
 
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', padding: 24 },
-  modalBox: { backgroundColor: palette.card, borderRadius: 20, overflow: 'hidden' },
-  modalTitle: { fontSize: 15, fontWeight: '700', color: palette.muted, textAlign: 'center', paddingVertical: 16, borderBottomWidth: 1, borderColor: palette.line },
-  modalOption: { flexDirection: 'row', alignItems: 'center', paddingVertical: 16, paddingHorizontal: 20, borderBottomWidth: 1, borderColor: palette.line },
+  modalOption: { flexDirection: 'row', alignItems: 'center', paddingVertical: 16, borderBottomWidth: 1, borderColor: palette.line },
+  modalOptionLast: { borderBottomWidth: 0 },
   modalOptionText: { fontSize: 16, color: palette.ink, fontWeight: '500' },
 });

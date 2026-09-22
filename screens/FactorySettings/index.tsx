@@ -1,18 +1,15 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import {
-  View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  Alert, ActivityIndicator, Clipboard, RefreshControl,
-  Modal, TextInput, KeyboardAvoidingView, Platform,
-} from 'react-native';
+import { View, StyleSheet, ScrollView, TouchableOpacity, Alert, ActivityIndicator, Clipboard, RefreshControl, TextInput, Platform, Share } from 'react-native';
 import { getWeeklyTarget, setWeeklyTarget } from '../../store/weeklyTarget';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useAuth, UserRole, MemberDisplay, JoinRequestDisplay } from '../../context/AuthContext';
+import { useAuth, UserRole, MemberDisplay, JoinRequestDisplay, ROLE_LABELS, makeRoleColors } from '../../context/AuthContext';
+import { buildInviteLink } from '../../lib/inviteLink';
 import { Palette } from '../../theme/tokens';
 import { useTheme } from '../../theme/ThemeContext';
 import { supabase } from '../../lib/supabase';
-import { AppModal, Button } from '../../components/ui';
+import { AppModal, Button, ConfirmDialog, AnimatedProgressBar, Text } from '../../components/ui';
 
 type ReconciliationFinding = {
   severity: 'critical' | 'warning';
@@ -22,27 +19,22 @@ type ReconciliationFinding = {
   message: string;
 };
 
-const ROLE_LABELS: Record<UserRole, string> = {
-  admin: 'Administrateur',
-  employee: 'Employé',
-  investor: 'Investisseur',
-  vendeur: 'Vendeur',
-  inspecteur: 'Inspecteur',
-};
+// Raised from 60s (found while adding the "Partager" link button below) —
+// a code that rotates every 60 seconds is unusable for actual human
+// sharing: by the time an admin copies it into WhatsApp and the recipient
+// opens the message, it's very likely already stale. 15 minutes is still a
+// short window (an old screenshot/forwarded message goes dead reasonably
+// soon), just a realistically usable one — the per-IP rate limit on the
+// lookup-factory edge function (db/update7.sql's invite_lookup_log) is the
+// actual brute-force defense, not this rotation.
+const CODE_TTL = 900;
 
-// admin tracks the live brand accent (palette.moss) — the other four are
-// deliberately distinct fixed hues outside the main palette, since a role
-// badge needs more distinguishable colors than the app's 1-accent design
-// otherwise provides, and those don't clash with the cool-neutral scheme.
-const makeRoleColors = (palette: Palette): Record<UserRole, string> => ({
-  admin: palette.moss,
-  employee: '#5B8AF5',
-  investor: '#EF9F27',
-  vendeur: '#8E44AD',
-  inspecteur: '#3E5C76',
-});
-
-const CODE_TTL = 60;
+function formatCountdown(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`;
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return s > 0 ? `${m}min ${s}s` : `${m}min`;
+}
 
 export default function FactorySettingsScreen() {
   const { palette } = useTheme();
@@ -173,6 +165,23 @@ export default function FactorySettingsScreen() {
     Alert.alert('Copié !', `Code d'invitation : ${inviteCode}`);
   }
 
+  // Modernized invite flow: a real link (opens the PWA directly with the
+  // code pre-filled — see lib/inviteLink.ts) shared through the native
+  // share sheet, instead of asking someone to manually copy-paste an
+  // 8-character code into a message by hand. Approval still happens the
+  // same way (isAdmin picks the role once the request lands below) —
+  // this only changes how the code physically gets to the new member.
+  async function shareInviteLink() {
+    if (!inviteCode) return;
+    const link = buildInviteLink(inviteCode);
+    try {
+      await Share.share({
+        message: `Rejoignez ${membership?.factoryName ?? 'notre usine'} sur Orny : ${link}`,
+        url: link,
+      });
+    } catch {}
+  }
+
   function handleMemberOptions(member: MemberDisplay) {
     if (member.isCurrentUser) return;
     setSelectedMember(member);
@@ -209,41 +218,56 @@ export default function FactorySettingsScreen() {
   const barColor = pct > 0.4 ? palette.moss : pct > 0.2 ? palette.caution : palette.critical;
 
   return (
-    <ScrollView
-      style={[styles.container, { paddingTop: insets.top }]}
-      contentContainerStyle={styles.content}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={palette.moss} />}
-    >
-      <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
-        <Ionicons name="arrow-back" size={22} color={palette.moss} />
-        <Text style={styles.backText}>Retour</Text>
-      </TouchableOpacity>
-      <Text style={styles.title}>Paramètres usine</Text>
-      <Text style={styles.factoryName}>{membership?.factoryName}</Text>
+    <View style={styles.container}>
+      {/* Pinned header — was previously the first row of the ScrollView's
+          own content, so it scrolled away with everything else, unlike
+          every other custom-header screen (Machines, Profile,
+          Notifications), which all pin their header outside the scroll. */}
+      <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
+        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.headerBackBtn}>
+          <Ionicons name="chevron-back" size={24} color={palette.ink} />
+        </TouchableOpacity>
+        <View style={{ alignItems: 'center' }}>
+          <Text style={styles.headerTitle}>Paramètres usine</Text>
+          <Text style={styles.headerFactoryName}>{membership?.factoryName}</Text>
+        </View>
+        <View style={{ width: 40 }} />
+      </View>
+
+      <ScrollView
+        contentContainerStyle={styles.content}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={palette.moss} />}
+      >
 
       {/* Invite Code — admin only */}
       {isAdmin && (
         <>
           <Text style={styles.sectionTitle}>Code d'invitation</Text>
           <View style={styles.codeCard}>
-            <Text style={styles.codeLabel}>Partagez ce code pour inviter des membres</Text>
+            <Text style={styles.codeLabel}>Partagez un lien pour inviter des membres</Text>
 
-            <View style={styles.codeRow}>
-              {regenLoading
-                ? <ActivityIndicator color={palette.moss} style={{ flex: 1 }} />
-                : <Text style={styles.codeText}>{inviteCode ?? '—'}</Text>}
-              <TouchableOpacity style={styles.copyBtn} onPress={copyInviteCode} disabled={regenLoading || !inviteCode}>
-                <Ionicons name="copy-outline" size={18} color={palette.moss} />
-                <Text style={styles.copyText}>Copier</Text>
-              </TouchableOpacity>
-            </View>
+            {regenLoading
+              ? <ActivityIndicator color={palette.moss} style={{ marginVertical: 8 }} />
+              : <Text style={styles.codeText}>{inviteCode ?? '—'}</Text>}
 
-            <View style={styles.barTrack}>
-              <View style={[styles.barFill, { width: `${pct * 100}%` as any, backgroundColor: barColor }]} />
-            </View>
+            <TouchableOpacity style={styles.shareBtn} onPress={shareInviteLink} disabled={regenLoading || !inviteCode}>
+              <Ionicons name="share-social-outline" size={18} color={palette.white} />
+              <Text style={styles.shareBtnText}>Partager le lien</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.copyBtn} onPress={copyInviteCode} disabled={regenLoading || !inviteCode}>
+              <Ionicons name="copy-outline" size={16} color={palette.moss} />
+              <Text style={styles.copyText}>Copier le code seul</Text>
+            </TouchableOpacity>
+
+            <AnimatedProgressBar
+              progress={pct * 100}
+              color={barColor}
+              duration={950}
+              style={{ marginBottom: 8, marginTop: 14 }}
+            />
             <View style={styles.timerRow}>
               <Text style={[styles.timerText, { color: barColor }]}>
-                Nouveau code dans {countdown}s
+                Nouveau code dans {formatCountdown(countdown)}
               </Text>
               <TouchableOpacity style={styles.regenBtn} onPress={handleManualRegen} disabled={regenLoading}>
                 <Ionicons name="refresh" size={14} color={palette.muted} />
@@ -371,162 +395,113 @@ export default function FactorySettingsScreen() {
         <Button label="Fermer" variant="secondary" onPress={() => setCheckModal(false)} style={{ marginTop: 12 }} />
       </AppModal>
 
-      {/* Approve role picker modal — works on web too */}
-      <Modal visible={approveModal} transparent animationType="fade" onRequestClose={() => setApproveModal(false)}>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalBox}>
-            <Text style={styles.modalTitle}>Approuver le membre</Text>
-            <Text style={styles.modalSub}>{selectedRequest?.userEmail}</Text>
-            <Text style={[styles.modalSub, { marginBottom: 16 }]}>Choisissez un rôle :</Text>
-            {(['vendeur', 'employee', 'investor', 'inspecteur', 'admin'] as UserRole[]).map((role) => (
-              <TouchableOpacity key={role} style={[styles.roleBtn, { borderColor: ROLE_COLORS[role] }]} onPress={() => confirmApprove(role)}>
-                <Text style={[styles.roleBtnText, { color: ROLE_COLORS[role] }]}>{ROLE_LABELS[role]}</Text>
-              </TouchableOpacity>
-            ))}
-            <TouchableOpacity style={styles.modalCancel} onPress={() => setApproveModal(false)}>
-              <Text style={styles.modalCancelText}>Annuler</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
+      {/* Approve role picker */}
+      <AppModal visible={approveModal} onClose={() => setApproveModal(false)} title="Approuver le membre">
+        <Text style={styles.modalSub}>{selectedRequest?.userEmail}</Text>
+        <Text style={[styles.modalSub, { marginBottom: 16 }]}>Choisissez un rôle :</Text>
+        {(['vendeur', 'manager', 'investor', 'inspecteur', 'admin'] as UserRole[]).map((role) => (
+          <TouchableOpacity key={role} style={[styles.roleBtn, { borderColor: ROLE_COLORS[role] }]} onPress={() => confirmApprove(role)}>
+            <Text style={[styles.roleBtnText, { color: ROLE_COLORS[role] }]}>{ROLE_LABELS[role]}</Text>
+          </TouchableOpacity>
+        ))}
+      </AppModal>
 
-      {/* Member options modal — role change + remove */}
-      <Modal visible={memberModal} transparent animationType="fade" onRequestClose={() => setMemberModal(false)}>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalBox}>
-            <Text style={styles.modalTitle}>{selectedMember?.email}</Text>
-            <Text style={[styles.modalSub, { marginBottom: 4 }]}>
-              Rôle actuel : {selectedMember ? ROLE_LABELS[selectedMember.role] : ''}
-            </Text>
-            <Text style={[styles.modalSub, { marginBottom: 12 }]}>Choisissez un nouveau rôle :</Text>
-            {(['vendeur', 'employee', 'investor', 'inspecteur', 'admin'] as UserRole[]).map((role) => (
-              <TouchableOpacity
-                key={role}
-                style={[styles.roleBtn, { borderColor: ROLE_COLORS[role] }]}
-                onPress={async () => {
-                  if (!selectedMember) return;
-                  setMemberModal(false);
-                  await updateMemberRole(selectedMember.userId, role);
-                  await load();
-                }}
-              >
-                <Text style={[styles.roleBtnText, { color: ROLE_COLORS[role] }]}>{ROLE_LABELS[role]}</Text>
-              </TouchableOpacity>
-            ))}
-            <TouchableOpacity
-              style={[styles.roleBtn, { borderColor: palette.critical, marginTop: 8 }]}
-              onPress={() => { setMemberModal(false); setRemoveConfirmModal(true); }}
-            >
-              <Text style={[styles.roleBtnText, { color: palette.critical }]}>Retirer de l'usine</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.modalCancel} onPress={() => setMemberModal(false)}>
-              <Text style={styles.modalCancelText}>Annuler</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
+      {/* Member options — role change + remove */}
+      <AppModal visible={memberModal} onClose={() => setMemberModal(false)} title={selectedMember?.email}>
+        <Text style={[styles.modalSub, { marginBottom: 4 }]}>
+          Rôle actuel : {selectedMember ? ROLE_LABELS[selectedMember.role] : ''}
+        </Text>
+        <Text style={[styles.modalSub, { marginBottom: 12 }]}>Choisissez un nouveau rôle :</Text>
+        {(['vendeur', 'manager', 'investor', 'inspecteur', 'admin'] as UserRole[]).map((role) => (
+          <TouchableOpacity
+            key={role}
+            style={[styles.roleBtn, { borderColor: ROLE_COLORS[role] }]}
+            onPress={async () => {
+              if (!selectedMember) return;
+              setMemberModal(false);
+              await updateMemberRole(selectedMember.userId, role);
+              await load();
+            }}
+          >
+            <Text style={[styles.roleBtnText, { color: ROLE_COLORS[role] }]}>{ROLE_LABELS[role]}</Text>
+          </TouchableOpacity>
+        ))}
+        <TouchableOpacity
+          style={[styles.roleBtn, { borderColor: palette.critical, marginTop: 8 }]}
+          onPress={() => { setMemberModal(false); setRemoveConfirmModal(true); }}
+        >
+          <Text style={[styles.roleBtnText, { color: palette.critical }]}>Retirer de l'usine</Text>
+        </TouchableOpacity>
+      </AppModal>
 
-      {/* Remove member confirmation modal */}
-      <Modal visible={removeConfirmModal} transparent animationType="fade" onRequestClose={() => setRemoveConfirmModal(false)}>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalBox}>
-            <Text style={styles.modalTitle}>Retirer ce membre ?</Text>
-            <Text style={[styles.modalSub, { marginBottom: 20 }]}>{selectedMember?.email}</Text>
-            <View style={styles.modalBtns}>
-              <TouchableOpacity style={styles.modalCancel} onPress={() => setRemoveConfirmModal(false)}>
-                <Text style={styles.modalCancelText}>Annuler</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.modalSave, { backgroundColor: palette.critical }]}
-                onPress={async () => {
-                  if (!selectedMember) return;
-                  setRemoveConfirmModal(false);
-                  await removeMember(selectedMember.userId);
-                  await load();
-                  setSelectedMember(null);
-                }}
-              >
-                <Text style={styles.modalSaveText}>Retirer</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
+      {/* Remove member confirmation */}
+      <ConfirmDialog
+        visible={removeConfirmModal}
+        onClose={() => setRemoveConfirmModal(false)}
+        onConfirm={async () => {
+          if (!selectedMember) return;
+          setRemoveConfirmModal(false);
+          await removeMember(selectedMember.userId);
+          await load();
+          setSelectedMember(null);
+        }}
+        title="Retirer ce membre ?"
+        message={selectedMember?.email}
+        confirmLabel="Retirer"
+        icon="person-remove-outline"
+        tone="danger"
+      />
 
-      <Modal visible={targetModal} transparent animationType="fade" onRequestClose={() => setTargetModal(false)}>
-        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.modalOverlay}>
-          <View style={styles.modalBox}>
-            <Text style={styles.modalTitle}>Objectif hebdomadaire</Text>
-            <Text style={styles.modalSub}>Objectif de production par semaine (unités)</Text>
-            <TextInput
-              style={styles.modalInput}
-              value={targetInput}
-              onChangeText={setTargetInput}
-              keyboardType="number-pad"
-              placeholder="ex: 1000"
-              autoFocus
-            />
-            <View style={styles.modalBtns}>
-              <TouchableOpacity style={styles.modalCancel} onPress={() => setTargetModal(false)}>
-                <Text style={styles.modalCancelText}>Annuler</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.modalSave} onPress={saveWeeklyTarget}>
-                <Text style={styles.modalSaveText}>Enregistrer</Text>
-              </TouchableOpacity>
-            </View>
+      {/* Weekly target */}
+      <AppModal visible={targetModal} onClose={() => setTargetModal(false)} title="Objectif hebdomadaire">
+        <ScrollView style={{ flexShrink: 1 }} keyboardShouldPersistTaps="handled">
+          <Text style={styles.modalSub}>Objectif de production par semaine (unités)</Text>
+          <TextInput
+            style={styles.modalInput}
+            value={targetInput}
+            onChangeText={setTargetInput}
+            keyboardType="number-pad"
+            autoFocus
+          />
+          <View style={styles.modalBtns}>
+            <Button label="Annuler" variant="ghost" onPress={() => setTargetModal(false)} style={{ flex: 1 }} />
+            <Button label="Enregistrer" onPress={saveWeeklyTarget} style={{ flex: 1 }} />
           </View>
-        </KeyboardAvoidingView>
-      </Modal>
+        </ScrollView>
+      </AppModal>
 
-      {/* Regen code confirm modal */}
-      <Modal visible={regenConfirmModal} transparent animationType="fade" onRequestClose={() => setRegenConfirmModal(false)}>
-        <View style={styles.confirmOverlay}>
-          <View style={styles.confirmBox}>
-            <Ionicons name="refresh" size={32} color={palette.moss} style={{ alignSelf: 'center', marginBottom: 12 }} />
-            <Text style={styles.confirmTitle}>Régénérer le code ?</Text>
-            <Text style={styles.confirmSub}>L'ancien code sera invalidé immédiatement.</Text>
-            <TouchableOpacity
-              style={styles.confirmActionBtn}
-              onPress={async () => {
-                setRegenConfirmModal(false);
-                const { error } = await doRegen();
-                if (error) Alert.alert('Erreur', error);
-              }}
-            >
-              <Text style={styles.confirmActionText}>Régénérer</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.confirmCancelBtn} onPress={() => setRegenConfirmModal(false)}>
-              <Text style={styles.confirmCancelText}>Annuler</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
+      {/* Regen code confirm */}
+      <ConfirmDialog
+        visible={regenConfirmModal}
+        onClose={() => setRegenConfirmModal(false)}
+        onConfirm={async () => {
+          setRegenConfirmModal(false);
+          const { error } = await doRegen();
+          if (error) Alert.alert('Erreur', error);
+        }}
+        title="Régénérer le code ?"
+        message="L'ancien code sera invalidé immédiatement."
+        confirmLabel="Régénérer"
+        icon="refresh"
+      />
 
-      {/* Reject request confirm modal */}
-      <Modal visible={!!rejectTarget} transparent animationType="fade" onRequestClose={() => setRejectTarget(null)}>
-        <View style={styles.confirmOverlay}>
-          <View style={styles.confirmBox}>
-            <Ionicons name="warning-outline" size={32} color={palette.critical} style={{ alignSelf: 'center', marginBottom: 12 }} />
-            <Text style={styles.confirmTitle}>Refuser la demande ?</Text>
-            <Text style={styles.confirmSub}>{rejectTarget?.userEmail ?? ''}</Text>
-            <TouchableOpacity
-              style={styles.confirmDeleteBtn}
-              onPress={async () => {
-                if (!rejectTarget) return;
-                setRejectTarget(null);
-                const { error } = await rejectJoinRequest(rejectTarget.id);
-                if (error) Alert.alert('Erreur', error);
-                else await load();
-              }}
-            >
-              <Text style={styles.confirmDeleteText}>Refuser</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.confirmCancelBtn} onPress={() => setRejectTarget(null)}>
-              <Text style={styles.confirmCancelText}>Annuler</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
+      {/* Reject request confirm */}
+      <ConfirmDialog
+        visible={!!rejectTarget}
+        onClose={() => setRejectTarget(null)}
+        onConfirm={async () => {
+          if (!rejectTarget) return;
+          setRejectTarget(null);
+          const { error } = await rejectJoinRequest(rejectTarget.id);
+          if (error) Alert.alert('Erreur', error);
+          else await load();
+        }}
+        title="Refuser la demande ?"
+        message={rejectTarget?.userEmail ?? ''}
+        confirmLabel="Refuser"
+        icon="warning-outline"
+        tone="danger"
+      />
 
       {/* Members */}
       <Text style={[styles.sectionTitle, { marginTop: 20 }]}>Membres ({members.length})</Text>
@@ -555,7 +530,8 @@ export default function FactorySettingsScreen() {
           </TouchableOpacity>
         ))}
       </View>
-    </ScrollView>
+      </ScrollView>
+    </View>
   );
 }
 
@@ -563,22 +539,28 @@ const makeStyles = (palette: Palette) => StyleSheet.create({
   splash: { flex: 1, backgroundColor: palette.paper, alignItems: 'center', justifyContent: 'center' },
   container: { flex: 1, backgroundColor: palette.paper },
   content: { padding: 16, paddingBottom: 50 },
-  backBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 16 },
-  backText: { color: palette.moss, fontSize: 16, fontWeight: '500' },
-  title: { fontSize: 22, fontWeight: '700', color: palette.ink, marginBottom: 4 },
-  factoryName: { fontSize: 15, color: palette.muted, marginBottom: 24 },
+  header: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 12, paddingBottom: 12,
+    backgroundColor: palette.card, borderBottomWidth: 1, borderColor: palette.line,
+  },
+  headerBackBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
+  headerTitle: { fontSize: 17, fontWeight: '700', color: palette.ink },
+  headerFactoryName: { fontSize: 12, color: palette.muted, marginTop: 1 },
   sectionTitle: { fontSize: 12, fontWeight: '700', color: palette.muted, textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 8 },
   sectionRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 20, marginBottom: 8 },
   badge: { backgroundColor: palette.caution, borderRadius: 10, paddingHorizontal: 7, paddingVertical: 2 },
   badgeText: { color: palette.white, fontSize: 11, fontWeight: '700' },
   codeCard: { backgroundColor: palette.card, borderRadius: 16, padding: 20, borderWidth: 1, borderColor: palette.line },
   codeLabel: { fontSize: 13, color: palette.muted, marginBottom: 12 },
-  codeRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 },
-  codeText: { fontSize: 28, fontWeight: '800', color: palette.ink, letterSpacing: 4 },
-  copyBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: palette.mossSoft, borderRadius: 8, paddingVertical: 8, paddingHorizontal: 14 },
-  copyText: { color: palette.moss, fontWeight: '600', fontSize: 14 },
-  barTrack: { height: 4, backgroundColor: palette.line, borderRadius: 2, marginBottom: 8, overflow: 'hidden' },
-  barFill: { height: 4, borderRadius: 2 },
+  codeText: { fontSize: 24, fontWeight: '800', color: palette.ink, letterSpacing: 3, textAlign: 'center', marginBottom: 14 },
+  shareBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    backgroundColor: palette.moss, borderRadius: 10, paddingVertical: 12, marginBottom: 8,
+  },
+  shareBtnText: { color: palette.white, fontWeight: '700', fontSize: 15 },
+  copyBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 6 },
+  copyText: { color: palette.muted, fontWeight: '600', fontSize: 13 },
   timerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 },
   timerText: { fontSize: 12, fontWeight: '600' },
   regenBtn: { flexDirection: 'row', alignItems: 'center', gap: 4 },
@@ -599,37 +581,10 @@ const makeStyles = (palette: Palette) => StyleSheet.create({
   targetValue: { fontSize: 16, fontWeight: '700', color: palette.ink },
   editBtn: { backgroundColor: palette.mossSoft, borderRadius: 8, paddingHorizontal: 14, paddingVertical: 8 },
   editBtnText: { color: palette.moss, fontWeight: '700', fontSize: 14 },
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', alignItems: 'center', padding: 24 },
-  modalBox: { backgroundColor: palette.card, borderRadius: 16, padding: 24, width: '100%' },
   modalTitle: { fontSize: 17, fontWeight: '700', color: palette.ink, marginBottom: 4 },
   modalSub: { fontSize: 13, color: palette.muted, marginBottom: 16 },
   modalInput: { borderWidth: 1, borderColor: palette.line, borderRadius: 10, padding: 12, fontSize: 20, fontWeight: '700', textAlign: 'center', marginBottom: 20 },
-  modalBtns: { flexDirection: 'row', gap: 10 },
-  modalCancel: { flex: 1, padding: 14, borderRadius: 10, borderWidth: 1, borderColor: palette.line, alignItems: 'center' },
-  modalCancelText: { color: palette.muted, fontWeight: '600' },
-  modalSave: { flex: 1, padding: 14, borderRadius: 10, backgroundColor: palette.moss, alignItems: 'center' },
-  modalSaveText: { color: palette.white, fontWeight: '700' },
+  modalBtns: { flexDirection: 'row', gap: 10, marginTop: 8 },
   roleBtn: { borderWidth: 1.5, borderRadius: 10, padding: 14, alignItems: 'center', marginBottom: 10 },
   roleBtnText: { fontWeight: '700', fontSize: 15 },
-  confirmOverlay: {
-    flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', padding: 24,
-  },
-  confirmBox: { backgroundColor: palette.card, borderRadius: 16, padding: 24 },
-  confirmTitle: { fontSize: 17, fontWeight: '700', color: palette.ink, textAlign: 'center', marginBottom: 6 },
-  confirmSub: { fontSize: 14, color: palette.muted, textAlign: 'center', marginBottom: 20 },
-  confirmActionBtn: {
-    backgroundColor: palette.moss, borderRadius: 12, height: 52,
-    alignItems: 'center', justifyContent: 'center', marginBottom: 10,
-  },
-  confirmActionText: { color: palette.white, fontSize: 16, fontWeight: '700' },
-  confirmDeleteBtn: {
-    backgroundColor: palette.critical, borderRadius: 12, height: 52,
-    alignItems: 'center', justifyContent: 'center', marginBottom: 10,
-  },
-  confirmDeleteText: { color: palette.white, fontSize: 16, fontWeight: '700' },
-  confirmCancelBtn: {
-    borderRadius: 12, height: 52, borderWidth: 1, borderColor: palette.line,
-    alignItems: 'center', justifyContent: 'center',
-  },
-  confirmCancelText: { fontSize: 16, color: palette.muted, fontWeight: '600' },
 });

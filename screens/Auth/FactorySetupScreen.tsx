@@ -1,8 +1,6 @@
-import React, { useState } from 'react';
-import {
-  View, Text, TextInput, TouchableOpacity, StyleSheet,
-  ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView, Alert, Modal,
-} from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { View, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView, Alert, Modal } from 'react-native';
+import { Text } from '../../components/ui';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../context/AuthContext';
 import { Palette } from '../../theme/tokens';
@@ -13,12 +11,26 @@ type Tab = 'create' | 'join';
 export default function FactorySetupScreen() {
   const { palette } = useTheme();
   const styles = makeStyles(palette);
-  const { createFactory, requestToJoin, cancelJoinRequest, signOut, pendingRequest } = useAuth();
+  const {
+    createFactory, requestToJoin, cancelJoinRequest, signOut, pendingRequest,
+    pendingInviteCode, consumePendingInviteCode,
+  } = useAuth();
   const [tab, setTab] = useState<Tab>('create');
   const [factoryName, setFactoryName] = useState('');
   const [inviteCode, setInviteCode] = useState('');
   const [loading, setLoading] = useState(false);
   const [cancelModal, setCancelModal] = useState(false);
+
+  // Arrived via a shared invite link (see lib/inviteLink.ts) — pre-fill the
+  // code and switch to the Join tab, but don't auto-submit: an accidentally
+  // reopened link (a forwarded message tapped out of curiosity) shouldn't
+  // silently fire off a real join request without the person choosing to.
+  useEffect(() => {
+    if (!pendingInviteCode) return;
+    setInviteCode(pendingInviteCode);
+    setTab('join');
+    consumePendingInviteCode();
+  }, [pendingInviteCode]);
 
   async function handleCreate() {
     if (!factoryName.trim()) { Alert.alert('Nom requis', "Entrez le nom de votre usine."); return; }
@@ -168,7 +180,7 @@ const makeStyles = (palette: Palette) => StyleSheet.create({
   cancelBtn: { borderWidth: 1, borderColor: palette.critical, borderRadius: 12, padding: 14, alignItems: 'center' },
   cancelBtnText: { color: palette.critical, fontSize: 15, fontWeight: '600' },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', alignItems: 'center', padding: 24 },
-  modalBox: { backgroundColor: palette.white, borderRadius: 16, padding: 24, width: '100%' },
+  modalBox: { backgroundColor: palette.card, borderRadius: 16, padding: 24, width: '100%' },
   modalTitle: { fontSize: 17, fontWeight: '700', color: palette.ink, marginBottom: 6 },
   modalSub: { fontSize: 14, color: palette.muted, marginBottom: 20 },
   modalDestructive: { backgroundColor: palette.critical, borderRadius: 10, padding: 14, alignItems: 'center', marginBottom: 10 },

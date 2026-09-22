@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, ActivityIndicator } from 'react-native';
+import { View, StyleSheet, ActivityIndicator } from 'react-native';
+import { Text } from './ui';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { getPendingCount, onQueueChange } from '../lib/syncQueue';
 import { Palette } from '../theme/tokens';

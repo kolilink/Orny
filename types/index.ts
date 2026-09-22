@@ -20,12 +20,20 @@ export interface EditHistoryEntry<T> {
   after: T;
 }
 
+// A raw-material formula: how much of each material is needed to produce
+// ONE unit. Shared shape for whichever real thing gets produced — a
+// ProductFlavor or a standalone BulkProduct — see "Production — produces
+// directly into Saveurs/Lots" in CLAUDE.md for why this replaced a separate
+// production-only product catalog.
+export type RecipeLine = { rawMaterialId: string; name: string; quantity: number; unit: string };
+
 export interface ProductFlavor {
   id: string;
   factory_id: string;
   label: string;
   weightG: number;
   defaultPrice: number;
+  recipePerUnit: RecipeLine[];
 }
 
 export interface BulkProduct {
@@ -35,6 +43,7 @@ export interface BulkProduct {
   flavorId: string;
   bagCount: number;
   unitPrice: number;
+  recipePerUnit: RecipeLine[];
 }
 
 export interface Sale {
@@ -73,7 +82,11 @@ export interface Product {
   factory_id: string;
   name: string;
   unit: string;
-  lastRecipe: Array<{ rawMaterialId: string; name: string; quantity: number; unit: string }>;
+  // Reusable formula: how much of each raw material is needed to produce
+  // ONE unit of this product. Established automatically from the product's
+  // first real batch, then stable — never silently rewritten by a routine
+  // batch save once set. See "Production — reusable formulas" in CLAUDE.md.
+  recipePerUnit: Array<{ rawMaterialId: string; name: string; quantity: number; unit: string }>;
   createdAt: string;
 }
 
@@ -166,6 +179,28 @@ export interface ExpenseLineItem {
   quantity?: number;
 }
 
+// Claude (Orny's in-app AI advisor) — a real, named session (like ChatGPT's
+// own conversation list), not the single ephemeral in-memory chat this used
+// to be. Personal
+// to (factory, user) — see db/update25.sql's RLS: even another admin of
+// the same factory can't read someone else's conversation.
+export interface CoachConversation {
+  id: string;
+  factory_id: string;
+  user_id: string;
+  title: string | null;
+  createdAt: string;
+  lastMessageAt: string;
+}
+
+export interface CoachMessage {
+  id: string;
+  conversationId: string;
+  role: 'user' | 'assistant';
+  content: string;
+  createdAt: string;
+}
+
 export interface Expense {
   id: string;
   factory_id: string;
@@ -177,6 +212,13 @@ export interface Expense {
   lineItems?: ExpenseLineItem[];
   deletedAt?: string;
   createdBy?: string;
+  // Receipt photo — photoUri is this device's own local copy (instant
+  // preview, never synced as-is since a file:// path means nothing on
+  // another device); photoStoragePath is the private-bucket path every
+  // factory member actually reads from. Mirrors BusinessDocument's
+  // fileUri/storagePath split.
+  photoUri?: string;
+  photoStoragePath?: string;
 }
 
 export interface Supplier {
@@ -201,6 +243,10 @@ export interface Purchase {
   unitPrice: number;
   totalAmount: number;
   amountPaid?: number;
+  // Set whenever recordPurchasePayment() runs (full or partial) — lets the
+  // supplier detail screen show "Dernier paiement : ..." instead of only
+  // ever having the original order date to show.
+  lastPaymentAt?: string;
   paymentMethod: 'cash' | 'orange_money' | 'credit';
   notes?: string;
   createdBy?: string;
@@ -256,6 +302,11 @@ export interface MachineStatusLogEntry {
 export interface CustomerOrder {
   id: string;
   factory_id: string;
+  // Every line belonging to the same client order shares one group id — a
+  // legacy single-product order (or a fresh single-line one) groups to its
+  // own id. See db/update26.sql for why this is a grouping column rather
+  // than a normalized order_lines table.
+  orderGroupId: string;
   clientName: string;
   product: string;
   quantity: number;
@@ -273,7 +324,9 @@ export type RootStackParamList = {
   AddDocument: undefined;
   DocumentDetail: { document: BusinessDocument };
   Clients: undefined;
+  SalesHistory: undefined;
   Investors: undefined;
+  InvestorDetail: { investorId: string };
   Reports: undefined;
   Flavors: undefined;
   Bulks: undefined;
@@ -282,15 +335,17 @@ export type RootStackParamList = {
   Profile: undefined;
   Expenses: undefined;
   Suppliers: undefined;
+  SupplierDetail: { supplierId: string };
   CustomerOrders: { initialClientName?: string } | undefined;
   Notifications: undefined;
   Machines: undefined;
 };
 
 export type TabParamList = {
-  Dashboard: undefined;
   Ventes: undefined;
   Production: undefined;
   Stock: undefined;
   Plus: undefined;
+  // Investor/inspecteur-only tab — see RestrictedTabNavigator.
+  Reports: undefined;
 };

@@ -137,6 +137,11 @@ export const radius = {
 } as const;
 
 export const typography = {
+  // heroNumber is deliberately its own style, not a reuse of `hero`: a big
+  // money figure (Robinhood's stock price, this app's net-profit hero) reads
+  // best at real extra-bold weight with tight negative tracking — a title
+  // made of words doesn't want either of those pushed this far.
+  heroNumber: { fontSize: 36, fontWeight: '800' as const, letterSpacing: -0.8 },
   hero: { fontSize: 32, fontWeight: '700' as const, letterSpacing: -0.3 },
   screenTitle: { fontSize: 22, fontWeight: '700' as const },
   dialogTitle: { fontSize: 17, fontWeight: '700' as const },
@@ -144,6 +149,13 @@ export const typography = {
   body: { fontSize: 15, fontWeight: '400' as const },
   bodyBold: { fontSize: 15, fontWeight: '600' as const },
   caption: { fontSize: 12.5, fontWeight: '500' as const, letterSpacing: 0.2 },
+  // The small uppercase label that sits above a hero number on Robinhood/
+  // most modern fintech dashboards ("CHIFFRE D'AFFAIRES" above the big
+  // figure, not "Chiffre d'affaires") — wide tracking + uppercase is what
+  // makes a tiny label still read as confident/intentional instead of just
+  // small. Pair with `.toUpperCase()` at the call site; this token only
+  // carries the type treatment, not the casing itself.
+  eyebrow: { fontSize: 11, fontWeight: '700' as const, letterSpacing: 0.9 },
 } as const;
 
 // Apply wherever an amount or count renders (formatGNF output, quantities)

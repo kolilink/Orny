@@ -106,7 +106,11 @@ export const addDocument = async (
   const docs = await getDocuments();
   await setCache([newDoc, ...docs]);
 
-  supabase.from('business_documents').insert({
+  // Awaited — a fire-and-forget insert here races a caller's immediate
+  // post-add reload/re-sync and can lose the new document from view even
+  // though it lands fine in Postgres (same bug reproduced and fixed for
+  // store/investors.ts's addInvestor).
+  const { error } = await supabase.from('business_documents').insert({
     id: newDoc.id,
     factory_id: factoryId,
     title: newDoc.title,
@@ -118,7 +122,8 @@ export const addDocument = async (
     date_added: newDoc.dateAdded,
     tags: newDoc.tags,
     expiration_date: newDoc.expirationDate ?? null,
-  }).then(({ error }) => { if (error) console.warn('documents insert sync error', error.message); });
+  });
+  if (error) console.warn('documents insert sync error', error.message);
 
   return newDoc;
 };

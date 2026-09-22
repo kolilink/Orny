@@ -1,9 +1,12 @@
 import React from 'react';
-import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
+import { Text } from './AppText';
 import { Ionicons } from '@expo/vector-icons';
 import { AppModal } from './AppModal';
+import { PressableScale } from './PressableScale';
 import { radius, spacing, typography, Palette } from '../../theme/tokens';
 import { useTheme } from '../../theme/ThemeContext';
+import { hapticTap, hapticWarning } from '../../utils/haptics';
 
 interface ConfirmDialogProps {
   visible: boolean;
@@ -35,21 +38,26 @@ export function ConfirmDialog({
   const styles = makeStyles(palette);
   const accent = tone === 'danger' ? palette.critical : palette.moss;
 
+  const handleConfirm = () => {
+    (tone === 'danger' ? hapticWarning : hapticTap)();
+    onConfirm();
+  };
+
   return (
     <AppModal visible={visible} onClose={onClose} showCloseButton={false}>
       <View style={styles.container}>
         {icon && <Ionicons name={icon} size={32} color={accent} style={styles.icon} />}
         <Text style={styles.title}>{title}</Text>
         {message && <Text style={styles.message}>{message}</Text>}
-        <TouchableOpacity
+        <PressableScale
           style={[styles.actionBtn, { backgroundColor: accent }]}
-          onPress={onConfirm}
+          onPress={handleConfirm}
         >
           <Text style={styles.actionText}>{confirmLabel}</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.cancelBtn} onPress={onClose}>
+        </PressableScale>
+        <PressableScale style={styles.cancelBtn} onPress={onClose}>
           <Text style={styles.cancelText}>{cancelLabel}</Text>
-        </TouchableOpacity>
+        </PressableScale>
       </View>
     </AppModal>
   );

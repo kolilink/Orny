@@ -1,35 +1,17 @@
 import React, { useEffect, useState } from 'react';
-import {
-  View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, Linking, Alert, Platform,
-} from 'react-native';
+import { View, StyleSheet, ScrollView, Image, TouchableOpacity, Linking, Alert, Platform } from 'react-native';
+import { Text } from '../../components/ui';
 import { RouteProp, useRoute } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import * as FileSystem from 'expo-file-system/legacy';
-import { RootStackParamList, BusinessDocument } from '../../types';
+import { RootStackParamList } from '../../types';
 import { getSignedDocumentUrl } from '../../store/documents';
 import { formatDate } from '../../utils/format';
 import { Palette } from '../../theme/tokens';
 import { useTheme } from '../../theme/ThemeContext';
+import { CAT_LABELS, makeCatColors } from './categoryConfig';
 
 type DetailRoute = RouteProp<RootStackParamList, 'DocumentDetail'>;
-
-const CAT_LABELS: Record<BusinessDocument['category'], string> = {
-  contrat: 'Contrat',
-  facture: 'Facture',
-  licence: 'Licence',
-  import_export: 'Import/Export',
-  investisseur: 'Investisseur',
-  autre: 'Autre',
-};
-
-const makeCatColors = (palette: Palette): Record<BusinessDocument['category'], { bg: string; text: string }> => ({
-  contrat: { bg: palette.infoSoft, text: palette.infoDeep },
-  facture: { bg: palette.cautionSoft, text: palette.caution },
-  licence: { bg: palette.mossSoft, text: palette.mossDeep },
-  import_export: { bg: palette.tealSoft, text: palette.tealDeep },
-  investisseur: { bg: palette.violetSoft, text: palette.violetDeep },
-  autre: { bg: palette.line, text: palette.muted },
-});
 
 function expiryStyle(dateStr: string, palette: Palette): object {
   const today = new Date();

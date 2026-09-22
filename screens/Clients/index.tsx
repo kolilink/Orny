@@ -1,8 +1,5 @@
 import React, { useState, useCallback, useLayoutEffect } from 'react';
-import {
-  View, Text, StyleSheet, FlatList, TouchableOpacity,
-  Modal, TextInput, Alert, KeyboardAvoidingView, Platform, ScrollView,
-} from 'react-native';
+import { View, StyleSheet, FlatList, TouchableOpacity, TextInput, Alert, ScrollView } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
@@ -12,7 +9,7 @@ import { Client, Sale, RootStackParamList, saleDebt } from '../../types';
 import { formatGNF } from '../../utils/format';
 import { Palette } from '../../theme/tokens';
 import { useTheme } from '../../theme/ThemeContext';
-import { AppModal, Button, ConfirmDialog } from '../../components/ui';
+import { AppModal, Button, ConfirmDialog, MoneyInput, PhoneInput, Text } from '../../components/ui';
 
 type ClientsNav = NativeStackNavigationProp<RootStackParamList>;
 
@@ -64,11 +61,21 @@ export default function ClientsScreen() {
   const [partialAmount, setPartialAmount] = useState('');
   const [markPaidTarget, setMarkPaidTarget] = useState<Sale | null>(null);
 
+  // Cache-first: build the debtor list from cache immediately, then sync
+  // and rebuild once fresh clients/sales land — this used to block on the
+  // network sync before showing anything.
   const load = useCallback(async () => {
-    await Promise.all([syncClientsFromSupabase(), syncSalesFromSupabase()]);
-    const [c, sales] = await Promise.all([getClients(), getSales()]);
+    let [c, sales] = await Promise.all([getClients(), getSales()]);
     setClientsState(c);
+    buildDebtorGroups(sales);
 
+    await Promise.all([syncClientsFromSupabase(), syncSalesFromSupabase()]);
+    [c, sales] = await Promise.all([getClients(), getSales()]);
+    setClientsState(c);
+    buildDebtorGroups(sales);
+  }, []);
+
+  const buildDebtorGroups = (sales: Sale[]) => {
     const groupMap: Record<string, DebtorGroup> = {};
     for (const sale of sales) {
       const debt = saleDebt(sale);
@@ -79,7 +86,7 @@ export default function ClientsScreen() {
       groupMap[sale.clientName].sales.push({ sale, debt, days });
     }
     setDebtGroups(Object.values(groupMap).sort((a, b) => b.totalDebt - a.totalDebt));
-  }, []);
+  };
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
@@ -336,44 +343,39 @@ export default function ClientsScreen() {
         onClose={() => setShowModal(false)}
         title={editingClient ? 'Modifier le client' : 'Nouveau client'}
       >
-        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-          <ScrollView keyboardShouldPersistTaps="handled">
-            <Text style={styles.fieldLabel}>Nom *</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="Nom du client"
-              value={form.name}
-              onChangeText={(v) => setForm((f) => ({ ...f, name: v }))}
-              autoFocus
-            />
-            <Text style={styles.fieldLabel}>Téléphone</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="Ex: 620 00 00 00"
-              keyboardType="phone-pad"
-              value={form.phone}
-              onChangeText={(v) => setForm((f) => ({ ...f, phone: v }))}
-            />
-            <Text style={styles.fieldLabel}>Type (boutique, marché…)</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="Ex: boutique, revendeuse marché"
-              value={form.type}
-              onChangeText={(v) => setForm((f) => ({ ...f, type: v }))}
-            />
-            <Text style={styles.fieldLabel}>Adresse (optionnel)</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="Ex: Kaloum, Ratoma…"
-              value={form.location}
-              onChangeText={(v) => setForm((f) => ({ ...f, location: v }))}
-            />
-          </ScrollView>
+        <ScrollView style={{ flexShrink: 1 }} keyboardShouldPersistTaps="handled">
+          <Text style={styles.fieldLabel}>Nom *</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="Nom du client"
+            value={form.name}
+            onChangeText={(v) => setForm((f) => ({ ...f, name: v }))}
+            autoFocus
+          />
+          <PhoneInput
+            label="Téléphone"
+            value={form.phone}
+            onChangeText={(v) => setForm((f) => ({ ...f, phone: v }))}
+          />
+          <Text style={styles.fieldLabel}>Type (boutique, marché…)</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="Ex: boutique, revendeuse marché"
+            value={form.type}
+            onChangeText={(v) => setForm((f) => ({ ...f, type: v }))}
+          />
+          <Text style={styles.fieldLabel}>Adresse (optionnel)</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="Ex: Kaloum, Ratoma…"
+            value={form.location}
+            onChangeText={(v) => setForm((f) => ({ ...f, location: v }))}
+          />
           <View style={styles.modalActions}>
             <Button label="Annuler" variant="ghost" onPress={() => setShowModal(false)} style={{ flex: 1 }} />
             <Button label="Enregistrer" onPress={handleSave} loading={saving} style={{ flex: 1 }} />
           </View>
-        </KeyboardAvoidingView>
+        </ScrollView>
       </AppModal>
 
       {/* Mark paid confirm */}
@@ -398,13 +400,11 @@ export default function ClientsScreen() {
           <>
             <Text style={styles.sheetSub}>{partialSale.clientName} — Reste à payer : {formatGNF(saleDebt(partialSale))}</Text>
             <Text style={styles.fieldLabel}>Montant reçu (GNF)</Text>
-            <TextInput
+            <MoneyInput
               style={styles.input}
               value={partialAmount}
               onChangeText={setPartialAmount}
-              placeholder="Ex: 50000"
-              placeholderTextColor={palette.muted}
-              keyboardType="numeric"
+              placeholder="Ex: 50 000"
               autoFocus
             />
             <Button label="Confirmer" onPress={handleConfirmPartial} fullWidth style={{ marginTop: 16 }} />

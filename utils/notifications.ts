@@ -4,6 +4,11 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Batch, CustomerOrder, Sale, StockItem } from '../types';
 import { computeRunrates, projectedStockouts } from './runrate';
 import { logNotification } from './notificationLog';
+import { getStock } from '../store/stock';
+import { getBatches } from '../store/batches';
+import { getSales } from '../store/sales';
+import { getCustomerOrders } from '../store/customerOrders';
+import { stockSeverity } from './stockAlerts';
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -59,8 +64,8 @@ export async function requestNotificationPermission(): Promise<boolean> {
 
 export async function checkStockAlerts(items: StockItem[]): Promise<void> {
   if (Platform.OS === 'web') return;
-  const critical = items.filter((i) => i.currentLevel <= 0);
-  const low = items.filter((i) => i.currentLevel > 0 && i.currentLevel <= i.alertThreshold);
+  const critical = items.filter((i) => stockSeverity(i.currentLevel, i.alertThreshold) === 'critical');
+  const low = items.filter((i) => stockSeverity(i.currentLevel, i.alertThreshold) === 'low');
   if (critical.length === 0 && low.length === 0) return;
   if (!(await canNotify('notif_stock'))) return;
   if (!(await requestNotificationPermission())) return;
@@ -89,7 +94,7 @@ export async function checkStockAlerts(items: StockItem[]): Promise<void> {
 // Predictive counterpart to checkStockAlerts above: warns before an item
 // actually crosses its alert threshold, if it's being consumed fast enough
 // that it will run out within `withinDays` regardless. Uses the same
-// trailing-consumption runrate as the Orny AI data block (utils/runrate.ts),
+// trailing-consumption runrate as Claude's data block (utils/runrate.ts),
 // so the advisor and this notification are never telling two different
 // stories about the same stock item.
 export async function checkPredictiveStockAlerts(
@@ -117,8 +122,13 @@ export async function checkPredictiveStockAlerts(
 export async function checkOverdueOrders(orders: CustomerOrder[]): Promise<void> {
   if (Platform.OS === 'web') return;
   const today = new Date().toISOString().split('T')[0];
-  const overdue = orders.filter((o) => o.status === 'pending' && o.deliveryDate < today);
-  if (overdue.length === 0) return;
+  const overdueLines = orders.filter((o) => o.status === 'pending' && o.deliveryDate < today);
+  if (overdueLines.length === 0) return;
+  // Dedupe by order — a multi-product order (see db/update26.sql) is
+  // several rows sharing one orderGroupId, and should read as one late
+  // order, not one per product line.
+  const seen = new Set<string>();
+  const overdue = overdueLines.filter((o) => (seen.has(o.orderGroupId) ? false : (seen.add(o.orderGroupId), true)));
   if (!(await canNotify('notif_orders'))) return;
   if (!(await requestNotificationPermission())) return;
 
@@ -130,4 +140,21 @@ export async function checkOverdueOrders(orders: CustomerOrder[]): Promise<void>
   });
   logNotification({ title, body, kind: 'orders' }).catch(() => {});
   await markNotified('notif_orders');
+}
+
+// Single entry point for all three checks above, reading straight from the
+// local cache (never a network call, matching every other read-model in
+// this app) — previously these three were only ever triggered from
+// Dashboard's own load(), which meant deleting the Dashboard tab would have
+// silently stopped every stock/order alert notification from ever firing
+// again. Called from the app-level foreground listener in
+// navigation/index.tsx instead, so it keeps running regardless of which
+// screen is open or whether a "home" screen exists at all.
+export async function runAlertChecks(): Promise<void> {
+  const [stock, batches, sales, orders] = await Promise.all([
+    getStock(), getBatches(), getSales(), getCustomerOrders(),
+  ]);
+  await checkStockAlerts(stock);
+  await checkOverdueOrders(orders);
+  await checkPredictiveStockAlerts(stock, batches, sales);
 }

@@ -62,9 +62,12 @@ export const upsertClient = async (
     location: location ?? null,
     type: type ?? null,
   };
-  supabase.from('clients').insert(row).then(({ error }) => {
-    if (error) enqueueIfNetworkError(error, { table: 'clients', op: 'insert', values: row, label: 'client' });
-  });
+  // Awaited — a fire-and-forget insert here races a caller's immediate
+  // post-add reload/re-sync and can lose the new client from view even
+  // though it lands fine in Postgres (same bug reproduced and fixed for
+  // store/investors.ts's addInvestor).
+  const { error } = await supabase.from('clients').insert(row);
+  if (error) await enqueueIfNetworkError(error, { table: 'clients', op: 'insert', values: row, label: 'client' });
 
   return newClient;
 };
@@ -76,20 +79,16 @@ export const updateClient = async (
   const clients = await getClients();
   await setCache(clients.map((c) => (c.id === id ? { ...c, ...updates } : c)));
   const factoryId = getFactoryId();
-  supabase.from('clients').update(updates).eq('id', id).eq('factory_id', factoryId)
-    .then(({ error }) => {
-      if (error) enqueueIfNetworkError(error, { table: 'clients', op: 'update', values: updates as Record<string, unknown>, match: { id, factory_id: factoryId }, label: 'client (modif.)' });
-    });
+  const { error } = await supabase.from('clients').update(updates).eq('id', id).eq('factory_id', factoryId);
+  if (error) await enqueueIfNetworkError(error, { table: 'clients', op: 'update', values: updates as Record<string, unknown>, match: { id, factory_id: factoryId }, label: 'client (modif.)' });
 };
 
 export const deleteClient = async (id: string): Promise<void> => {
   const clients = await getClients();
   await setCache(clients.filter((c) => c.id !== id));
   const factoryId = getFactoryId();
-  supabase.from('clients').delete().eq('id', id).eq('factory_id', factoryId)
-    .then(({ error }) => {
-      if (error) enqueueIfNetworkError(error, { table: 'clients', op: 'delete', match: { id, factory_id: factoryId }, label: 'client (suppr.)' });
-    });
+  const { error } = await supabase.from('clients').delete().eq('id', id).eq('factory_id', factoryId);
+  if (error) await enqueueIfNetworkError(error, { table: 'clients', op: 'delete', match: { id, factory_id: factoryId }, label: 'client (suppr.)' });
 };
 
 export const setClients = async (clients: Client[]): Promise<void> => {

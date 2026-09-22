@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { Platform } from 'react-native';
+import * as Linking from 'expo-linking';
 import { Session, User } from '@supabase/supabase-js';
 import * as WebBrowser from 'expo-web-browser';
 import * as AppleAuthentication from 'expo-apple-authentication';
@@ -7,6 +8,8 @@ import { makeRedirectUri } from 'expo-auth-session';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from '../lib/supabase';
 import { setCurrentFactory, clearCurrentFactory } from '../store/context';
+import { getInitialInviteCode, parseInviteCodeFromUrl } from '../lib/inviteLink';
+import { Palette } from '../theme/tokens';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -14,7 +17,39 @@ WebBrowser.maybeCompleteAuthSession();
 // health inspector, ...) — DB-enforced read-only via RLS (see
 // db/update15.sql), never added to any write policy. It is not a UI
 // convenience, it's the actual security boundary.
-export type UserRole = 'admin' | 'employee' | 'investor' | 'vendeur' | 'inspecteur';
+//
+// 'manager' (renamed from 'employee', db/update27.sql) is admin-parity on
+// everything EXCEPT team/factory ownership: can edit the product catalog/
+// pricing, delete records, and manage investor capital entries, but cannot
+// approve joins, change anyone's role, remove members, or touch factory
+// settings/deletion — those stay admin-only, on purpose, so a team's real
+// owner can never be outvoted or displaced by a manager. Multiple managers
+// (and multiple admins) can coexist — no cap on either, same as before.
+export type UserRole = 'admin' | 'manager' | 'investor' | 'vendeur' | 'inspecteur';
+
+// Was copy-pasted verbatim in both screens/Plus/index.tsx and
+// screens/FactorySettings/index.tsx — one shared source of truth instead,
+// living next to the type itself rather than in theme/tokens.ts (which stays
+// a pure design-system file with no knowledge of app-specific domain types).
+export const ROLE_LABELS: Record<UserRole, string> = {
+  admin: 'Administrateur',
+  manager: 'Gérant',
+  investor: 'Investisseur',
+  vendeur: 'Vendeur',
+  inspecteur: 'Inspecteur',
+};
+
+// admin tracks the live brand accent (palette.moss) — the other four are
+// deliberately distinct fixed hues outside the main palette, since a role
+// badge needs more distinguishable colors than the app's 1-accent design
+// otherwise provides, and those don't clash with the cool-neutral scheme.
+export const makeRoleColors = (palette: Palette): Record<UserRole, string> => ({
+  admin: palette.moss,
+  manager: '#5B8AF5',
+  investor: '#EF9F27',
+  vendeur: '#8E44AD',
+  inspecteur: '#3E5C76',
+});
 
 export interface FactoryMembership {
   factoryId: string;
@@ -51,6 +86,13 @@ interface AuthContextValue {
   pendingRequest: PendingRequest | null;
   loading: boolean;
   membershipLoading: boolean;
+  // An invite code carried by the URL the app was opened/reopened with —
+  // see lib/inviteLink.ts and the "Partager" button in FactorySettings.
+  // FactorySetupScreen reads this once to pre-fill+switch to its Join tab,
+  // then calls consumePendingInviteCode() so it doesn't re-trigger if the
+  // user navigates away and back.
+  pendingInviteCode: string | null;
+  consumePendingInviteCode: () => void;
   switchFactory: (factoryId: string) => Promise<void>;
   signUp: (email: string, password: string) => Promise<{ error: string | null }>;
   signIn: (email: string, password: string) => Promise<{ error: string | null }>;
@@ -119,6 +161,29 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [pendingRequest, setPendingRequest] = useState<PendingRequest | null>(null);
   const [loading, setLoading] = useState(true);
   const [membershipLoading, setMembershipLoading] = useState(true);
+  const [pendingInviteCode, setPendingInviteCode] = useState<string | null>(null);
+
+  // Cold start: the app may have been opened via an invite link (web
+  // "?code=..." on the PWA, or — once a real native build exists — a
+  // corning:// deep link). Warm start: the app was already running and the
+  // user tapped a link while it sat in the background; Linking's 'url'
+  // event is what native fires for that case (the web branch above already
+  // covers its own cold-start read from window.location.search, and a PWA
+  // tab doesn't get a comparable "already running, new URL" event the same
+  // way a native app does).
+  useEffect(() => {
+    getInitialInviteCode().then((code) => { if (code) setPendingInviteCode(code); });
+    if (Platform.OS === 'web') return;
+    const sub = Linking.addEventListener('url', ({ url }) => {
+      const code = parseInviteCodeFromUrl(url);
+      if (code) setPendingInviteCode(code);
+    });
+    return () => sub.remove();
+  }, []);
+
+  function consumePendingInviteCode() {
+    setPendingInviteCode(null);
+  }
 
   async function applySession(s: Session | null) {
     setSession(s);
@@ -530,6 +595,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   return (
     <AuthContext.Provider value={{
       session, user, membership, allMemberships, pendingRequest, loading, membershipLoading,
+      pendingInviteCode, consumePendingInviteCode,
       switchFactory,
       signUp, signIn, signInWithGoogle, signInWithApple, signOut,
       createFactory, regenerateInviteCode, getInviteCode, requestToJoin, cancelJoinRequest, refreshMembership,

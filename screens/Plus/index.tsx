@@ -1,20 +1,17 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
-import {
-  View, Text, StyleSheet, TouchableOpacity, ScrollView,
-  Modal, Animated, TextInput, KeyboardAvoidingView, Platform,
-} from 'react-native';
+import { View, StyleSheet, TouchableOpacity, ScrollView, Animated, TextInput } from 'react-native';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { RootStackParamList } from '../../types';
-import { useAuth, UserRole, FactoryMembership } from '../../context/AuthContext';
+import { useAuth, UserRole, FactoryMembership, ROLE_LABELS, makeRoleColors } from '../../context/AuthContext';
 import { getProfile, UserProfile } from '../../store/profile';
 import { supabase } from '../../lib/supabase';
 import { toFrench } from '../../utils/errors';
 import { Palette } from '../../theme/tokens';
 import { useTheme } from '../../theme/ThemeContext';
-import { ConfirmDialog } from '../../components/ui';
+import { AppModal, Button, ConfirmDialog, Text } from '../../components/ui';
 
 const DELETE_CONFIRM_WORD = 'SUPPRIMER';
 
@@ -40,60 +37,56 @@ type Section = { title: string; items: MenuItem[] };
 // what — and acting on it — no longer needs a separate screen. Notifications
 // is dropped entirely for now (no other screen links to it either, so this
 // makes the route fully unreachable via UI, on purpose).
+//
+// Role rework (db/update27.sql, "manager" replacing "employee"): auditing
+// this list against the actual RLS grants each role now has (see
+// context/AuthContext.tsx's UserRole doc comment) surfaced real, pre-
+// existing gaps, not just a rename — 'employee' already had RLS write
+// access to suppliers/purchases, expenses, and documents, and (oddest of
+// all) had never been able to reach Bilan/Reports at all despite reading
+// every other operational screen — the menu here was simply stricter than
+// the database ever was. Fixed alongside the rename rather than left as a
+// second, separate bug: manager gets every route admin does except
+// Paramètres (team/factory ownership — see the UserRole doc comment for
+// why that one stays admin-only). investor loses Claude specifically —
+// its underlying getBusinessSnapshot() reads every operational table
+// directly, which would silently defeat the whole point of scoping
+// investor's RLS access down to their own investment + headline numbers.
 const ALL_SECTIONS: Section[] = [
   {
     title: 'Clients',
     items: [
-      { label: 'Clients', icon: 'people', route: 'Clients', hint: 'Annuaire & créances', roles: ['admin', 'employee', 'vendeur'] },
-      { label: 'Commandes clients', icon: 'clipboard-outline', route: 'CustomerOrders', hint: 'Suivre les commandes en cours', roles: ['admin', 'employee'] },
+      { label: 'Ventes', icon: 'time-outline', route: 'SalesHistory', hint: 'Historique des ventes', roles: ['admin', 'manager', 'vendeur'] },
+      { label: 'Clients', icon: 'people', route: 'Clients', hint: 'Annuaire & créances', roles: ['admin', 'manager', 'vendeur'] },
+      { label: 'Commandes clients', icon: 'clipboard-outline', route: 'CustomerOrders', hint: 'Suivre les commandes en cours', roles: ['admin', 'manager'] },
     ],
   },
   {
     title: 'Fournisseurs',
     items: [
-      { label: 'Fournisseurs & Achats', icon: 'cube-outline', route: 'Suppliers', hint: 'Fournisseurs & historique achats', roles: ['admin'] },
-      { label: 'Investisseurs', icon: 'trending-up', route: 'Investors', hint: 'Capital & versements', roles: ['admin', 'investor'] },
+      { label: 'Fournisseurs', icon: 'cube-outline', route: 'Suppliers', hint: 'Fournisseurs & historique achats', roles: ['admin', 'manager'] },
+      { label: 'Investisseurs', icon: 'trending-up', route: 'Investors', hint: 'Capital & versements', roles: ['admin', 'manager', 'investor'] },
     ],
   },
   {
     title: 'Produits',
     items: [
-      { label: 'Saveurs', icon: 'color-palette', route: 'Flavors', hint: 'Créer & gérer les saveurs', roles: ['admin', 'employee'] },
-      { label: 'Vrac / Lots', icon: 'layers', route: 'Bulks', hint: 'Créer & gérer les lots', roles: ['admin', 'employee'] },
-      { label: 'Machines', icon: 'hardware-chip-outline', route: 'Machines', hint: 'Équipement, capacité & statut', roles: ['admin', 'employee'] },
+      { label: 'Saveurs', icon: 'color-palette', route: 'Flavors', hint: 'Créer & gérer les saveurs', roles: ['admin', 'manager'] },
+      { label: 'Lots', icon: 'layers', route: 'Bulks', hint: 'Créer & gérer les lots', roles: ['admin', 'manager'] },
+      { label: 'Machines', icon: 'hardware-chip-outline', route: 'Machines', hint: 'Équipement, capacité & statut', roles: ['admin', 'manager'] },
     ],
   },
   {
     title: 'Administration',
     items: [
-      { label: 'Dépenses', icon: 'receipt-outline', route: 'Expenses', hint: 'Loyer, salaires, charges...', roles: ['admin'] },
-      { label: 'Documents', icon: 'document-text', route: 'Documents', hint: 'Contrats & licences', roles: ['admin', 'inspecteur'] },
-      { label: 'Bilan', icon: 'bar-chart', route: 'Reports', hint: 'Statistiques & tendances', roles: ['admin', 'investor', 'inspecteur'] },
-      { label: 'Orny AI', icon: 'bulb', route: 'Coach', hint: 'Bilan · Goulot · Action prioritaire', roles: ['admin', 'investor'] },
+      { label: 'Dépenses', icon: 'receipt-outline', route: 'Expenses', hint: 'Loyer, salaires, charges...', roles: ['admin', 'manager'] },
+      { label: 'Documents', icon: 'document-text', route: 'Documents', hint: 'Contrats & licences', roles: ['admin', 'manager', 'inspecteur'] },
+      { label: 'Bilan', icon: 'bar-chart', route: 'Reports', hint: 'Statistiques & tendances', roles: ['admin', 'manager', 'investor', 'inspecteur'] },
+      { label: 'Claude', icon: 'bulb', route: 'Coach', hint: 'Bilan · Goulot · Action prioritaire', roles: ['admin', 'manager'] },
       { label: 'Paramètres', icon: 'settings', route: 'FactorySettings', hint: 'Membres, invitations & rôles', roles: ['admin'] },
     ],
   },
 ];
-
-const ROLE_LABELS: Record<UserRole, string> = {
-  admin: 'Administrateur',
-  employee: 'Employé',
-  investor: 'Investisseur',
-  vendeur: 'Vendeur',
-  inspecteur: 'Inspecteur',
-};
-
-// admin tracks the live brand accent (palette.moss) — the other four are
-// deliberately distinct fixed hues outside the main palette, since a role
-// badge needs more distinguishable colors than the app's 1-accent design
-// otherwise provides, and those don't clash with the cool-neutral scheme.
-const makeRoleColors = (palette: Palette): Record<UserRole, string> => ({
-  admin: palette.moss,
-  employee: '#5B8AF5',
-  investor: '#EF9F27',
-  vendeur: '#8E44AD',
-  inspecteur: '#3E5C76',
-});
 
 export default function PlusScreen() {
   const { palette } = useTheme();
@@ -102,7 +95,7 @@ export default function PlusScreen() {
   const navigation = useNavigation<PlusNav>();
   const insets = useSafeAreaInsets();
   const { membership, allMemberships, switchFactory, signOut, user } = useAuth();
-  const role = membership?.role ?? 'employee';
+  const role = membership?.role ?? 'manager';
 
   const [profile, setProfile] = useState<UserProfile>({
     displayName: '', avatarUri: null, preferredLanguage: null, voiceAutoplay: false,
@@ -305,44 +298,42 @@ export default function PlusScreen() {
           logout: typing the confirmation word, not just a Yes/No tap, since
           this is irreversible and (for a sole admin) takes an entire
           factory's data with it. */}
-      <Modal visible={deleteModal} transparent animationType="fade" onRequestClose={() => setDeleteModal(false)}>
-        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-          <View style={styles.modalOverlay}>
-            <View style={styles.modalBox}>
-              <Text style={styles.modalTitle}>Supprimer votre compte ?</Text>
-              <Text style={styles.modalSub}>
-                Cette action est définitive. Si vous êtes administrateur d'une usine où vous êtes seul, l'usine et toutes ses données (ventes, stock, dépenses…) seront supprimées avec votre compte.
-              </Text>
-              <Text style={[styles.modalSub, { marginTop: 4 }]}>
-                Tapez <Text style={{ fontWeight: '800', color: palette.ink }}>{DELETE_CONFIRM_WORD}</Text> pour confirmer.
-              </Text>
-              <TextInput
-                style={styles.deleteInput}
-                value={deleteConfirmText}
-                onChangeText={setDeleteConfirmText}
-                placeholder={DELETE_CONFIRM_WORD}
-                placeholderTextColor={palette.muted}
-                autoCapitalize="characters"
-                autoCorrect={false}
-              />
-              {!!deleteError && <Text style={styles.deleteErrorText}>{deleteError}</Text>}
-              <TouchableOpacity
-                style={[
-                  styles.modalLogout,
-                  (deleteConfirmText.trim().toUpperCase() !== DELETE_CONFIRM_WORD || deleting) && { opacity: 0.5 },
-                ]}
-                onPress={handleDeleteAccount}
-                disabled={deleteConfirmText.trim().toUpperCase() !== DELETE_CONFIRM_WORD || deleting}
-              >
-                <Text style={styles.modalLogoutText}>{deleting ? 'Suppression…' : 'Supprimer définitivement'}</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.modalCancel} onPress={() => setDeleteModal(false)} disabled={deleting}>
-                <Text style={styles.modalCancelText}>Annuler</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
+      <AppModal visible={deleteModal} onClose={() => setDeleteModal(false)} title="Supprimer votre compte ?">
+        <Text style={styles.modalSub}>
+          Cette action est définitive. Si vous êtes administrateur d'une usine où vous êtes seul, l'usine et toutes ses données (ventes, stock, dépenses…) seront supprimées avec votre compte.
+        </Text>
+        <Text style={[styles.modalSub, { marginTop: 4 }]}>
+          Tapez <Text style={{ fontWeight: '800', color: palette.ink }}>{DELETE_CONFIRM_WORD}</Text> pour confirmer.
+        </Text>
+        <TextInput
+          style={styles.deleteInput}
+          value={deleteConfirmText}
+          onChangeText={setDeleteConfirmText}
+          placeholder={DELETE_CONFIRM_WORD}
+          placeholderTextColor={palette.muted}
+          autoCapitalize="characters"
+          autoCorrect={false}
+          autoFocus
+        />
+        {!!deleteError && <Text style={styles.deleteErrorText}>{deleteError}</Text>}
+        <Button
+          label={deleting ? 'Suppression…' : 'Supprimer définitivement'}
+          variant="danger"
+          fullWidth
+          loading={deleting}
+          disabled={deleteConfirmText.trim().toUpperCase() !== DELETE_CONFIRM_WORD || deleting}
+          onPress={handleDeleteAccount}
+          style={{ marginTop: 12 }}
+        />
+        <Button
+          label="Annuler"
+          variant="ghost"
+          fullWidth
+          disabled={deleting}
+          onPress={() => setDeleteModal(false)}
+          style={{ marginTop: 8 }}
+        />
+      </AppModal>
     </ScrollView>
   );
 }

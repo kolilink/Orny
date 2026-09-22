@@ -46,7 +46,11 @@ export const addMachine = async (
   const machines = await getMachines();
   await setCache([...machines, newMachine]);
 
-  supabase.from('machines').insert({
+  // Awaited — a fire-and-forget insert here races a caller's immediate
+  // post-add reload/re-sync and can lose the new machine from view even
+  // though it lands fine in Postgres (same bug reproduced and fixed for
+  // store/investors.ts's addInvestor).
+  const { error } = await supabase.from('machines').insert({
     id: newMachine.id,
     factory_id: factoryId,
     name: newMachine.name,
@@ -57,7 +61,8 @@ export const addMachine = async (
     commissioned_date: newMachine.commissionedDate ?? null,
     notes: newMachine.notes ?? null,
     created_at: now,
-  }).then(({ error }) => { if (error) console.warn('machine insert sync error', error.message); });
+  });
+  if (error) console.warn('machine insert sync error', error.message);
 
   return newMachine;
 };
@@ -71,15 +76,15 @@ export const updateMachine = async (
   const updated = machines.map((m) => (m.id === id ? { ...m, ...updates } : m));
   await setCache(updated);
 
-  supabase.from('machines').update({
+  const { error } = await supabase.from('machines').update({
     ...(updates.name !== undefined ? { name: updates.name } : {}),
     ...(updates.type !== undefined ? { type: updates.type } : {}),
     ...(updates.ratedCapacity !== undefined ? { rated_capacity: updates.ratedCapacity } : {}),
     ...(updates.capacityUnit !== undefined ? { capacity_unit: updates.capacityUnit } : {}),
     ...(updates.commissionedDate !== undefined ? { commissioned_date: updates.commissionedDate } : {}),
     ...(updates.notes !== undefined ? { notes: updates.notes } : {}),
-  }).eq('id', id).eq('factory_id', factoryId)
-    .then(({ error }) => { if (error) console.warn('machine update sync error', error.message); });
+  }).eq('id', id).eq('factory_id', factoryId);
+  if (error) console.warn('machine update sync error', error.message);
 };
 
 // Updates the machine's current status AND appends to machine_status_log —
@@ -95,22 +100,23 @@ export const updateMachineStatus = async (
   const updated = machines.map((m) => (m.id === id ? { ...m, status } : m));
   await setCache(updated);
 
-  supabase.from('machines').update({ status }).eq('id', id).eq('factory_id', factoryId)
-    .then(({ error }) => { if (error) console.warn('machine status update sync error', error.message); });
+  const { error: statusError } = await supabase.from('machines').update({ status }).eq('id', id).eq('factory_id', factoryId);
+  if (statusError) console.warn('machine status update sync error', statusError.message);
 
-  supabase.from('machine_status_log').insert({
+  const { error: logError } = await supabase.from('machine_status_log').insert({
     id: generateId(),
     factory_id: factoryId,
     machine_id: id,
     status,
     reason: reason ?? null,
-  }).then(({ error }) => { if (error) console.warn('machine status log sync error', error.message); });
+  });
+  if (logError) console.warn('machine status log sync error', logError.message);
 };
 
 export const deleteMachine = async (id: string): Promise<void> => {
   const factoryId = getFactoryId();
   const machines = await getMachines();
   await setCache(machines.filter((m) => m.id !== id));
-  supabase.from('machines').delete().eq('id', id).eq('factory_id', factoryId)
-    .then(({ error }) => { if (error) console.warn('machine delete sync error', error.message); });
+  const { error } = await supabase.from('machines').delete().eq('id', id).eq('factory_id', factoryId);
+  if (error) console.warn('machine delete sync error', error.message);
 };

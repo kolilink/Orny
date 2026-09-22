@@ -1,23 +1,38 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
-import {
-  View, Text, StyleSheet, ScrollView, TextInput,
-  TouchableOpacity, KeyboardAvoidingView, Platform, Modal,
-  FlatList, Animated, Alert, StyleProp, ViewStyle,
-} from 'react-native';
+import { View, StyleSheet, ScrollView, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, Animated, Alert } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
-import { getProducts, addProduct, updateProduct, deleteProduct } from '../../store/products';
-import { getBatches, addBatch } from '../../store/batches';
-import { getStock, deductStock, recordStockAddition, addStockItem, checkStockAvailability } from '../../store/stock';
+import { getFlavors, updateFlavor, syncFlavorsFromSupabase } from '../../store/flavors';
+import { getBulks, updateBulk, syncBulksFromSupabase } from '../../store/bulks';
+import { getBatches, addBatch, syncBatchesFromSupabase } from '../../store/batches';
+import { getStock, deductStock, recordStockAddition, addStockItem, checkStockAvailability, syncStockFromSupabase } from '../../store/stock';
 import DatePickerField from '../../components/DatePickerField';
 import { toDateString } from '../../utils/dates';
-import { Product, Batch, StockItem } from '../../types';
+import { hapticSuccess } from '../../utils/haptics';
+import { ProductFlavor, BulkProduct, RecipeLine, Batch, StockItem } from '../../types';
 import { Palette } from '../../theme/tokens';
 import { useTheme } from '../../theme/ThemeContext';
+import { AppModal, Button, Text } from '../../components/ui';
 
 type ScreenState = 'list' | 'log';
 type MaterialRow = { rawMaterialId: string; name: string; quantity: string; unit: string };
+
+// What Production actually produces INTO — a Saveur or a standalone Lot
+// (one with no flavorId; a lot built on a flavor has no stock of its own,
+// see store/bulks.ts, so it isn't a producible target itself — only its
+// underlying flavor is). This is deliberately the same real inventory item
+// Ventes sells, not a separate "production product" — see CLAUDE.md
+// "Production — produces directly into Saveurs/Lots" for the bug this
+// closes: the two used to be disconnected catalogs, so producing something
+// never actually made it sellable.
+type ProducibleItem = {
+  id: string;
+  name: string;
+  unit: string;
+  kind: 'flavor' | 'bulk';
+  recipePerUnit: RecipeLine[];
+};
 
 export default function ProductionScreen() {
   const { palette } = useTheme();
@@ -25,13 +40,27 @@ export default function ProductionScreen() {
   const insets = useSafeAreaInsets();
 
   // ── Data ──────────────────────────────────────────────────────────
-  const [products, setProducts] = useState<Product[]>([]);
+  const [flavors, setFlavorsState] = useState<ProductFlavor[]>([]);
+  const [bulks, setBulksState] = useState<BulkProduct[]>([]);
   const [batches, setBatches] = useState<Batch[]>([]);
   const [stockItems, setStockItems] = useState<StockItem[]>([]);
 
+  const producibleItems: ProducibleItem[] = [
+    ...flavors.map((f): ProducibleItem => ({ id: f.id, name: f.label, unit: 'sachet', kind: 'flavor', recipePerUnit: f.recipePerUnit })),
+    ...bulks.filter((b) => !b.flavorId).map((b): ProducibleItem => ({ id: b.id, name: b.name, unit: 'unité', kind: 'bulk', recipePerUnit: b.recipePerUnit })),
+  ];
+
+  // A finished, sellable product is never a raw material — every flavor and
+  // every lot (even a flavor-linked one, which shares its parent flavor's
+  // stock) is excluded from the "Ajouter une matière" picker below. Without
+  // this, that picker showed every row in the shared stock table
+  // undifferentiated, the exact same "everything in one pool" bug already
+  // fixed on the Stock screen — just reached from a different screen.
+  const finishedGoodsIds = new Set<string>([...flavors.map((f) => f.id), ...bulks.map((b) => b.id)]);
+
   // ── Screen state ──────────────────────────────────────────────────
   const [screenState, setScreenState] = useState<ScreenState>('list');
-  const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
+  const [selectedItem, setSelectedItem] = useState<ProducibleItem | null>(null);
 
   // ── Batch log form ────────────────────────────────────────────────
   const [units, setUnits] = useState('');
@@ -44,28 +73,38 @@ export default function ProductionScreen() {
   const [saving, setSaving] = useState(false);
 
   // ── Modals ────────────────────────────────────────────────────────
-  const [newProductModal, setNewProductModal] = useState(false);
-  const [newProductName, setNewProductName] = useState('');
-  const [newProductUnit, setNewProductUnit] = useState('');
-  const [creatingProduct, setCreatingProduct] = useState(false);
-
   const [todayModal, setTodayModal] = useState(false);
 
-  const [actionsProduct, setActionsProduct] = useState<Product | null>(null);
-  const [productActionsModal, setProductActionsModal] = useState(false);
+  // One modal for the "•••" flow (actions menu → history OR recette),
+  // swapping an internal view — never three separate <AppModal>s toggled
+  // in the same tick. That used to be exactly the shape here (a dedicated
+  // productActionsModal/batchHistoryModal/formulaModal, each its own
+  // AppModal), and AppModal always mounts a real native RNModal for as
+  // long as its own close animation is still running — closing one and
+  // opening another in the same handler briefly left two native modals
+  // stacked, which is what "tap Voir l'historique, then the whole screen
+  // stops responding to taps" actually was: not a data bug, a modal-stacking
+  // race. Mirrors the materialModalView pattern already used below.
+  const [actionsItem, setActionsItem] = useState<ProducibleItem | null>(null);
+  const [productModalView, setProductModalView] = useState<'none' | 'actions' | 'history' | 'recette'>('none');
+  const [formulaMaterials, setFormulaMaterials] = useState<MaterialRow[]>([]);
+  const [savingFormula, setSavingFormula] = useState(false);
 
-  const [renameModal, setRenameModal] = useState(false);
-  const [renameValue, setRenameValue] = useState('');
-  const [renameUnitValue, setRenameUnitValue] = useState('');
-
-  const [historyProduct, setHistoryProduct] = useState<Product | null>(null);
-  const [batchHistoryModal, setBatchHistoryModal] = useState(false);
-
-  const [materialPickerModal, setMaterialPickerModal] = useState(false);
-
-  const [newMatModal, setNewMatModal] = useState(false);
+  // One modal for "add a material," swapping between picking an existing
+  // stock item and creating a new one — never two Modals stacked. Shared by
+  // the batch log and the formula editor; materialTarget says which of the
+  // two lists a picked/created material actually gets appended to.
+  const [materialModalView, setMaterialModalView] = useState<'none' | 'pick' | 'new'>('none');
+  const [materialTarget, setMaterialTarget] = useState<'batch' | 'formula'>('batch');
   const [newMatName, setNewMatName] = useState('');
   const [newMatUnit, setNewMatUnit] = useState('');
+  // Captured in the same step as creating the material itself — see
+  // handleCreateMaterial's own comment for the confusion this closes: a
+  // brand-new factory with nothing in Stock yet has no other field on
+  // screen to type a quantity into, so a rushed user typed their intended
+  // amount into "Nom" instead, creating a bogus raw material literally
+  // named "20".
+  const [newMatQty, setNewMatQty] = useState('');
 
   // ── Toast ─────────────────────────────────────────────────────────
   const toastOpacity = useRef(new Animated.Value(0)).current;
@@ -81,11 +120,31 @@ export default function ProductionScreen() {
   };
 
   // ── Load ──────────────────────────────────────────────────────────
+  // Cache-first: this used to read cache only, with nothing to actually
+  // refresh it — a device landing here without having visited Ventes/Stock
+  // first (which happen to sync these same stores) could sit on stale data
+  // indefinitely. Now reads cache instantly for a fast render, then syncs
+  // in the background and re-renders once fresh data lands — same shape
+  // used everywhere else this pass (see Ventes/index.tsx).
   const load = useCallback(async () => {
-    const [p, b, s] = await Promise.all([getProducts(), getBatches(), getStock()]);
-    setProducts(p);
+    const [fl, bk, b, s] = await Promise.all([
+      getFlavors(), getBulks(), getBatches(), getStock(),
+    ]);
+    setFlavorsState(fl);
+    setBulksState(bk);
     setBatches(b);
     setStockItems(s);
+
+    await Promise.all([
+      syncFlavorsFromSupabase(), syncBulksFromSupabase(), syncBatchesFromSupabase(), syncStockFromSupabase(),
+    ]);
+    const [freshFl, freshBk, freshB, freshS] = await Promise.all([
+      getFlavors(), getBulks(), getBatches(), getStock(),
+    ]);
+    setFlavorsState(freshFl);
+    setBulksState(freshBk);
+    setBatches(freshB);
+    setStockItems(freshS);
   }, []);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
@@ -117,42 +176,81 @@ export default function ProductionScreen() {
   const stockOk = missingItems.length === 0;
   const hasMaterialsWithQty = materials.some((m) => parseFloat(m.quantity) > 0);
 
-  // ── Select product → go to log state ─────────────────────────────
-  const selectProduct = (p: Product) => {
-    setSelectedProduct(p);
+  // ── Select item → go to log state ─────────────────────────────
+  const selectItem = (item: ProducibleItem) => {
+    setSelectedItem(item);
     setUnits('');
     setLogDate(toDateString());
     setEnergy('');
     setHours('');
     setNotes('');
     setDetailsOpen(false);
+    // Blank quantities to start — the formula effect below fills them in the
+    // instant a real "Combien ?" value is typed, scaled from recipePerUnit.
+    // Starting from the stored per-unit numbers themselves (as the old
+    // lastRecipe flow did) would show a tiny, wrong quantity before any
+    // scaling happens.
     setMaterials(
-      p.lastRecipe.length > 0
-        ? p.lastRecipe.map((r) => ({
-            rawMaterialId: r.rawMaterialId,
-            name: r.name,
-            quantity: String(r.quantity),
-            unit: r.unit,
-          }))
-        : []
+      item.recipePerUnit.map((r) => ({
+        rawMaterialId: r.rawMaterialId,
+        name: r.name,
+        quantity: '',
+        unit: r.unit,
+      }))
     );
     setScreenState('log');
   };
 
+  // Rounds a scaled quantity to 2 decimals — enough precision for any
+  // realistic unit (kg, L, g) without floating-point noise like
+  // "12.600000000000001" showing up in the field.
+  const roundTo2 = (n: number): number => Math.round(n * 100) / 100;
+
+  // Auto-scale: whenever "Combien ?" changes, every material row that's
+  // actually part of this item's stored formula recomputes from it (formula
+  // qty × units). A material added ad hoc for this one batch (via "Ajouter
+  // une matière", not present in recipePerUnit) is left alone — it has no
+  // ratio to scale from, and isn't meant to be part of the formula.
+  useEffect(() => {
+    if (!selectedItem || selectedItem.recipePerUnit.length === 0) return;
+    const unitsNum = parseFloat(units) || 0;
+    setMaterials((prev) => prev.map((m) => {
+      const formulaRow = selectedItem.recipePerUnit.find((r) => r.rawMaterialId === m.rawMaterialId);
+      if (!formulaRow) return m;
+      return { ...m, quantity: unitsNum > 0 ? String(roundTo2(formulaRow.quantity * unitsNum)) : '' };
+    }));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [units]);
+
   const backToList = () => {
     setScreenState('list');
-    setSelectedProduct(null);
+    setSelectedItem(null);
+  };
+
+  // Persists a formula to whichever real catalog the item actually belongs
+  // to — a flavor and a standalone lot are different tables under the hood,
+  // but from here on they're both just "a producible item" with a formula.
+  const saveRecipeFor = async (item: ProducibleItem, recipe: RecipeLine[]) => {
+    if (item.kind === 'flavor') {
+      await updateFlavor(item.id, { recipePerUnit: recipe });
+    } else {
+      await updateBulk(item.id, { recipePerUnit: recipe });
+    }
   };
 
   // ── Material helpers ──────────────────────────────────────────────
+  // Shared by the batch log and the formula editor — materialTarget says
+  // which list a picked/created material actually lands in.
   const addMaterialFromStock = (item: StockItem) => {
-    if (!materials.find((m) => m.rawMaterialId === item.id)) {
-      setMaterials((prev) => [
+    const list = materialTarget === 'formula' ? formulaMaterials : materials;
+    const setList = materialTarget === 'formula' ? setFormulaMaterials : setMaterials;
+    if (!list.find((m) => m.rawMaterialId === item.id)) {
+      setList((prev) => [
         ...prev,
         { rawMaterialId: item.id, name: item.name, quantity: '', unit: item.unit },
       ]);
     }
-    setMaterialPickerModal(false);
+    setMaterialModalView('none');
   };
 
   const removeMaterial = (idx: number) => {
@@ -161,6 +259,36 @@ export default function ProductionScreen() {
 
   const updateMaterialQty = (idx: number, qty: string) => {
     setMaterials((prev) => prev.map((m, i) => (i === idx ? { ...m, quantity: qty } : m)));
+  };
+
+  const updateFormulaQty = (idx: number, qty: string) => {
+    setFormulaMaterials((prev) => prev.map((m, i) => (i === idx ? { ...m, quantity: qty } : m)));
+  };
+
+  const removeFormulaMaterial = (idx: number) => {
+    setFormulaMaterials((prev) => prev.filter((_, i) => i !== idx));
+  };
+
+  const openFormula = (item: ProducibleItem) => {
+    setFormulaMaterials(
+      item.recipePerUnit.map((r) => ({ rawMaterialId: r.rawMaterialId, name: r.name, quantity: String(r.quantity), unit: r.unit }))
+    );
+    setProductModalView('recette');
+  };
+
+  const handleSaveFormula = async () => {
+    if (!actionsItem) return;
+    setSavingFormula(true);
+    try {
+      const recipe = formulaMaterials
+        .filter((m) => m.rawMaterialId && parseFloat(m.quantity) > 0)
+        .map((m) => ({ rawMaterialId: m.rawMaterialId, name: m.name, quantity: parseFloat(m.quantity) || 0, unit: m.unit }));
+      await saveRecipeFor(actionsItem, recipe);
+      setProductModalView('none');
+      await load();
+    } finally {
+      setSavingFormula(false);
+    }
   };
 
   // ── Save batch ────────────────────────────────────────────────────
@@ -214,8 +342,8 @@ export default function ProductionScreen() {
 
       await addBatch({
         date: logDate,
-        productId: selectedProduct!.id,
-        productName: selectedProduct!.name,
+        productId: selectedItem!.id,
+        productName: selectedItem!.name,
         unitsProduced: unitsNum,
         materialsUsed: validMaterials,
         energyUsed: energy ? parseFloat(energy) : undefined,
@@ -223,8 +351,18 @@ export default function ProductionScreen() {
         notes: notes || undefined,
       });
 
-      // Update product memory (lastRecipe)
-      await updateProduct(selectedProduct!.id, { lastRecipe: validMaterials });
+      // Establish the formula automatically from this item's very first
+      // real batch — zero separate setup step needed. Once a formula
+      // exists, a routine batch save never touches it again: a one-off
+      // adjustment during real production (running short on an ingredient,
+      // a rounding tweak) must never silently corrupt the master formula.
+      // Deliberate edits go through "Modifier la formule" instead.
+      if (selectedItem!.recipePerUnit.length === 0 && unitsNum > 0) {
+        const derivedRecipe = validMaterials
+          .filter((m) => m.rawMaterialId && m.quantity > 0)
+          .map((m) => ({ ...m, quantity: roundTo2(m.quantity / unitsNum) }));
+        await saveRecipeFor(selectedItem!, derivedRecipe);
+      }
 
       // Deduct raw materials from stock
       const deductions: Record<string, number> = {};
@@ -246,33 +384,31 @@ export default function ProductionScreen() {
       }, 0);
       const unitCost = unitsNum > 0 ? totalMaterialCost / unitsNum : 0;
 
-      // Increment finished product stock (and its cost basis)
-      await recordStockAddition(selectedProduct!.id, unitsNum, unitCost);
+      // Increment the SAME finished-goods stock item Ventes sells against —
+      // selectedItem.id is a real flavor/bulk id, not a separate production
+      // product id, which is the whole point of this rewrite.
+      await recordStockAddition(selectedItem!.id, unitsNum, unitCost);
 
       await load();
       backToList();
+      hapticSuccess();
       showToast('✅ Lot enregistré');
     } finally {
       setSaving(false);
     }
   };
 
-  // ── Create new product ────────────────────────────────────────────
-  const handleCreateProduct = async () => {
-    if (!newProductName.trim()) return;
-    setCreatingProduct(true);
-    try {
-      await addProduct(newProductName.trim(), newProductUnit.trim() || 'unité');
-      setNewProductName('');
-      setNewProductUnit('');
-      setNewProductModal(false);
-      await load();
-    } finally {
-      setCreatingProduct(false);
-    }
-  };
-
   // ── Create new raw material inline ────────────────────────────────
+  // Creates a permanent stock item (Nom + Unité) AND, in the same step,
+  // seeds the quantity row it's being added for — batch or formula,
+  // whichever materialTarget says. Quantity used to be left blank here,
+  // which is what caused the reported bug: with Stock empty, "Ajouter une
+  // matière" → "Aucun article en stock" → "+ Nouvelle matière première" is
+  // the ONLY path forward, and its two fields (Nom/Unité) were the only
+  // thing on screen — so a user trying to record "I used 20" typed 20 into
+  // Nom itself, creating a real raw material named "20". Asking for the
+  // quantity right here, where the user already expects to type it, closes
+  // that gap without changing the picker flow at all.
   const handleCreateMaterial = async () => {
     if (!newMatName.trim() || !newMatUnit.trim()) return;
     const item = await addStockItem({
@@ -281,41 +417,20 @@ export default function ProductionScreen() {
       currentLevel: 0,
       alertThreshold: 0,
     });
-    setMaterials((prev) => [
+    const setList = materialTarget === 'formula' ? setFormulaMaterials : setMaterials;
+    setList((prev) => [
       ...prev,
-      { rawMaterialId: item.id, name: item.name, quantity: '', unit: item.unit },
+      { rawMaterialId: item.id, name: item.name, quantity: newMatQty.trim(), unit: item.unit },
     ]);
     setNewMatName('');
     setNewMatUnit('');
-    setNewMatModal(false);
+    setNewMatQty('');
+    setMaterialModalView('none');
     // reload stock so picker shows the new item next time
     getStock().then(setStockItems);
   };
 
-  // ── Delete product ────────────────────────────────────────────────
-  const handleDeleteProduct = (p: Product) => {
-    const hasBatches = batches.some((b) => b.productId === p.id);
-    Alert.alert(
-      'Supprimer',
-      hasBatches
-        ? `Supprimer "${p.name}" ? L'historique des lots sera conservé.`
-        : `Supprimer "${p.name}" ?`,
-      [
-        { text: 'Annuler', style: 'cancel' },
-        {
-          text: 'Supprimer',
-          style: 'destructive',
-          onPress: async () => {
-            await deleteProduct(p.id);
-            setProductActionsModal(false);
-            await load();
-          },
-        },
-      ]
-    );
-  };
-
-  // ── Render: STATE 1 — product list ────────────────────────────────
+  // ── Render: STATE 1 — item list ────────────────────────────────
   const renderList = () => (
     <ScrollView style={styles.fill} contentContainerStyle={styles.listContent}>
       {/* Today's batches card */}
@@ -329,42 +444,43 @@ export default function ProductionScreen() {
         <Ionicons name="chevron-forward" size={18} color={palette.muted} />
       </TouchableOpacity>
 
-      {/* New product button */}
-      <TouchableOpacity style={styles.newProductBtn} onPress={() => setNewProductModal(true)}>
-        <Ionicons name="add-circle-outline" size={20} color={palette.moss} />
-        <Text style={styles.newProductBtnText}>Nouveau produit</Text>
-      </TouchableOpacity>
-
-      {/* Product list */}
-      {products.length === 0 ? (
+      {/* Item list — every Saveur and standalone Lot, the same items sold
+          in Ventes. New ones are created there (Menu > Saveurs / Vrac),
+          not here — Production only produces into what already exists. */}
+      {producibleItems.length === 0 ? (
         <View style={styles.emptyState}>
-          <Text style={styles.emptyText}>Créez votre premier produit pour commencer à enregistrer des lots.</Text>
+          <Text style={styles.emptyText}>Créez une saveur ou un lot dans Menu pour commencer à produire.</Text>
         </View>
       ) : (
-        products.map((p) => (
-          <View key={p.id} style={styles.productCard}>
-            <TouchableOpacity
-              style={styles.productCardMain}
-              onPress={() => selectProduct(p)}
-              activeOpacity={0.7}
-            >
-              <View style={styles.productInfo}>
-                <Text style={styles.productName}>{p.name}</Text>
-                <Text style={styles.productUnit}>{p.unit}</Text>
+        <View style={styles.productList}>
+          {producibleItems.map((item, i) => (
+            <React.Fragment key={item.id}>
+              {i > 0 && <View style={styles.rowDivider} />}
+              <View style={styles.productCard}>
+                <TouchableOpacity
+                  style={styles.productCardMain}
+                  onPress={() => selectItem(item)}
+                  activeOpacity={0.7}
+                >
+                  <View style={styles.productInfo}>
+                    <Text style={styles.productName}>{item.name}</Text>
+                    <Text style={styles.productUnit}>{item.unit}</Text>
+                  </View>
+                  <Text style={lastBatchDate[item.id] ? styles.productLastMade : styles.productNeverMade}>
+                    {lastBatchDate[item.id] ? `Dernière fois: ${lastBatchDate[item.id]}` : 'Jamais produit'}
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.productMenuBtn}
+                  onPress={() => { setActionsItem(item); setProductModalView('actions'); }}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Ionicons name="ellipsis-vertical" size={20} color={palette.muted} />
+                </TouchableOpacity>
               </View>
-              <Text style={lastBatchDate[p.id] ? styles.productLastMade : styles.productNeverMade}>
-                {lastBatchDate[p.id] ? `Dernière fois: ${lastBatchDate[p.id]}` : 'Jamais produit'}
-              </Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.productMenuBtn}
-              onPress={() => { setActionsProduct(p); setProductActionsModal(true); }}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            >
-              <Ionicons name="ellipsis-vertical" size={20} color={palette.muted} />
-            </TouchableOpacity>
-          </View>
-        ))
+            </React.Fragment>
+          ))}
+        </View>
       )}
     </ScrollView>
   );
@@ -379,7 +495,7 @@ export default function ProductionScreen() {
         {/* Back header */}
         <TouchableOpacity style={styles.backBtn} onPress={backToList}>
           <Ionicons name="arrow-back" size={22} color={palette.moss} />
-          <Text style={styles.backBtnText}>{selectedProduct?.name}</Text>
+          <Text style={styles.backBtnText}>{selectedItem?.name}</Text>
         </TouchableOpacity>
 
         {/* Combien? */}
@@ -395,13 +511,18 @@ export default function ProductionScreen() {
               placeholderTextColor={palette.muted}
               autoFocus
             />
-            <Text style={styles.unitsLabel} numberOfLines={2}>{selectedProduct?.unit}</Text>
+            <Text style={styles.unitsLabel} numberOfLines={2}>{selectedItem?.unit}</Text>
           </View>
         </View>
 
         {/* Matières utilisées */}
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Matières utilisées</Text>
+          <Text style={styles.formulaHint}>
+            {selectedItem && selectedItem.recipePerUnit.length > 0
+              ? 'Calculé automatiquement à partir de la recette'
+              : 'Ce premier lot enregistrera la recette pour la prochaine fois'}
+          </Text>
           {materials.map((m, idx) => (
             <View key={idx} style={styles.matRow}>
               <Text style={styles.matName}>{m.name}</Text>
@@ -419,7 +540,7 @@ export default function ProductionScreen() {
               </TouchableOpacity>
             </View>
           ))}
-          <TouchableOpacity style={styles.addMatBtn} onPress={() => setMaterialPickerModal(true)}>
+          <TouchableOpacity style={styles.addMatBtn} onPress={() => { setMaterialTarget('batch'); setMaterialModalView('pick'); }}>
             <Ionicons name="add" size={18} color={palette.moss} />
             <Text style={styles.addMatBtnText}>Ajouter une matière</Text>
           </TouchableOpacity>
@@ -515,275 +636,180 @@ export default function ProductionScreen() {
         <Text style={styles.toastText}>{toastText}</Text>
       </Animated.View>
 
-      {/* ── NEW PRODUCT MODAL ── */}
-      <Modal
-        visible={newProductModal}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setNewProductModal(false)}
-      >
-        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-          <View style={styles.modalOverlay}>
-            <View style={styles.modalCard}>
-              <Text style={styles.modalTitle}>Nouveau produit</Text>
-              <FieldWrap label="Nom du produit">
-                <TextInput
-                  style={styles.input}
-                  value={newProductName}
-                  onChangeText={setNewProductName}
-                  placeholder="Ex: SOL Original 50g"
-                  placeholderTextColor={palette.muted}
-                  autoFocus
-                />
-              </FieldWrap>
-              <FieldWrap label="Unité">
-                <TextInput
-                  style={styles.input}
-                  value={newProductUnit}
-                  onChangeText={setNewProductUnit}
-                  placeholder="sachet, kg, bouteille, L…"
-                  placeholderTextColor={palette.muted}
-                />
-              </FieldWrap>
-              <View style={styles.modalActions}>
-                <TouchableOpacity
-                  style={styles.cancelBtn}
-                  onPress={() => { setNewProductModal(false); setNewProductName(''); setNewProductUnit(''); }}
-                >
-                  <Text style={styles.cancelText}>Annuler</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.confirmBtn, (!newProductName.trim() || creatingProduct) && { opacity: 0.4 }]}
-                  onPress={handleCreateProduct}
-                  disabled={!newProductName.trim() || creatingProduct}
-                >
-                  <Text style={styles.confirmText}>
-                    {creatingProduct ? 'Création…' : 'Créer'}
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
-
-      {/* ── TODAY'S BATCHES MODAL ── */}
-      <Modal
-        visible={todayModal}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setTodayModal(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Lots d'aujourd'hui</Text>
-            {todayBatches.length === 0 ? (
-              <Text style={styles.emptyText}>Aucun lot enregistré aujourd'hui.</Text>
-            ) : (
-              <FlatList
-                data={todayBatches}
-                keyExtractor={(b) => b.id}
-                style={styles.modalList}
-                renderItem={({ item }) => {
-                  const prod = products.find((p) => p.id === item.productId);
-                  return (
+      {/* ── TODAY'S BATCHES ── */}
+      <AppModal visible={todayModal} onClose={() => setTodayModal(false)} title="Lots d'aujourd'hui">
+        {todayBatches.length === 0 ? (
+          <Text style={styles.emptyText}>Aucun lot enregistré aujourd'hui.</Text>
+        ) : (
+          <ScrollView style={styles.historyScroll}>
+            <View style={styles.historyList}>
+              {todayBatches.map((item, i) => {
+                const prod = producibleItems.find((p) => p.id === item.productId);
+                return (
+                  <React.Fragment key={item.id}>
+                    {i > 0 && <View style={styles.rowDivider} />}
                     <View style={styles.historyRow}>
                       <Text style={styles.historyProduct}>{item.productName}</Text>
-                      <Text style={styles.historyUnits}>
-                        {item.unitsProduced} {prod?.unit ?? ''}
-                      </Text>
+                      <Text style={styles.historyUnits}>{item.unitsProduced} {prod?.unit ?? ''}</Text>
                     </View>
-                  );
+                  </React.Fragment>
+                );
+              })}
+            </View>
+          </ScrollView>
+        )}
+      </AppModal>
+
+      {/* ── ITEM ACTIONS (overflow menu) — one AppModal for the whole
+          actions→historique/recette flow, swapping an internal view
+          instead of three separate <AppModal>s (see productModalView's
+          own comment above for the stacked-modal bug this replaced).
+          Renaming/deleting a Saveur or Lot happens on its own screen
+          (Menu > Saveurs / Vrac), which already has that flow — not here. */}
+      <AppModal
+        visible={productModalView !== 'none'}
+        onClose={() => setProductModalView('none')}
+        showCloseButton={productModalView !== 'actions'}
+        title={
+          productModalView === 'recette' ? `Recette — ${actionsItem?.name ?? ''}` :
+          productModalView === 'history' ? actionsItem?.name :
+          undefined
+        }
+      >
+        {productModalView === 'actions' && (() => {
+          const hasHistory = batches.some((b) => b.productId === actionsItem?.id);
+          return (
+            <>
+              <Text style={styles.modalTitle}>{actionsItem?.name}</Text>
+              {/* Nothing to show for an item that's never been produced —
+                  offering "Voir l'historique" with nothing behind it was
+                  the reported bug: it opened onto an empty list every
+                  time, since every item here starts as "Jamais produit". */}
+              {hasHistory && (
+                <ActionRow
+                  icon="time-outline"
+                  label="Voir l'historique"
+                  onPress={() => setProductModalView('history')}
+                />
+              )}
+              <ActionRow
+                icon="calculator-outline"
+                label="Modifier la recette"
+                last
+                onPress={() => {
+                  if (actionsItem) openFormula(actionsItem);
                 }}
               />
-            )}
-            <TouchableOpacity style={[styles.cancelBtn, { marginTop: 12 }]} onPress={() => setTodayModal(false)}>
-              <Text style={styles.cancelText}>Fermer</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
+            </>
+          );
+        })()}
 
-      {/* ── PRODUCT ACTIONS MODAL ── */}
-      <Modal
-        visible={productActionsModal}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setProductActionsModal(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>{actionsProduct?.name}</Text>
-            <ActionRow
-              icon="pencil-outline"
-              label="Renommer"
-              onPress={() => {
-                setRenameValue(actionsProduct?.name ?? '');
-                setRenameUnitValue(actionsProduct?.unit ?? '');
-                setProductActionsModal(false);
-                setRenameModal(true);
-              }}
-            />
-            <ActionRow
-              icon="time-outline"
-              label="Voir l'historique"
-              onPress={() => {
-                setHistoryProduct(actionsProduct);
-                setProductActionsModal(false);
-                setBatchHistoryModal(true);
-              }}
-            />
-            <ActionRow
-              icon="trash-outline"
-              label="Supprimer"
-              color={palette.critical}
-              last
-              onPress={() => {
-                if (actionsProduct) handleDeleteProduct(actionsProduct);
-              }}
-            />
-            <TouchableOpacity style={[styles.cancelBtn, { marginTop: 12 }]} onPress={() => setProductActionsModal(false)}>
-              <Text style={styles.cancelText}>Annuler</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
-
-      {/* ── RENAME MODAL ── */}
-      <Modal
-        visible={renameModal}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setRenameModal(false)}
-      >
-        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-          <View style={styles.modalOverlay}>
-            <View style={styles.modalCard}>
-              <Text style={styles.modalTitle}>Modifier le produit</Text>
-              <FieldWrap label="Nom">
-                <TextInput
-                  style={styles.input}
-                  value={renameValue}
-                  onChangeText={setRenameValue}
-                  autoFocus
-                />
-              </FieldWrap>
-              <FieldWrap label="Unité">
-                <TextInput
-                  style={styles.input}
-                  value={renameUnitValue}
-                  onChangeText={setRenameUnitValue}
-                />
-              </FieldWrap>
-              <View style={styles.modalActions}>
-                <TouchableOpacity style={styles.cancelBtn} onPress={() => setRenameModal(false)}>
-                  <Text style={styles.cancelText}>Annuler</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.confirmBtn, !renameValue.trim() && { opacity: 0.4 }]}
-                  disabled={!renameValue.trim()}
-                  onPress={async () => {
-                    if (actionsProduct && renameValue.trim()) {
-                      await updateProduct(actionsProduct.id, {
-                        name: renameValue.trim(),
-                        unit: renameUnitValue.trim() || actionsProduct.unit,
-                      });
-                      setRenameModal(false);
-                      await load();
-                    }
-                  }}
-                >
-                  <Text style={styles.confirmText}>Enregistrer</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
-
-      {/* ── BATCH HISTORY MODAL ── */}
-      <Modal
-        visible={batchHistoryModal}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setBatchHistoryModal(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>{historyProduct?.name}</Text>
-            <FlatList
-              data={batches.filter((b) => b.productId === historyProduct?.id)}
-              keyExtractor={(b) => b.id}
-              style={styles.modalList}
-              renderItem={({ item }) => (
-                <View style={styles.historyRow}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.historyDate}>{item.date}</Text>
-                    <Text style={styles.historyMats} numberOfLines={2}>
-                      {item.materialsUsed.map((m) => `${m.quantity}${m.unit} ${m.name}`).join(' · ')}
-                    </Text>
-                  </View>
-                  <Text style={styles.historyUnits}>
-                    {item.unitsProduced} {historyProduct?.unit}
-                  </Text>
+        {productModalView === 'recette' && (
+          <>
+            <ScrollView style={{ flexShrink: 1 }} keyboardShouldPersistTaps="handled">
+              <Text style={styles.formulaHint}>
+                Quantité de chaque matière nécessaire pour produire 1 {actionsItem?.unit}
+              </Text>
+              {formulaMaterials.map((m, idx) => (
+                <View key={idx} style={styles.matRow}>
+                  <Text style={styles.matName}>{m.name}</Text>
+                  <TextInput
+                    style={styles.matQtyInput}
+                    value={m.quantity}
+                    onChangeText={(v) => updateFormulaQty(idx, v)}
+                    keyboardType="decimal-pad"
+                    placeholder="0"
+                    placeholderTextColor={palette.muted}
+                  />
+                  <Text style={styles.matUnit}>{m.unit}</Text>
+                  <TouchableOpacity onPress={() => removeFormulaMaterial(idx)}>
+                    <Ionicons name="close-circle-outline" size={22} color={palette.critical} />
+                  </TouchableOpacity>
                 </View>
-              )}
-              ListEmptyComponent={<Text style={styles.emptyText}>Aucun lot enregistré.</Text>}
-            />
-            <TouchableOpacity style={[styles.cancelBtn, { marginTop: 12 }]} onPress={() => setBatchHistoryModal(false)}>
-              <Text style={styles.cancelText}>Fermer</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
+              ))}
+              <TouchableOpacity style={styles.addMatBtn} onPress={() => { setMaterialTarget('formula'); setMaterialModalView('pick'); }}>
+                <Ionicons name="add" size={18} color={palette.moss} />
+                <Text style={styles.addMatBtnText}>Ajouter une matière</Text>
+              </TouchableOpacity>
+              <View style={styles.modalActions}>
+                <Button label="Annuler" variant="ghost" onPress={() => setProductModalView('none')} style={{ flex: 1 }} />
+                <Button label="Enregistrer" onPress={handleSaveFormula} loading={savingFormula} style={{ flex: 1 }} />
+              </View>
+            </ScrollView>
+          </>
+        )}
 
-      {/* ── MATERIAL PICKER MODAL ── */}
-      <Modal
-        visible={materialPickerModal}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setMaterialPickerModal(false)}
+        {productModalView === 'history' && (() => {
+          const historyBatches = batches.filter((b) => b.productId === actionsItem?.id);
+          return historyBatches.length === 0 ? (
+            <Text style={styles.emptyText}>Aucun lot enregistré.</Text>
+          ) : (
+            <ScrollView style={styles.historyScroll}>
+              <View style={styles.historyList}>
+                {historyBatches.map((item, i) => (
+                  <React.Fragment key={item.id}>
+                    {i > 0 && <View style={styles.rowDivider} />}
+                    <View style={styles.historyRow}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.historyDate}>{item.date}</Text>
+                        <Text style={styles.historyMats} numberOfLines={2}>
+                          {item.materialsUsed.map((m) => `${m.quantity}${m.unit} ${m.name}`).join(' · ')}
+                        </Text>
+                      </View>
+                      <Text style={styles.historyUnits}>{item.unitsProduced} {actionsItem?.unit}</Text>
+                    </View>
+                  </React.Fragment>
+                ))}
+              </View>
+            </ScrollView>
+          );
+        })()}
+      </AppModal>
+
+      {/* ── ADD A MATERIAL — pick existing or create new, one modal ── */}
+      <AppModal
+        visible={materialModalView !== 'none'}
+        onClose={() => setMaterialModalView('none')}
+        title={materialModalView === 'new' ? 'Nouvelle matière première' : 'Ajouter une matière'}
       >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Ajouter une matière</Text>
-            <FlatList
-              data={stockItems.filter((s) => s.id !== selectedProduct?.id)}
-              keyExtractor={(s) => s.id}
-              style={styles.modalList}
-              renderItem={({ item }) => (
-                <TouchableOpacity style={styles.pickerRow} onPress={() => addMaterialFromStock(item)}>
-                  <Text style={styles.pickerName}>{item.name}</Text>
-                  <Text style={styles.pickerLevel}>{item.currentLevel} {item.unit} en stock</Text>
-                </TouchableOpacity>
-              )}
-              ListEmptyComponent={<Text style={styles.emptyText}>Aucun article en stock.</Text>}
-            />
-            <TouchableOpacity
-              style={styles.addMatBtn}
-              onPress={() => { setMaterialPickerModal(false); setNewMatModal(true); }}
-            >
+        {materialModalView === 'new' && (
+          <TouchableOpacity onPress={() => setMaterialModalView('pick')} style={styles.backLink} hitSlop={8}>
+            <Ionicons name="chevron-back" size={16} color={palette.moss} />
+            <Text style={styles.backLinkText}>Retour</Text>
+          </TouchableOpacity>
+        )}
+        {materialModalView === 'pick' ? (
+          <>
+            {/* Raw materials only — a Saveur or Lot is never offered as an
+                ingredient of another product, itself included. */}
+            {stockItems.filter((s) => !finishedGoodsIds.has(s.id)).length === 0 ? (
+              <Text style={styles.emptyText}>Aucune matière première dans votre stock pour l'instant. Créez-en une ci-dessous.</Text>
+            ) : (
+              <ScrollView style={styles.historyScroll}>
+                <View style={styles.historyList}>
+                  {stockItems.filter((s) => !finishedGoodsIds.has(s.id)).map((item, i) => (
+                    <React.Fragment key={item.id}>
+                      {i > 0 && <View style={styles.rowDivider} />}
+                      <TouchableOpacity style={styles.pickerRow} onPress={() => addMaterialFromStock(item)}>
+                        <Text style={styles.pickerName}>{item.name}</Text>
+                        <Text style={styles.pickerLevel}>{item.currentLevel} {item.unit} en stock</Text>
+                      </TouchableOpacity>
+                    </React.Fragment>
+                  ))}
+                </View>
+              </ScrollView>
+            )}
+            <TouchableOpacity style={styles.addMatBtn} onPress={() => setMaterialModalView('new')}>
               <Ionicons name="add" size={18} color={palette.moss} />
-              <Text style={styles.addMatBtnText}>+ Nouvelle matière première</Text>
+              <Text style={styles.addMatBtnText}>Nouvelle matière première</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={[styles.cancelBtn, { marginTop: 8 }]} onPress={() => setMaterialPickerModal(false)}>
-              <Text style={styles.cancelText}>Annuler</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
-
-      {/* ── NEW MATERIAL MODAL ── */}
-      <Modal
-        visible={newMatModal}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setNewMatModal(false)}
-      >
-        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-          <View style={styles.modalOverlay}>
-            <View style={styles.modalCard}>
-              <Text style={styles.modalTitle}>Nouvelle matière première</Text>
+          </>
+        ) : (
+          <>
+            <ScrollView style={{ flexShrink: 1 }} keyboardShouldPersistTaps="handled">
+              <Text style={styles.formulaHint}>
+                Cette matière sera ajoutée à votre stock — elle restera disponible pour tous vos futurs lots, pas seulement celui-ci.
+              </Text>
               <FieldWrap label="Nom">
                 <TextInput
                   style={styles.input}
@@ -803,25 +829,27 @@ export default function ProductionScreen() {
                   placeholderTextColor={palette.muted}
                 />
               </FieldWrap>
-              <View style={styles.modalActions}>
-                <TouchableOpacity
-                  style={styles.cancelBtn}
-                  onPress={() => { setNewMatModal(false); setNewMatName(''); setNewMatUnit(''); }}
-                >
-                  <Text style={styles.cancelText}>Annuler</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.confirmBtn, (!newMatName.trim() || !newMatUnit.trim()) && { opacity: 0.4 }]}
-                  onPress={handleCreateMaterial}
-                  disabled={!newMatName.trim() || !newMatUnit.trim()}
-                >
-                  <Text style={styles.confirmText}>Créer</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
+              <FieldWrap label={materialTarget === 'formula' ? 'Quantité par unité produite (optionnel)' : 'Quantité utilisée dans ce lot (optionnel)'}>
+                <TextInput
+                  style={styles.input}
+                  value={newMatQty}
+                  onChangeText={setNewMatQty}
+                  keyboardType="decimal-pad"
+                  placeholder="0"
+                  placeholderTextColor={palette.muted}
+                />
+              </FieldWrap>
+              <Button
+                label="Créer"
+                onPress={handleCreateMaterial}
+                disabled={!newMatName.trim() || !newMatUnit.trim()}
+                fullWidth
+                style={{ marginTop: 8 }}
+              />
+            </ScrollView>
+          </>
+        )}
+      </AppModal>
     </View>
   );
 }
@@ -881,19 +909,13 @@ const makeStyles = (palette: Palette) => StyleSheet.create({
   },
   todayTitle: { fontSize: 13, fontWeight: '600', color: palette.muted, marginBottom: 2 },
   todayStats: { fontSize: 16, fontWeight: '700', color: palette.ink },
-  newProductBtn: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
-    backgroundColor: palette.mossSoft, borderRadius: 12, paddingVertical: 14,
-    borderWidth: 1, borderColor: palette.moss + '44',
-  },
-  newProductBtnText: { fontSize: 15, fontWeight: '700', color: palette.moss },
-  productCard: {
-    flexDirection: 'row', alignItems: 'center',
+  // One shared card wraps the whole item list (productList); each row is
+  // flat, divided by rowDivider — not individually bordered/shadowed.
+  productList: {
     backgroundColor: palette.card, borderRadius: 14,
-    borderWidth: 1, borderColor: palette.line,
-    shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 4, elevation: 1,
-    overflow: 'hidden',
+    borderWidth: 1, borderColor: palette.line, overflow: 'hidden',
   },
+  productCard: { flexDirection: 'row', alignItems: 'center' },
   productCardMain: {
     flex: 1, flexDirection: 'row', alignItems: 'center',
     justifyContent: 'space-between', padding: 16, gap: 8,
@@ -928,6 +950,7 @@ const makeStyles = (palette: Palette) => StyleSheet.create({
   },
   unitsLabel: { fontSize: 16, fontWeight: '600', color: palette.muted, flexShrink: 0, maxWidth: 80 },
   cardTitle: { fontSize: 15, fontWeight: '600', color: palette.ink },
+  formulaHint: { fontSize: 12, color: palette.muted, marginBottom: 4 },
   matRow: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
     backgroundColor: palette.paper, borderRadius: 10, padding: 10,
@@ -977,42 +1000,36 @@ const makeStyles = (palette: Palette) => StyleSheet.create({
   toastText: { color: palette.white, fontSize: 15, fontWeight: '600' },
 
   // Modals
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
-  modalCard: {
-    backgroundColor: palette.card, borderTopLeftRadius: 22, borderTopRightRadius: 22,
-    padding: 24, paddingBottom: 40, maxHeight: '88%',
-  },
   modalTitle: { fontSize: 18, fontWeight: '700', color: palette.ink, marginBottom: 16 },
-  modalList: { maxHeight: 320, marginBottom: 4 },
   modalActions: { flexDirection: 'row', gap: 10, marginTop: 16 },
-  cancelBtn: {
-    flex: 1, height: 50, borderRadius: 12, backgroundColor: palette.paper,
-    borderWidth: 1, borderColor: palette.line, alignItems: 'center', justifyContent: 'center',
-  },
-  cancelText: { fontSize: 15, color: palette.muted, fontWeight: '600' },
-  confirmBtn: {
-    flex: 1, height: 50, borderRadius: 12, backgroundColor: palette.moss,
-    alignItems: 'center', justifyContent: 'center',
-  },
-  confirmText: { fontSize: 15, color: palette.white, fontWeight: '700' },
+  backLink: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
+  backLinkText: { fontSize: 15, color: palette.moss, fontWeight: '600' },
 
-  // Action sheet rows
+  // Action sheet rows (already flat — an overflow menu, not a repeated list)
   actionRow: {
     flexDirection: 'row', alignItems: 'center', gap: 12,
     paddingVertical: 14, borderBottomWidth: 1, borderColor: palette.line,
   },
   actionLabel: { fontSize: 16, color: palette.ink },
 
-  // History / Picker rows
+  // History / Picker rows — one shared card wraps the whole list
+  // (historyList), rows inside are flat and divided by rowDivider, not
+  // individually bordered.
+  historyScroll: { maxHeight: 360 },
+  historyList: {
+    backgroundColor: palette.paper, borderRadius: 12,
+    borderWidth: 1, borderColor: palette.line, overflow: 'hidden',
+  },
+  rowDivider: { height: StyleSheet.hairlineWidth, backgroundColor: palette.line },
   historyRow: {
     flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between',
-    paddingVertical: 10, borderBottomWidth: 1, borderColor: palette.line, gap: 8,
+    padding: 12, gap: 8,
   },
   historyProduct: { fontSize: 14, fontWeight: '600', color: palette.ink },
   historyDate: { fontSize: 12, fontWeight: '600', color: palette.muted },
   historyUnits: { fontSize: 14, fontWeight: '700', color: palette.moss },
   historyMats: { fontSize: 12, color: palette.muted, marginTop: 2 },
-  pickerRow: { paddingVertical: 12, borderBottomWidth: 1, borderColor: palette.line },
+  pickerRow: { padding: 12 },
   pickerName: { fontSize: 15, color: palette.ink, fontWeight: '500' },
   pickerLevel: { fontSize: 12, color: palette.muted, marginTop: 2 },
 });

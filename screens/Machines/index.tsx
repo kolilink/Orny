@@ -1,9 +1,9 @@
 import React, { useCallback, useState } from 'react';
-import { FlatList, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { FlatList, StyleSheet, TextInput, TouchableOpacity, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
-import { AppModal, Button, Card, ConfirmDialog } from '../../components/ui';
+import { AppModal, Button, Card, ConfirmDialog, Text } from '../../components/ui';
 import { radius, spacing, typography, Palette } from '../../theme/tokens';
 import { useTheme } from '../../theme/ThemeContext';
 import {
@@ -163,7 +163,7 @@ export default function MachinesScreen() {
           <View style={styles.empty}>
             <Ionicons name="hardware-chip-outline" size={40} color={palette.line} />
             <Text style={styles.emptyText}>Aucune machine enregistrée</Text>
-            <Text style={styles.emptyHint}>Ajoutez vos machines pour qu'Orny AI puisse voir leur capacité et leur statut.</Text>
+            <Text style={styles.emptyHint}>Ajoutez vos machines pour que Claude puisse voir leur capacité et leur statut.</Text>
           </View>
         }
       />

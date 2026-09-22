@@ -1,6 +1,6 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
-// Speech-to-text for Orny AI's voice mode. Transcribes via Groq's Whisper
+// Speech-to-text for Claude's voice mode. Transcribes via Groq's Whisper
 // endpoint (whisper-large-v3) — strong on French/Portuguese/Spanish/English,
 // the four languages this feature actually needs (unlike Guinea's local
 // languages — Susu, Malinké, Pular — which Whisper handles poorly; that gap
@@ -27,7 +27,7 @@ Deno.serve(async (req) => {
   const supabaseUrl = Deno.env.get('SUPABASE_URL')!
   const anonKey = Deno.env.get('SUPABASE_ANON_KEY')!
   const groqKey = Deno.env.get('GROQ_API_KEY')
-  if (!groqKey) return json({ error: "Orny AI n'est pas encore configuré (clé Groq manquante)." }, 500)
+  if (!groqKey) return json({ error: "Claude n'est pas encore configuré (clé Groq manquante)." }, 500)
 
   const callerClient = createClient(supabaseUrl, anonKey, {
     global: { headers: { Authorization: `Bearer ${jwt}` } },

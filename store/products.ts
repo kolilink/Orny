@@ -20,24 +20,27 @@ export const addProduct = async (name: string, unit: string): Promise<Product> =
   const factoryId = getFactoryId();
   const id = generateId();
   const now = new Date().toISOString();
-  const product: Product = { id, factory_id: factoryId, name, unit, lastRecipe: [], createdAt: now };
+  const product: Product = { id, factory_id: factoryId, name, unit, recipePerUnit: [], createdAt: now };
   const products = await getProducts();
   await setCache([...products, product]);
 
   // Create a stock item for this product's finished-goods tracking (id = product.id)
   await addStockItem({ id, name, unit, currentLevel: 0, alertThreshold: 0 });
 
-  const row = { id, factory_id: factoryId, name, unit, last_recipe: [], created_at: now };
-  supabase.from('production_products').insert(row).then(({ error }) => {
-    if (error) enqueueIfNetworkError(error, { table: 'production_products', op: 'insert', values: row, label: 'produit' });
-  });
+  const row = { id, factory_id: factoryId, name, unit, recipe_per_unit: [], created_at: now };
+  // Awaited — a fire-and-forget insert here races a caller's immediate
+  // post-add reload/re-sync and can lose the new product from view even
+  // though it lands fine in Postgres (same bug reproduced and fixed for
+  // store/investors.ts's addInvestor).
+  const { error } = await supabase.from('production_products').insert(row);
+  if (error) await enqueueIfNetworkError(error, { table: 'production_products', op: 'insert', values: row, label: 'produit' });
 
   return product;
 };
 
 export const updateProduct = async (
   id: string,
-  updates: Partial<Pick<Product, 'name' | 'unit' | 'lastRecipe'>>
+  updates: Partial<Pick<Product, 'name' | 'unit' | 'recipePerUnit'>>
 ): Promise<void> => {
   const factoryId = getFactoryId();
   const products = await getProducts();
@@ -47,22 +50,18 @@ export const updateProduct = async (
   const row = {
     ...(updates.name !== undefined ? { name: updates.name } : {}),
     ...(updates.unit !== undefined ? { unit: updates.unit } : {}),
-    ...(updates.lastRecipe !== undefined ? { last_recipe: updates.lastRecipe } : {}),
+    ...(updates.recipePerUnit !== undefined ? { recipe_per_unit: updates.recipePerUnit } : {}),
   };
-  supabase.from('production_products').update(row).eq('id', id).eq('factory_id', factoryId)
-    .then(({ error }) => {
-      if (error) enqueueIfNetworkError(error, { table: 'production_products', op: 'update', values: row, match: { id, factory_id: factoryId }, label: 'produit (modif.)' });
-    });
+  const { error } = await supabase.from('production_products').update(row).eq('id', id).eq('factory_id', factoryId);
+  if (error) await enqueueIfNetworkError(error, { table: 'production_products', op: 'update', values: row, match: { id, factory_id: factoryId }, label: 'produit (modif.)' });
 };
 
 export const deleteProduct = async (id: string): Promise<void> => {
   const factoryId = getFactoryId();
   const products = await getProducts();
   await setCache(products.filter((p) => p.id !== id));
-  supabase.from('production_products').delete().eq('id', id).eq('factory_id', factoryId)
-    .then(({ error }) => {
-      if (error) enqueueIfNetworkError(error, { table: 'production_products', op: 'delete', match: { id, factory_id: factoryId }, label: 'produit (suppr.)' });
-    });
+  const { error } = await supabase.from('production_products').delete().eq('id', id).eq('factory_id', factoryId);
+  if (error) await enqueueIfNetworkError(error, { table: 'production_products', op: 'delete', match: { id, factory_id: factoryId }, label: 'produit (suppr.)' });
 };
 
 export const syncProductsFromSupabase = async (): Promise<void> => {
@@ -78,7 +77,7 @@ export const syncProductsFromSupabase = async (): Promise<void> => {
     factory_id: r.factory_id,
     name: r.name,
     unit: r.unit,
-    lastRecipe: r.last_recipe ?? [],
+    recipePerUnit: r.recipe_per_unit ?? [],
     createdAt: r.created_at,
   }));
   await setCache(products);

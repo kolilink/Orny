@@ -58,9 +58,12 @@ export const addDistribution = async (
     notes: newDist.notes ?? null,
     created_at: now,
   };
-  supabase.from('investor_distributions').insert(row).then(({ error }) => {
-    if (error) enqueueIfNetworkError(error, { table: 'investor_distributions', op: 'insert', values: row, label: 'distribution investisseur' });
-  });
+  // Awaited — see the identical note in store/investors.ts's addInvestor:
+  // a fire-and-forget insert here races the caller's immediate post-add
+  // re-sync and can lose the new distribution from view even though it
+  // lands fine in Postgres.
+  const { error } = await supabase.from('investor_distributions').insert(row);
+  if (error) await enqueueIfNetworkError(error, { table: 'investor_distributions', op: 'insert', values: row, label: 'distribution investisseur' });
 
   return newDist;
 };

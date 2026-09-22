@@ -58,9 +58,12 @@ export const addInvestmentEntry = async (
     notes: newEntry.notes ?? null,
     created_at: now,
   };
-  supabase.from('investment_entries').insert(row).then(({ error }) => {
-    if (error) enqueueIfNetworkError(error, { table: 'investment_entries', op: 'insert', values: row, label: 'versement investisseur' });
-  });
+  // Awaited — see the identical note in store/investors.ts's addInvestor:
+  // a fire-and-forget insert here races the caller's immediate post-add
+  // re-sync and can lose the new entry from view even though it lands fine
+  // in Postgres.
+  const { error } = await supabase.from('investment_entries').insert(row);
+  if (error) await enqueueIfNetworkError(error, { table: 'investment_entries', op: 'insert', values: row, label: 'versement investisseur' });
 
   return newEntry;
 };
@@ -76,10 +79,8 @@ export const updateInvestmentEntry = async (
   if (updates.date !== undefined) row.date = updates.date;
   if (updates.notes !== undefined) row.notes = updates.notes ?? null;
   const factoryId = getFactoryId();
-  supabase.from('investment_entries').update(row).eq('id', id).eq('factory_id', factoryId)
-    .then(({ error }) => {
-      if (error) enqueueIfNetworkError(error, { table: 'investment_entries', op: 'update', values: row, match: { id, factory_id: factoryId }, label: 'versement investisseur (modif.)' });
-    });
+  const { error } = await supabase.from('investment_entries').update(row).eq('id', id).eq('factory_id', factoryId);
+  if (error) await enqueueIfNetworkError(error, { table: 'investment_entries', op: 'update', values: row, match: { id, factory_id: factoryId }, label: 'versement investisseur (modif.)' });
 };
 
 export const deleteInvestmentEntry = async (id: string): Promise<void> => {

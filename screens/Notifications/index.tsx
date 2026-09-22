@@ -1,9 +1,9 @@
 import React, { useCallback, useState } from 'react';
-import { FlatList, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { FlatList, StyleSheet, TouchableOpacity, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
-import { Card, ConfirmDialog } from '../../components/ui';
+import { Card, ConfirmDialog, Text } from '../../components/ui';
 import { radius, spacing, typography, Palette } from '../../theme/tokens';
 import { useTheme } from '../../theme/ThemeContext';
 import { clearNotificationLog, getNotificationLog, LoggedNotification, NotificationKind } from '../../utils/notificationLog';

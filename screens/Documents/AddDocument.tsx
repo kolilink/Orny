@@ -1,8 +1,6 @@
 import React, { useState } from 'react';
-import {
-  View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity,
-  KeyboardAvoidingView, Platform, Alert,
-} from 'react-native';
+import { View, StyleSheet, ScrollView, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, Alert } from 'react-native';
+import { Text } from '../../components/ui';
 import { useNavigation } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
@@ -188,7 +186,6 @@ export default function AddDocumentScreen() {
         <Text style={styles.label}>Titre *</Text>
         <TextInput
           style={styles.input}
-          placeholder="Ex: Contrat fournisseur emballages"
           value={title}
           onChangeText={setTitle}
         />
@@ -258,7 +255,7 @@ export default function AddDocumentScreen() {
         <Text style={styles.label}>Tags (séparés par des virgules)</Text>
         <TextInput
           style={styles.input}
-          placeholder="Ex: chine, emballages, 2026"
+          placeholder="chine, emballages"
           value={tags}
           onChangeText={setTags}
         />
