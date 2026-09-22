@@ -10,7 +10,7 @@ import { getPurchases, recordPurchasePayment, deletePurchase } from '../../store
 import { formatGNF } from '../../utils/format';
 import { Palette } from '../../theme/tokens';
 import { useTheme } from '../../theme/ThemeContext';
-import { AppModal, Button, ConfirmDialog, MoneyInput, PhoneInput, Text } from '../../components/ui';
+import { AppModal, Button, ConfirmDialog, MoneyInput, PhoneInput, switchModal, Text } from '../../components/ui';
 import MonthGroup from './MonthGroup';
 import PurchaseFormModal from './PurchaseFormModal';
 
@@ -167,11 +167,11 @@ export default function SupplierDetailScreen() {
 
       {/* Overflow menu: Modifier / Supprimer */}
       <AppModal visible={menuVisible} onClose={() => setMenuVisible(false)} showCloseButton={false}>
-        <TouchableOpacity style={styles.menuRow} onPress={() => { setMenuVisible(false); openEdit(); }}>
+        <TouchableOpacity style={styles.menuRow} onPress={() => switchModal(() => setMenuVisible(false), openEdit)}>
           <Ionicons name="pencil-outline" size={18} color={palette.ink} />
           <Text style={styles.menuRowText}>Modifier</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={styles.menuRow} onPress={() => { setMenuVisible(false); setDeleteSupplierConfirm(true); }}>
+        <TouchableOpacity style={styles.menuRow} onPress={() => switchModal(() => setMenuVisible(false), () => setDeleteSupplierConfirm(true))}>
           <Ionicons name="trash-outline" size={18} color={palette.critical} />
           <Text style={[styles.menuRowText, { color: palette.critical }]}>Supprimer</Text>
         </TouchableOpacity>

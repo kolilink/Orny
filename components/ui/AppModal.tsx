@@ -244,6 +244,24 @@ export function AppModal({
   );
 }
 
+// AppModal keeps its native <Modal> mounted (visible=true) for a ~180ms
+// close animation after its own `visible` prop flips false — closing one
+// AppModal and opening a different one in the same handler briefly stacks
+// two real native modal windows on top of each other, which is a genuine
+// freeze risk (iOS: "Attempt to present ... while a presentation is in
+// progress"), not just a visual glitch. Found independently in
+// InvestorDetail.tsx and SupplierDetail.tsx — the second one confirmed the
+// first one had literally been copy-pasted as a template ("mirrors
+// SupplierDetail's shape exactly"), so this is a real, repeatable trap
+// worth a shared helper rather than a delay hand-rolled per screen. Any
+// handler that closes one AppModal/ConfirmDialog and opens a *different*
+// one should use this instead of two bare state setters back to back.
+export const MODAL_CLOSE_MS = 220;
+export function switchModal(close: () => void, open: () => void) {
+  close();
+  setTimeout(open, MODAL_CLOSE_MS);
+}
+
 const makeStyles = (palette: Palette) => StyleSheet.create({
   root: { flex: 1 },
   backdrop: { backgroundColor: palette.overlay },

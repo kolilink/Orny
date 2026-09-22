@@ -19,7 +19,7 @@ import { toDateString } from '../../utils/dates';
 import DatePickerField from '../../components/DatePickerField';
 import { Palette } from '../../theme/tokens';
 import { useTheme } from '../../theme/ThemeContext';
-import { AppModal, Button, ConfirmDialog, MoneyInput, toast, Text } from '../../components/ui';
+import { AppModal, Button, ConfirmDialog, MoneyInput, switchModal, toast, Text } from '../../components/ui';
 
 // ── Edit rate-limiting: 3 edits per 24h rolling window from first edit ──────
 const MAX_EDITS = 3;
@@ -52,6 +52,15 @@ async function recordEdit(entryId: string): Promise<number> {
   await AsyncStorage.setItem(editKey(entryId), JSON.stringify(updated));
   return Math.max(0, MAX_EDITS - updated.length);
 }
+
+// This screen has 9 separate AppModal/ConfirmDialog instances and several
+// handlers that close one and directly open another (the overflow menu →
+// edit/delete, the movement row menu → history/edit/delete) — each one
+// exposed to the AppModal-stacking freeze risk (see switchModal's own
+// comment in components/ui/AppModal.tsx). Fixed by routing every such
+// transition through switchModal instead of merging all 9 into one shared
+// view-swap component — smaller, more contained change for a screen this
+// dense with modals.
 
 type InvestorForm = { name: string; share: string; notes: string };
 type EntryForm = { amount: string; date: string; notes: string };
@@ -345,11 +354,11 @@ export default function InvestorDetailScreen() {
 
       {/* Overflow menu: Modifier / Supprimer */}
       <AppModal visible={menuVisible} onClose={() => setMenuVisible(false)} showCloseButton={false}>
-        <TouchableOpacity style={styles.menuRow} onPress={() => { setMenuVisible(false); openEdit(); }}>
+        <TouchableOpacity style={styles.menuRow} onPress={() => switchModal(() => setMenuVisible(false), openEdit)}>
           <Ionicons name="pencil-outline" size={18} color={palette.ink} />
           <Text style={styles.menuRowText}>Modifier</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={styles.menuRow} onPress={() => { setMenuVisible(false); setDeleteInvestorConfirm(true); }}>
+        <TouchableOpacity style={styles.menuRow} onPress={() => switchModal(() => setMenuVisible(false), () => setDeleteInvestorConfirm(true))}>
           <Ionicons name="trash-outline" size={18} color={palette.critical} />
           <Text style={[styles.menuRowText, { color: palette.critical }]}>Supprimer</Text>
         </TouchableOpacity>
@@ -428,11 +437,11 @@ export default function InvestorDetailScreen() {
       <AppModal visible={!!entryActionsTarget} onClose={() => setEntryActionsTarget(null)} showCloseButton={false}>
         {entryActionsTarget?.kind === 'entry' && (
           <>
-            <TouchableOpacity style={styles.menuRow} onPress={() => { const e = entryActionsTarget.item; setEntryActionsTarget(null); openHistory(e); }}>
+            <TouchableOpacity style={styles.menuRow} onPress={() => { const e = entryActionsTarget.item; switchModal(() => setEntryActionsTarget(null), () => openHistory(e)); }}>
               <Ionicons name="time-outline" size={18} color={palette.ink} />
               <Text style={styles.menuRowText}>Historique</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.menuRow} onPress={() => { const e = entryActionsTarget.item; setEntryActionsTarget(null); openEditEntry(e); }}>
+            <TouchableOpacity style={styles.menuRow} onPress={() => { const e = entryActionsTarget.item; switchModal(() => setEntryActionsTarget(null), () => openEditEntry(e)); }}>
               <Ionicons name="pencil-outline" size={18} color={palette.ink} />
               <Text style={styles.menuRowText}>Modifier</Text>
             </TouchableOpacity>
@@ -442,9 +451,14 @@ export default function InvestorDetailScreen() {
           style={styles.menuRow}
           onPress={() => {
             if (!entryActionsTarget) return;
-            if (entryActionsTarget.kind === 'entry') setDeleteEntryTarget(entryActionsTarget.item);
-            else setDeleteDistTarget(entryActionsTarget.item);
-            setEntryActionsTarget(null);
+            const target = entryActionsTarget;
+            switchModal(
+              () => setEntryActionsTarget(null),
+              () => {
+                if (target.kind === 'entry') setDeleteEntryTarget(target.item);
+                else setDeleteDistTarget(target.item);
+              }
+            );
           }}
         >
           <Ionicons name="trash-outline" size={18} color={palette.critical} />

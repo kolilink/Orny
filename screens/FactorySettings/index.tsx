@@ -9,7 +9,7 @@ import { buildInviteLink } from '../../lib/inviteLink';
 import { Palette } from '../../theme/tokens';
 import { useTheme } from '../../theme/ThemeContext';
 import { supabase } from '../../lib/supabase';
-import { AppModal, Button, ConfirmDialog, AnimatedProgressBar, Text } from '../../components/ui';
+import { AppModal, Button, ConfirmDialog, AnimatedProgressBar, switchModal, Text } from '../../components/ui';
 
 type ReconciliationFinding = {
   severity: 'critical' | 'warning';
@@ -428,7 +428,7 @@ export default function FactorySettingsScreen() {
         ))}
         <TouchableOpacity
           style={[styles.roleBtn, { borderColor: palette.critical, marginTop: 8 }]}
-          onPress={() => { setMemberModal(false); setRemoveConfirmModal(true); }}
+          onPress={() => switchModal(() => setMemberModal(false), () => setRemoveConfirmModal(true))}
         >
           <Text style={[styles.roleBtnText, { color: palette.critical }]}>Retirer de l'usine</Text>
         </TouchableOpacity>

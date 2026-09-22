@@ -1,4 +1,4 @@
-export { AppModal } from './AppModal';
+export { AppModal, switchModal } from './AppModal';
 export { ConfirmDialog } from './ConfirmDialog';
 export { ToastProvider, toast } from './Toast';
 export { Button } from './Button';

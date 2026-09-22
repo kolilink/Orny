@@ -3,7 +3,7 @@ import { FlatList, StyleSheet, TextInput, TouchableOpacity, View } from 'react-n
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
-import { AppModal, Button, Card, ConfirmDialog, Text } from '../../components/ui';
+import { AppModal, Button, Card, ConfirmDialog, switchModal, Text } from '../../components/ui';
 import { radius, spacing, typography, Palette } from '../../theme/tokens';
 import { useTheme } from '../../theme/ThemeContext';
 import {
@@ -213,7 +213,7 @@ export default function MachinesScreen() {
         {editing && (
           <TouchableOpacity
             style={styles.deleteRow}
-            onPress={() => { setShowForm(false); setConfirmDelete(editing); }}
+            onPress={() => switchModal(() => setShowForm(false), () => setConfirmDelete(editing))}
           >
             <Text style={styles.deleteText}>Supprimer cette machine</Text>
           </TouchableOpacity>
