@@ -4,6 +4,7 @@ import { Text } from '../../components/ui';
 import { RouteProp, useRoute } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import * as FileSystem from 'expo-file-system/legacy';
+import * as WebBrowser from 'expo-web-browser';
 import { RootStackParamList } from '../../types';
 import { getSignedDocumentUrl } from '../../store/documents';
 import { formatDate } from '../../utils/format';
@@ -54,6 +55,18 @@ export default function DocumentDetailScreen() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // A real https URL, resolved separately from displayUri above (which
+  // prefers the local file:// copy for a fast inline <Image> preview).
+  // WebBrowser (below) can only open a real URL, never a local file:// one,
+  // so opening always needs this — freshly signed, so it works whether this
+  // is the device that uploaded the file or a teammate's.
+  const [viewUrl, setViewUrl] = useState<string | null>(null);
+  useEffect(() => {
+    if (isPlaceholder || !doc.storagePath) return;
+    getSignedDocumentUrl(doc.storagePath).then(setViewUrl);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const handleOpenFile = async () => {
     if (isPlaceholder) {
       Alert.alert('Aperçu', 'Ce document est un exemple. Ajoutez un vrai fichier pour l\'ouvrir.');
@@ -74,7 +87,16 @@ export default function DocumentDetailScreen() {
         } else {
           (window as any).open(uri, '_blank');
         }
+      } else if (viewUrl) {
+        // Opens inside an in-app browser sheet (Safari View Controller on
+        // iOS, Custom Tabs on Android) — the merchant never actually leaves
+        // this app to view a document, unlike Linking.openURL below, which
+        // hands off to whatever separate app/browser the OS picks.
+        await WebBrowser.openBrowserAsync(viewUrl);
       } else {
+        // No uploaded copy to view remotely (upload failed, or still
+        // resolving) — fall back to the old hand-off behavior rather than
+        // giving WebBrowser a local file:// URI it can't open at all.
         await Linking.openURL(displayUri);
       }
     } catch {

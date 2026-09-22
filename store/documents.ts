@@ -1,3 +1,4 @@
+import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system/legacy';
 import { decode } from 'base64-arraybuffer';
@@ -65,32 +66,52 @@ export const addDocument = async (
 
   if (!sourceUri.startsWith('placeholder:')) {
     const ext = doc.fileType === 'pdf' ? 'pdf' : 'jpg';
+    const contentType = doc.fileType === 'pdf' ? 'application/pdf' : 'image/jpeg';
+    const path = `${factoryId}/${id}.${ext}`;
 
-    // Local copy — instant preview on this device without a network round trip.
-    try {
-      const dirInfo = await FileSystem.getInfoAsync(DOCS_DIR);
-      if (!dirInfo.exists) {
-        await FileSystem.makeDirectoryAsync(DOCS_DIR, { intermediates: true });
-      }
-      const destUri = DOCS_DIR + id + '.' + ext;
-      await FileSystem.copyAsync({ from: sourceUri, to: destUri });
-      finalUri = destUri;
-    } catch {
+    if (Platform.OS === 'web') {
+      // expo-file-system/legacy is a no-op shim on web (no real filesystem to
+      // copy into or read a base64 string from — every method call above
+      // would throw) — sourceUri here is always a data: URL from a <input
+      // type=file> FileReader read (see AddDocument.tsx's webPickFromDisk),
+      // which fetch() can turn into a real Blob directly, no FileSystem
+      // needed at all. Without this branch, every document added from the
+      // PWA silently kept only its metadata row — the file itself was never
+      // actually uploaded, so it vanished the moment this browser's local
+      // state was cleared and never existed for any other device to see.
       finalUri = sourceUri;
-    }
+      try {
+        const blob = await (await fetch(sourceUri)).blob();
+        const { error } = await supabase.storage.from(BUCKET).upload(path, blob, { contentType });
+        if (error) throw error;
+        storagePath = path;
+      } catch (e) {
+        console.warn('document storage upload error (web)', e);
+      }
+    } else {
+      // Local copy — instant preview on this device without a network round trip.
+      try {
+        const dirInfo = await FileSystem.getInfoAsync(DOCS_DIR);
+        if (!dirInfo.exists) {
+          await FileSystem.makeDirectoryAsync(DOCS_DIR, { intermediates: true });
+        }
+        const destUri = DOCS_DIR + id + '.' + ext;
+        await FileSystem.copyAsync({ from: sourceUri, to: destUri });
+        finalUri = destUri;
+      } catch {
+        finalUri = sourceUri;
+      }
 
-    // Real upload — this is what makes the file recoverable if this device
-    // is lost/reinstalled, and visible to every other member of the factory.
-    try {
-      const base64 = await FileSystem.readAsStringAsync(sourceUri, { encoding: 'base64' });
-      const path = `${factoryId}/${id}.${ext}`;
-      const { error } = await supabase.storage.from(BUCKET).upload(path, decode(base64), {
-        contentType: doc.fileType === 'pdf' ? 'application/pdf' : 'image/jpeg',
-      });
-      if (error) throw error;
-      storagePath = path;
-    } catch (e) {
-      console.warn('document storage upload error', e);
+      // Real upload — this is what makes the file recoverable if this device
+      // is lost/reinstalled, and visible to every other member of the factory.
+      try {
+        const base64 = await FileSystem.readAsStringAsync(sourceUri, { encoding: 'base64' });
+        const { error } = await supabase.storage.from(BUCKET).upload(path, decode(base64), { contentType });
+        if (error) throw error;
+        storagePath = path;
+      } catch (e) {
+        console.warn('document storage upload error', e);
+      }
     }
   }
 

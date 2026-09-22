@@ -370,49 +370,56 @@ export default function VentesScreen() {
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <ScrollView contentContainerStyle={styles.form} keyboardShouldPersistTaps="handled">
 
-          {/* One combined grid — no Unités individuelles/Lots toggle to tap
-              through first. A lot is told apart from an individual unit by
-              a tinted green background on its own card, not by which tab
-              you're currently on. Tap adds directly to the cart below. */}
+          {/* Two fixed columns, not one wrapping grid — simple products
+              (Saveurs) always on the left, lots (green-tinted) always on
+              the right, so the split reads at a glance instead of only
+              being told apart by a tinted card color you notice mid-scan.
+              A lot is still told apart from a simple unit by that same
+              tinted background, on top of the column it's in. Tap adds
+              directly to the cart below. */}
           {flavors.length === 0 && bulks.length === 0 ? (
             <Text style={styles.emptyHint}>Aucun produit. Allez dans Menu &gt; Saveurs ou Lots pour en créer.</Text>
           ) : (
-            <View style={styles.productsRow}>
-              {flavors.map((f, i) => {
-                const stockItem = stock.find((s) => s.id === f.id);
-                const level = stockFor(f.id);
-                const severity = stockSeverity(level, stockItem?.alertThreshold ?? 0);
-                return (
+            <View style={styles.productsGrid}>
+              <View style={styles.productsColumn}>
+                {flavors.map((f, i) => {
+                  const stockItem = stock.find((s) => s.id === f.id);
+                  const level = stockFor(f.id);
+                  const severity = stockSeverity(level, stockItem?.alertThreshold ?? 0);
+                  return (
+                    <ProductCard
+                      key={f.id}
+                      mode="flavor"
+                      id={f.id}
+                      label={f.label}
+                      subtitle={formatNumber(f.defaultPrice)}
+                      price={f.defaultPrice}
+                      badgeCount={cartQtyFor('flavor', f.id)}
+                      index={i}
+                      stockLine={{ label: `${level} en stock`, severity }}
+                      onTap={handleTapProduct}
+                      styles={styles}
+                    />
+                  );
+                })}
+              </View>
+              <View style={styles.productsColumn}>
+                {bulks.map((b, i) => (
                   <ProductCard
-                    key={f.id}
-                    mode="flavor"
-                    id={f.id}
-                    label={f.label}
-                    subtitle={formatNumber(f.defaultPrice)}
-                    price={f.defaultPrice}
-                    badgeCount={cartQtyFor('flavor', f.id)}
-                    index={i}
-                    stockLine={{ label: `${level} en stock`, severity }}
+                    key={b.id}
+                    mode="bulk"
+                    id={b.id}
+                    label={b.name}
+                    subtitle={`${b.bagCount} pcs · ${formatNumber(b.unitPrice)}`}
+                    price={b.unitPrice}
+                    badgeCount={cartQtyFor('bulk', b.id)}
+                    index={flavors.length + i}
+                    tinted
                     onTap={handleTapProduct}
                     styles={styles}
                   />
-                );
-              })}
-              {bulks.map((b, i) => (
-                <ProductCard
-                  key={b.id}
-                  mode="bulk"
-                  id={b.id}
-                  label={b.name}
-                  subtitle={`${b.bagCount} pcs · ${formatNumber(b.unitPrice)}`}
-                  price={b.unitPrice}
-                  badgeCount={cartQtyFor('bulk', b.id)}
-                  index={flavors.length + i}
-                  tinted
-                  onTap={handleTapProduct}
-                  styles={styles}
-                />
-              ))}
+                ))}
+              </View>
             </View>
           )}
 
@@ -532,14 +539,15 @@ const makeStyles = (palette: Palette) => StyleSheet.create({
   form: { padding: 16, paddingBottom: 40, gap: 6 },
   label: { fontSize: 14, fontWeight: '600', color: palette.ink, marginTop: 10, marginBottom: 4 },
   emptyHint: { fontSize: 13, color: palette.muted, fontStyle: 'italic', marginTop: 10 },
-  productsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 10 },
+  // Two side-by-side columns (see the comment above their JSX) — each
+  // column is a real flex:1 box, so productCardSlot below just fills 100%
+  // of whichever column it's in, rather than each card carrying its own
+  // percentage width the way a single wrapping row used to require.
+  productsGrid: { flexDirection: 'row', gap: 8, marginTop: 10 },
+  productsColumn: { flex: 1, gap: 8 },
   // Tapping this card adds it to the cart directly — no "selected" state to
   // track, just an optional badge showing how many are already in the cart.
-  // width lives on the FadeSlideIn wrapper (a sibling-sized grid slot), not
-  // here — this card fills 100% of that slot. Putting a percentage width on
-  // both would compound (48% of an already-48%-wide box), collapsing the
-  // grid to one narrow column.
-  productCardSlot: { width: '48%' },
+  productCardSlot: { width: '100%' },
   productCard: {
     position: 'relative', width: '100%', backgroundColor: palette.card, borderRadius: 12, borderWidth: 1,
     borderColor: palette.line, padding: 14,

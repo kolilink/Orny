@@ -242,7 +242,7 @@ export default function StockScreen() {
           <Text style={styles.editLabel}>Nom de l'article *</Text>
           <TextInput
             style={styles.editInput}
-            placeholder="Ex: Shampoo, Sel, Emballages…"
+            placeholder="Ex: Pommes de terre, Huile, Sachets d'emballage…"
             value={newItemForm.name}
             onChangeText={(v) => setNewItemForm((f) => ({ ...f, name: v }))}
             autoFocus
