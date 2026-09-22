@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useLayoutEffect } from 'react';
-import { View, StyleSheet, FlatList, TouchableOpacity, TextInput, ScrollView } from 'react-native';
+import { View, StyleSheet, FlatList, TouchableOpacity, TextInput, ScrollView, Alert } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
@@ -92,6 +92,11 @@ export default function InvestorsScreen() {
       await addInvestor({ name: form.name.trim(), amountInvested: initialAmount, sharePercentage: 0, notes: '' });
       await load();
       setShowAddModal(false);
+    } catch (e: any) {
+      // Without this, a real (non-network) rejection — e.g. an RLS denial —
+      // used to be swallowed entirely inside addInvestor: the modal stayed
+      // open with no explanation, which read as "the button doesn't work."
+      Alert.alert('Erreur', `Impossible d'ajouter l'investisseur. ${e?.message ?? ''}`.trim());
     } finally {
       setSaving(false);
     }

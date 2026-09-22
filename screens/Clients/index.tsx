@@ -165,6 +165,11 @@ export default function ClientsScreen() {
       }
       await load();
       setShowModal(false);
+    } catch (e: any) {
+      // A real (non-network) rejection used to be swallowed entirely inside
+      // upsertClient/updateClient — the modal stayed open with no
+      // explanation, which read as "the button doesn't work."
+      Alert.alert('Erreur', `Impossible d'enregistrer le client. ${e?.message ?? ''}`.trim());
     } finally {
       setSaving(false);
     }

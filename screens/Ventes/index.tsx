@@ -322,6 +322,12 @@ export default function VentesScreen() {
       resetForm();
       hapticSuccess();
       Alert.alert('Succès', `${cartItems.length} produit${cartItems.length > 1 ? 's' : ''} enregistré${cartItems.length > 1 ? 's' : ''}.`);
+    } catch (e: any) {
+      // A real (non-network) rejection used to be swallowed entirely inside
+      // addSale/deductStock — the cart would silently fail to clear with no
+      // explanation. On this screen specifically that risk is real revenue,
+      // not just a missing UI item.
+      Alert.alert('Erreur', `Impossible d'enregistrer la vente. ${e?.message ?? ''}`.trim());
     } finally {
       setSaving(false);
     }

@@ -54,13 +54,33 @@ export function onQueueChange(cb: (count: number) => void): () => void {
 // network-shaped failure gets queued for retry — a real rejection (bad data,
 // an RLS/permission error) would never succeed no matter how many times it's
 // retried, and silently swallowing that would hide an actual bug.
+//
+// That second half of the contract was never actually implemented — this
+// used to just console.warn and return for a real error, exactly the
+// "silently swallowing" it explicitly warns against. In a production
+// TestFlight build nobody has a console attached to see that warning, so a
+// genuine RLS/permission/validation rejection was completely invisible: the
+// screen's own optimistic write already put the record in the local cache,
+// this function ate the real error, and the caller's `await` just resolved
+// normally — the UI proceeded exactly as if the save had actually reached
+// Postgres. Found live: "Ajouter" on a new investor appeared to do nothing,
+// and a direct `supabase db query --linked` confirmed no row had actually
+// been created — the insert was failing for a real reason, not a network
+// blip, and nothing anywhere surfaced that.
+//
+// Now re-throws the original error for a genuine (non-network) failure, so
+// a caller with its own try/catch can show the user what actually happened
+// instead of silently pretending success. Every one of this function's
+// current call sites already runs at the top level of a plain async
+// function (never inside a background retry loop), so throwing here only
+// ever propagates to whichever screen action just triggered the write.
 export async function enqueueIfNetworkError(
   error: unknown,
   item: Omit<QueueItem, 'id' | 'attempts' | 'createdAt'>
 ): Promise<void> {
   if (!isNetworkError(error)) {
     console.warn(`${item.label} sync error`, (error as any)?.message ?? error);
-    return;
+    throw error;
   }
   const queue = await getQueue();
   queue.push({ ...item, id: crypto.randomUUID(), attempts: 0, createdAt: Date.now() });
