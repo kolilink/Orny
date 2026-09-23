@@ -3,6 +3,7 @@ import { Supplier } from '../types';
 import { getFactoryId, generateId } from './context';
 import { supabase } from '../lib/supabase';
 import { enqueueIfNetworkError } from '../lib/syncQueue';
+import { withTimeout } from '../lib/withTimeout';
 
 function cacheKey() { return `${getFactoryId()}_suppliers`; }
 
@@ -17,11 +18,14 @@ const setCache = async (items: Supplier[]) => {
 
 export const syncSuppliersFromSupabase = async (): Promise<void> => {
   const factoryId = getFactoryId();
-  const { data, error } = await supabase
-    .from('suppliers')
-    .select('*')
-    .eq('factory_id', factoryId)
-    .order('name', { ascending: true });
+  let data, error;
+  try {
+    ({ data, error } = await withTimeout(
+      supabase.from('suppliers').select('*').eq('factory_id', factoryId).order('name', { ascending: true })
+    ));
+  } catch {
+    return;
+  }
   if (error || !data) return;
   const items: Supplier[] = data.map((r) => ({
     id: r.id,

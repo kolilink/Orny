@@ -3,6 +3,7 @@ import { BulkProduct } from '../types';
 import { getFactoryId, generateId } from './context';
 import { supabase } from '../lib/supabase';
 import { enqueueIfNetworkError } from '../lib/syncQueue';
+import { withTimeout } from '../lib/withTimeout';
 import { ensureStockItem } from './stock';
 
 function cacheKey() { return `${getFactoryId()}_bulks`; }
@@ -18,10 +19,12 @@ const setCache = async (bulks: BulkProduct[]) => {
 
 export const syncBulksFromSupabase = async (): Promise<void> => {
   const factoryId = getFactoryId();
-  const { data, error } = await supabase
-    .from('bulk_products')
-    .select('*')
-    .eq('factory_id', factoryId);
+  let data, error;
+  try {
+    ({ data, error } = await withTimeout(supabase.from('bulk_products').select('*').eq('factory_id', factoryId)));
+  } catch {
+    return;
+  }
   if (error || !data) return;
   const bulks: BulkProduct[] = data.map((r) => ({
     id: r.id,

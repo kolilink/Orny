@@ -9,6 +9,7 @@ import { buildInviteLink } from '../../lib/inviteLink';
 import { Palette } from '../../theme/tokens';
 import { useTheme } from '../../theme/ThemeContext';
 import { supabase } from '../../lib/supabase';
+import { withTimeout } from '../../lib/withTimeout';
 import { AppModal, Button, ConfirmDialog, AnimatedProgressBar, switchModal, Text } from '../../components/ui';
 
 type ReconciliationFinding = {
@@ -92,7 +93,22 @@ export default function FactorySettingsScreen() {
     setCheckRunning(true);
     setCheckError(null);
     setCheckFindings(null);
-    const { data, error } = await supabase.rpc('run_factory_reconciliation', { p_factory_id: membership.factoryId });
+    // withTimeout, 30s not the default 12s — a real run-every-check-across-
+    // the-factory's-whole-history query can legitimately take longer than a
+    // plain read, and cutting it off at 12s would flag a slow-but-working
+    // run as broken. Without any timeout at all, a genuinely hung request
+    // left this modal stuck on "en cours" forever with no way out except
+    // force-closing the app.
+    let data, error;
+    try {
+      ({ data, error } = await withTimeout(
+        supabase.rpc('run_factory_reconciliation', { p_factory_id: membership.factoryId }), 30000
+      ));
+    } catch {
+      setCheckError('Connexion trop lente. Réessayez dans un instant.');
+      setCheckRunning(false);
+      return;
+    }
     if (error) {
       setCheckError(error.message);
     } else {

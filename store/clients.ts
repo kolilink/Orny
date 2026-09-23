@@ -3,6 +3,7 @@ import { Client } from '../types';
 import { getFactoryId, generateId } from './context';
 import { supabase } from '../lib/supabase';
 import { enqueueIfNetworkError } from '../lib/syncQueue';
+import { withTimeout } from '../lib/withTimeout';
 
 function cacheKey() { return `${getFactoryId()}_clients`; }
 
@@ -22,10 +23,17 @@ const setCache = async (clients: Client[]) => {
 
 export const syncClientsFromSupabase = async (): Promise<void> => {
   const factoryId = getFactoryId();
-  const { data, error } = await supabase
-    .from('clients')
-    .select('*')
-    .eq('factory_id', factoryId);
+  // withTimeout — see its own comment for why: without it, a hung (not
+  // rejected) fetch leaves this promise never resolving, so the caller's
+  // loading state never clears and the cache fallback below never runs.
+  // A timeout is treated exactly like a real Supabase-returned error — this
+  // function's contract (best-effort, never throws) is unchanged.
+  let data, error;
+  try {
+    ({ data, error } = await withTimeout(supabase.from('clients').select('*').eq('factory_id', factoryId)));
+  } catch {
+    return;
+  }
   if (error || !data) return;
   const clients: Client[] = data.map((r) => ({
     id: r.id,

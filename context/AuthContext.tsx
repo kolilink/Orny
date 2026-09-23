@@ -7,6 +7,7 @@ import * as AppleAuthentication from 'expo-apple-authentication';
 import { makeRedirectUri } from 'expo-auth-session';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from '../lib/supabase';
+import { withTimeout } from '../lib/withTimeout';
 import { setCurrentFactory, clearCurrentFactory } from '../store/context';
 import { getInitialInviteCode, parseInviteCodeFromUrl } from '../lib/inviteLink';
 import { Palette } from '../theme/tokens';
@@ -276,7 +277,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     let cancelled = false;
 
     async function boot() {
-      const { data: { session: s } } = await supabase.auth.getSession();
+      // getSession() reads the locally-stored session first, but still
+      // refreshes over the network if the access token has expired — that
+      // refresh has no timeout of its own. Without withTimeout here, a
+      // stuck refresh (dead/captive wifi, not just true airplane mode)
+      // means boot() never resolves, loading never clears, and the whole
+      // app is stuck behind the cold-start gate forever — the exact bug
+      // class already found and fixed across every store's own sync
+      // function (see lib/withTimeout.ts), just at the one spot that gates
+      // literally everything else. A timeout here is treated the same as
+      // "no session" (send to the login screen, which the user can retry)
+      // rather than leaving them on an infinite spinner with no way out.
+      let s;
+      try {
+        ({ data: { session: s } } = await withTimeout(supabase.auth.getSession(), 10000));
+      } catch {
+        if (!cancelled) { setSession(null); setUser(null); setLoading(false); setMembershipLoading(false); }
+        return;
+      }
       if (cancelled) return;
 
       setSession(s);

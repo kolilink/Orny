@@ -3,6 +3,7 @@ import { Product } from '../types';
 import { getFactoryId, generateId } from './context';
 import { supabase } from '../lib/supabase';
 import { enqueueIfNetworkError } from '../lib/syncQueue';
+import { withTimeout } from '../lib/withTimeout';
 import { addStockItem } from './stock';
 
 function cacheKey() { return `${getFactoryId()}_products_v2`; }
@@ -66,11 +67,14 @@ export const deleteProduct = async (id: string): Promise<void> => {
 
 export const syncProductsFromSupabase = async (): Promise<void> => {
   const factoryId = getFactoryId();
-  const { data, error } = await supabase
-    .from('production_products')
-    .select('*')
-    .eq('factory_id', factoryId)
-    .order('created_at', { ascending: true });
+  let data, error;
+  try {
+    ({ data, error } = await withTimeout(
+      supabase.from('production_products').select('*').eq('factory_id', factoryId).order('created_at', { ascending: true })
+    ));
+  } catch {
+    return;
+  }
   if (error || !data) return;
   const products: Product[] = data.map((r) => ({
     id: r.id,

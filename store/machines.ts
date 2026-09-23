@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Machine, MachineStatus } from '../types';
 import { getFactoryId, generateId } from './context';
 import { supabase } from '../lib/supabase';
+import { withTimeout } from '../lib/withTimeout';
 
 function cacheKey() { return `${getFactoryId()}_machines`; }
 
@@ -16,11 +17,14 @@ const setCache = async (machines: Machine[]) => {
 
 export const syncMachinesFromSupabase = async (): Promise<void> => {
   const factoryId = getFactoryId();
-  const { data, error } = await supabase
-    .from('machines')
-    .select('*')
-    .eq('factory_id', factoryId)
-    .order('created_at', { ascending: true });
+  let data, error;
+  try {
+    ({ data, error } = await withTimeout(
+      supabase.from('machines').select('*').eq('factory_id', factoryId).order('created_at', { ascending: true })
+    ));
+  } catch {
+    return;
+  }
   if (error || !data) return;
   const machines: Machine[] = data.map((r) => ({
     id: r.id,

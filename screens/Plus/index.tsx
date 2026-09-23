@@ -8,6 +8,7 @@ import { RootStackParamList } from '../../types';
 import { useAuth, UserRole, FactoryMembership, ROLE_LABELS, makeRoleColors } from '../../context/AuthContext';
 import { getProfile, UserProfile } from '../../store/profile';
 import { supabase } from '../../lib/supabase';
+import { withTimeout } from '../../lib/withTimeout';
 import { toFrench } from '../../utils/errors';
 import { Palette } from '../../theme/tokens';
 import { useTheme } from '../../theme/ThemeContext';
@@ -113,7 +114,17 @@ export default function PlusScreen() {
   async function handleDeleteAccount() {
     setDeleting(true);
     setDeleteError(null);
-    const { error } = await supabase.rpc('delete_my_account');
+    // withTimeout — without it, a hung request (not a returned error) would
+    // leave `deleting` true forever with no way for the user to back out of
+    // this specific modal short of force-closing the app. See lib/withTimeout.ts.
+    let error;
+    try {
+      ({ error } = await withTimeout(supabase.rpc('delete_my_account')));
+    } catch {
+      setDeleting(false);
+      setDeleteError('Connexion trop lente. Vérifiez votre connexion et réessayez.');
+      return;
+    }
     if (error) {
       setDeleting(false);
       // Postgres RAISE EXCEPTION surfaces as SQLSTATE P0001 — that message

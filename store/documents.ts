@@ -5,6 +5,7 @@ import { decode } from 'base64-arraybuffer';
 import { BusinessDocument } from '../types';
 import { getFactoryId, generateId } from './context';
 import { supabase } from '../lib/supabase';
+import { withTimeout } from '../lib/withTimeout';
 
 function cacheKey() { return `${getFactoryId()}_documents`; }
 const DOCS_DIR = (FileSystem.documentDirectory ?? '') + 'sol_docs/';
@@ -30,11 +31,14 @@ const setCache = async (docs: BusinessDocument[]) => {
 
 export const syncDocumentsFromSupabase = async (): Promise<void> => {
   const factoryId = getFactoryId();
-  const { data, error } = await supabase
-    .from('business_documents')
-    .select('*')
-    .eq('factory_id', factoryId)
-    .order('created_at', { ascending: false });
+  let data, error;
+  try {
+    ({ data, error } = await withTimeout(
+      supabase.from('business_documents').select('*').eq('factory_id', factoryId).order('created_at', { ascending: false })
+    ));
+  } catch {
+    return;
+  }
   if (error || !data) return;
   // Only update metadata for docs that already exist locally (file URIs are device-local)
   const existing = await getDocuments();

@@ -5,6 +5,7 @@ import { Expense } from '../types';
 import { getFactoryId, generateId } from './context';
 import { supabase } from '../lib/supabase';
 import { enqueueIfNetworkError } from '../lib/syncQueue';
+import { withTimeout } from '../lib/withTimeout';
 
 function cacheKey() { return `${getFactoryId()}_expenses`; }
 function trashKey() { return `${getFactoryId()}_expenses_trash`; }
@@ -43,11 +44,14 @@ const setCache = async (items: Expense[]) => {
 
 export const syncExpensesFromSupabase = async (): Promise<void> => {
   const factoryId = getFactoryId();
-  const { data, error } = await supabase
-    .from('expenses')
-    .select('*')
-    .eq('factory_id', factoryId)
-    .order('date', { ascending: false });
+  let data, error;
+  try {
+    ({ data, error } = await withTimeout(
+      supabase.from('expenses').select('*').eq('factory_id', factoryId).order('date', { ascending: false })
+    ));
+  } catch {
+    return;
+  }
   if (error || !data) return;
   // photoUri is device-local (a file:// path from whichever device
   // uploaded it) — never overwritten from a server row, same posture as

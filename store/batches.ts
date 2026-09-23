@@ -3,6 +3,7 @@ import { Batch } from '../types';
 import { getFactoryId, generateId } from './context';
 import { supabase } from '../lib/supabase';
 import { enqueueIfNetworkError } from '../lib/syncQueue';
+import { withTimeout } from '../lib/withTimeout';
 import { toDateString } from '../utils/dates';
 
 function cacheKey() { return `${getFactoryId()}_batches_v2`; }
@@ -61,11 +62,17 @@ export const getTodayBatches = async (): Promise<Batch[]> => {
 
 export const syncBatchesFromSupabase = async (): Promise<void> => {
   const factoryId = getFactoryId();
-  const { data, error } = await supabase
-    .from('production_batches_v2')
-    .select('*')
-    .eq('factory_id', factoryId)
-    .order('created_at', { ascending: false });
+  // withTimeout — see lib/withTimeout.ts. Timeout treated exactly like a
+  // real Supabase-returned error; this function's contract (best-effort,
+  // never throws) is unchanged.
+  let data, error;
+  try {
+    ({ data, error } = await withTimeout(
+      supabase.from('production_batches_v2').select('*').eq('factory_id', factoryId).order('created_at', { ascending: false })
+    ));
+  } catch {
+    return;
+  }
   if (error || !data) return;
   const batches: Batch[] = data.map((r) => ({
     id: r.id,

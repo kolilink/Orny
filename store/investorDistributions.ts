@@ -3,6 +3,7 @@ import { InvestorDistribution } from '../types';
 import { getFactoryId, generateId } from './context';
 import { supabase } from '../lib/supabase';
 import { enqueueIfNetworkError } from '../lib/syncQueue';
+import { withTimeout } from '../lib/withTimeout';
 
 function cacheKey() { return `${getFactoryId()}_investor_distributions`; }
 
@@ -22,11 +23,14 @@ const setCache = async (dists: InvestorDistribution[]) => {
 
 export const syncDistributionsFromSupabase = async (): Promise<void> => {
   const factoryId = getFactoryId();
-  const { data, error } = await supabase
-    .from('investor_distributions')
-    .select('*')
-    .eq('factory_id', factoryId)
-    .order('created_at', { ascending: false });
+  let data, error;
+  try {
+    ({ data, error } = await withTimeout(
+      supabase.from('investor_distributions').select('*').eq('factory_id', factoryId).order('created_at', { ascending: false })
+    ));
+  } catch {
+    return;
+  }
   if (error || !data) return;
   const dists: InvestorDistribution[] = data.map((r) => ({
     id: r.id,

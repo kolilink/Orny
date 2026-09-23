@@ -4,6 +4,7 @@ import { getFactoryId, generateId } from './context';
 import { FACTORY_CONFIG } from '../config/factory';
 import { supabase } from '../lib/supabase';
 import { enqueueIfNetworkError } from '../lib/syncQueue';
+import { withTimeout } from '../lib/withTimeout';
 
 function cacheKey() { return `${getFactoryId()}_stock`; }
 
@@ -25,10 +26,12 @@ const setCache = async (items: StockItem[]) => {
 
 export const syncStockFromSupabase = async (): Promise<void> => {
   const factoryId = getFactoryId();
-  const { data, error } = await supabase
-    .from('stock_items')
-    .select('*')
-    .eq('factory_id', factoryId);
+  let data, error;
+  try {
+    ({ data, error } = await withTimeout(supabase.from('stock_items').select('*').eq('factory_id', factoryId)));
+  } catch {
+    return;
+  }
   if (error || !data) return;
   const items: StockItem[] = data.map((r) => ({
     id: r.id,

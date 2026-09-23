@@ -3,6 +3,7 @@ import { ProductFlavor } from '../types';
 import { getFactoryId, generateId } from './context';
 import { supabase } from '../lib/supabase';
 import { enqueueIfNetworkError } from '../lib/syncQueue';
+import { withTimeout } from '../lib/withTimeout';
 import { ensureStockItem } from './stock';
 
 function cacheKey() { return `${getFactoryId()}_flavors`; }
@@ -18,10 +19,12 @@ const setCache = async (flavors: ProductFlavor[]) => {
 
 export const syncFlavorsFromSupabase = async (): Promise<void> => {
   const factoryId = getFactoryId();
-  const { data, error } = await supabase
-    .from('product_flavors')
-    .select('*')
-    .eq('factory_id', factoryId);
+  let data, error;
+  try {
+    ({ data, error } = await withTimeout(supabase.from('product_flavors').select('*').eq('factory_id', factoryId)));
+  } catch {
+    return;
+  }
   if (error || !data) return;
   const flavors: ProductFlavor[] = data.map((r) => ({
     id: r.id,
