@@ -60,6 +60,8 @@ export default function FlavorsScreen() {
       }
       await load();
       setShowModal(false);
+    } catch (e: any) {
+      Alert.alert('Erreur', `Impossible d'enregistrer la saveur. ${e?.message ?? ''}`.trim());
     } finally {
       setSaving(false);
     }
@@ -130,9 +132,13 @@ export default function FlavorsScreen() {
         onClose={() => setDeleteTarget(null)}
         onConfirm={async () => {
           if (!deleteTarget) return;
-          await deleteFlavor(deleteTarget.id);
-          await load();
-          setDeleteTarget(null);
+          try {
+            await deleteFlavor(deleteTarget.id);
+            await load();
+            setDeleteTarget(null);
+          } catch (e: any) {
+            Alert.alert('Erreur', `Impossible de supprimer la saveur. ${e?.message ?? ''}`.trim());
+          }
         }}
         title="Supprimer cette saveur ?"
         message={deleteTarget ? `"${deleteTarget.label}" sera supprimée. Les ventes existantes ne seront pas affectées.` : ''}

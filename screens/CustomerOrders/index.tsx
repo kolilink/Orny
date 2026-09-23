@@ -201,6 +201,8 @@ export default function CustomerOrdersScreen() {
       resetDraft();
       setAddModal(false);
       setOrders((prev) => [...created, ...prev]);
+    } catch (e: any) {
+      Alert.alert('Erreur', `Impossible d'enregistrer la commande. ${e?.message ?? ''}`.trim());
     } finally {
       setSaving(false);
     }
@@ -331,9 +333,13 @@ export default function CustomerOrdersScreen() {
         onClose={() => setDeleteTarget(null)}
         onConfirm={async () => {
           if (!deleteTarget) return;
-          await deleteCustomerOrderGroup(deleteTarget);
-          setOrders((prev) => prev.filter((o) => o.orderGroupId !== deleteTarget));
-          setDeleteTarget(null);
+          try {
+            await deleteCustomerOrderGroup(deleteTarget);
+            setOrders((prev) => prev.filter((o) => o.orderGroupId !== deleteTarget));
+            setDeleteTarget(null);
+          } catch (e: any) {
+            Alert.alert('Erreur', `Impossible de supprimer la commande. ${e?.message ?? ''}`.trim());
+          }
         }}
         title="Supprimer la commande ?"
         message="Cette action est irréversible."

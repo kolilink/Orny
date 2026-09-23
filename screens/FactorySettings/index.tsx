@@ -419,7 +419,12 @@ export default function FactorySettingsScreen() {
             onPress={async () => {
               if (!selectedMember) return;
               setMemberModal(false);
-              await updateMemberRole(selectedMember.userId, role);
+              // Returns { error }, like removeMember above — was previously
+              // discarded unchecked, so a real rejection (e.g. the max-one-
+              // manager rule) silently left the role unchanged with no
+              // explanation.
+              const { error } = await updateMemberRole(selectedMember.userId, role);
+              if (error) { Alert.alert('Erreur', error); return; }
               await load();
             }}
           >
@@ -441,7 +446,12 @@ export default function FactorySettingsScreen() {
         onConfirm={async () => {
           if (!selectedMember) return;
           setRemoveConfirmModal(false);
-          await removeMember(selectedMember.userId);
+          // removeMember returns { error }, like doRegen/rejectJoinRequest
+          // below — it doesn't throw. This was previously discarded
+          // unchecked, so a real rejection (e.g. the sole-admin guard)
+          // silently did nothing instead of telling the user why.
+          const { error } = await removeMember(selectedMember.userId);
+          if (error) { Alert.alert('Erreur', error); return; }
           await load();
           setSelectedMember(null);
         }}

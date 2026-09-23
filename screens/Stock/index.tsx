@@ -98,6 +98,8 @@ export default function StockScreen() {
       const updated = await updateStock(updates);
       setAllStockState(updated);
       setShowUpdateModal(false);
+    } catch (e: any) {
+      Alert.alert('Erreur', `Impossible de mettre à jour le stock. ${e?.message ?? ''}`.trim());
     } finally {
       setSaving(false);
     }
@@ -119,6 +121,8 @@ export default function StockScreen() {
       await load();
       setNewItemForm(EMPTY_ITEM);
       setShowAddModal(false);
+    } catch (e: any) {
+      Alert.alert('Erreur', `Impossible d'ajouter l'article. ${e?.message ?? ''}`.trim());
     } finally {
       setSaving(false);
     }
@@ -225,9 +229,13 @@ export default function StockScreen() {
         onClose={() => setDeleteTarget(null)}
         onConfirm={async () => {
           if (!deleteTarget) return;
-          await deleteStockItem(deleteTarget.id);
-          await load();
-          setDeleteTarget(null);
+          try {
+            await deleteStockItem(deleteTarget.id);
+            await load();
+            setDeleteTarget(null);
+          } catch (e: any) {
+            Alert.alert('Erreur', `Impossible de supprimer l'article. ${e?.message ?? ''}`.trim());
+          }
         }}
         title="Supprimer cet article ?"
         message={deleteTarget ? `Supprimer "${deleteTarget.name}" du stock ?` : ''}

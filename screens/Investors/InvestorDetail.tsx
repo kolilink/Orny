@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useEffect, useLayoutEffect } from 'react';
-import { View, StyleSheet, ScrollView, TouchableOpacity, TextInput } from 'react-native';
+import { View, StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert } from 'react-native';
 import { useFocusEffect, useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -192,6 +192,8 @@ export default function InvestorDetailScreen() {
       });
       setEditModal(false);
       await load();
+    } catch (e: any) {
+      Alert.alert('Erreur', `Impossible de modifier l'investisseur. ${e?.message ?? ''}`.trim());
     } finally {
       setSaving(false);
     }
@@ -199,10 +201,15 @@ export default function InvestorDetailScreen() {
 
   async function confirmDeleteInvestor() {
     if (!investor) return;
-    await deleteInvestor(investor.id);
-    await Promise.all(entries.map((e) => deleteInvestmentEntry(e.id)));
-    setDeleteInvestorConfirm(false);
-    navigation.goBack();
+    try {
+      await deleteInvestor(investor.id);
+      await Promise.all(entries.map((e) => deleteInvestmentEntry(e.id)));
+      setDeleteInvestorConfirm(false);
+      navigation.goBack();
+    } catch (e: any) {
+      setDeleteInvestorConfirm(false);
+      Alert.alert('Erreur', `Impossible de supprimer l'investisseur. ${e?.message ?? ''}`.trim());
+    }
   }
 
   function openAddEntry() {
@@ -268,6 +275,8 @@ export default function InvestorDetailScreen() {
         await load();
         setShowEntryModal(false);
       }
+    } catch (e: any) {
+      Alert.alert('Erreur', `Impossible d'enregistrer l'apport. ${e?.message ?? ''}`.trim());
     } finally {
       setSaving(false);
     }
@@ -275,9 +284,14 @@ export default function InvestorDetailScreen() {
 
   async function confirmDeleteEntry() {
     if (!deleteEntryTarget) return;
-    await deleteInvestmentEntry(deleteEntryTarget.id);
-    setDeleteEntryTarget(null);
-    await load();
+    try {
+      await deleteInvestmentEntry(deleteEntryTarget.id);
+      setDeleteEntryTarget(null);
+      await load();
+    } catch (e: any) {
+      setDeleteEntryTarget(null);
+      Alert.alert('Erreur', `Impossible de supprimer l'apport. ${e?.message ?? ''}`.trim());
+    }
   }
 
   async function handleSaveDistribution() {
@@ -289,6 +303,8 @@ export default function InvestorDetailScreen() {
       await addDistribution({ investorId: investor.id, amount, date: distForm.date, notes: distForm.notes.trim() || undefined });
       await load();
       setShowDistModal(false);
+    } catch (e: any) {
+      Alert.alert('Erreur', `Impossible d'enregistrer le retrait. ${e?.message ?? ''}`.trim());
     } finally {
       setSaving(false);
     }
@@ -296,9 +312,14 @@ export default function InvestorDetailScreen() {
 
   async function confirmDeleteDistribution() {
     if (!deleteDistTarget) return;
-    await deleteDistribution(deleteDistTarget.id);
-    setDeleteDistTarget(null);
-    await load();
+    try {
+      await deleteDistribution(deleteDistTarget.id);
+      setDeleteDistTarget(null);
+      await load();
+    } catch (e: any) {
+      setDeleteDistTarget(null);
+      Alert.alert('Erreur', `Impossible de supprimer le retrait. ${e?.message ?? ''}`.trim());
+    }
   }
 
   async function openHistory(entry: InvestmentEntry) {

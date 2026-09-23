@@ -1,5 +1,5 @@
 import React, { useMemo, useRef, useState } from 'react';
-import { StyleSheet, TextInput, TouchableOpacity, View } from 'react-native';
+import { StyleSheet, TextInput, TouchableOpacity, View, Alert } from 'react-native';
 import { Client } from '../types';
 import { upsertClient } from '../store/clients';
 import { Palette } from '../theme/tokens';
@@ -69,6 +69,8 @@ export function ClientPicker({ clients, value, onChangeText, onClientCreated, la
       onClientCreated?.(client);
       setQuickCreateOpen(false);
       setFocused(false);
+    } catch (e: any) {
+      Alert.alert('Erreur', `Impossible de créer le client. ${e?.message ?? ''}`.trim());
     } finally {
       setSaving(false);
     }

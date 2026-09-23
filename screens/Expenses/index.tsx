@@ -234,6 +234,8 @@ export default function ExpensesScreen() {
       setFormModal(false);
       resetForm();
       await load();
+    } catch (e: any) {
+      Alert.alert('Erreur', `Impossible d'enregistrer la dépense. ${e?.message ?? ''}`.trim());
     } finally {
       setSaving(false);
     }

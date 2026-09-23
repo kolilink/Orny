@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useLayoutEffect } from 'react';
-import { View, StyleSheet, TouchableOpacity, FlatList, TextInput, ScrollView } from 'react-native';
+import { View, StyleSheet, TouchableOpacity, FlatList, TextInput, ScrollView, Alert } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
@@ -79,6 +79,8 @@ export default function SuppliersScreen() {
       setSupplierModal(false);
       const data = await getSuppliers();
       setSuppliers(data);
+    } catch (e: any) {
+      Alert.alert('Erreur', `Impossible d'enregistrer le fournisseur. ${e?.message ?? ''}`.trim());
     } finally {
       setSavingSupplier(false);
     }
@@ -250,10 +252,14 @@ export default function SuppliersScreen() {
         onClose={() => setMarkPaidTarget(null)}
         onConfirm={async () => {
           if (!markPaidTarget) return;
-          await recordPurchasePayment(markPaidTarget.id, markPaidTarget.totalAmount);
-          setMarkPaidTarget(null);
-          const data = await getPurchases();
-          setPurchases(data);
+          try {
+            await recordPurchasePayment(markPaidTarget.id, markPaidTarget.totalAmount);
+            setMarkPaidTarget(null);
+            const data = await getPurchases();
+            setPurchases(data);
+          } catch (e: any) {
+            Alert.alert('Erreur', `Impossible d'enregistrer le paiement. ${e?.message ?? ''}`.trim());
+          }
         }}
         title="Marquer comme payé ?"
         message={markPaidTarget ? `${markPaidTarget.product} — ${formatGNF(purchaseDebt(markPaidTarget))}` : ''}
@@ -267,9 +273,13 @@ export default function SuppliersScreen() {
         onClose={() => setDeletePurchaseTarget(null)}
         onConfirm={async () => {
           if (!deletePurchaseTarget) return;
-          await deletePurchase(deletePurchaseTarget.id);
-          setPurchases((p) => p.filter((x) => x.id !== deletePurchaseTarget.id));
-          setDeletePurchaseTarget(null);
+          try {
+            await deletePurchase(deletePurchaseTarget.id);
+            setPurchases((p) => p.filter((x) => x.id !== deletePurchaseTarget.id));
+            setDeletePurchaseTarget(null);
+          } catch (e: any) {
+            Alert.alert('Erreur', `Impossible de supprimer l'achat. ${e?.message ?? ''}`.trim());
+          }
         }}
         title="Supprimer cet achat ?"
         confirmLabel="Supprimer"

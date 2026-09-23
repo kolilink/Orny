@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, StyleSheet, TouchableOpacity, TextInput, ScrollView } from 'react-native';
+import { View, StyleSheet, TouchableOpacity, TextInput, ScrollView, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Supplier, Purchase, StockItem } from '../../types';
@@ -156,6 +156,8 @@ export default function PurchaseFormModal({ visible, onClose, initialSupplier, o
       resetForm();
       onSaved();
       onClose();
+    } catch (e: any) {
+      Alert.alert('Erreur', `Impossible d'enregistrer l'achat. ${e?.message ?? ''}`.trim());
     } finally {
       setSaving(false);
     }

@@ -90,6 +90,8 @@ export default function BulksScreen() {
       }
       await load();
       setShowModal(false);
+    } catch (e: any) {
+      Alert.alert('Erreur', `Impossible d'enregistrer le lot. ${e?.message ?? ''}`.trim());
     } finally {
       setSaving(false);
     }
@@ -172,9 +174,13 @@ export default function BulksScreen() {
         onClose={() => setDeleteTarget(null)}
         onConfirm={async () => {
           if (!deleteTarget) return;
-          await deleteBulk(deleteTarget.id);
-          await load();
-          setDeleteTarget(null);
+          try {
+            await deleteBulk(deleteTarget.id);
+            await load();
+            setDeleteTarget(null);
+          } catch (e: any) {
+            Alert.alert('Erreur', `Impossible de supprimer le vrac. ${e?.message ?? ''}`.trim());
+          }
         }}
         title="Supprimer ce vrac ?"
         message={deleteTarget ? `"${deleteTarget.name}" sera supprimé.` : ''}

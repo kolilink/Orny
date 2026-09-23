@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useMemo } from 'react';
-import { View, StyleSheet, ScrollView, TextInput, TouchableOpacity } from 'react-native';
+import { View, StyleSheet, ScrollView, TextInput, TouchableOpacity, Alert } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { getSales, updateSale, deleteSale, syncSalesFromSupabase } from '../../store/sales';
@@ -173,6 +173,8 @@ export default function SalesHistoryScreen() {
       await load();
       setEditingSale(null);
       setEditForm(null);
+    } catch (e: any) {
+      Alert.alert('Erreur', `Impossible de modifier la vente. ${e?.message ?? ''}`.trim());
     } finally {
       setSaving(false);
     }
@@ -353,9 +355,13 @@ export default function SalesHistoryScreen() {
         onClose={() => setDeleteTarget(null)}
         onConfirm={async () => {
           if (!deleteTarget) return;
-          await deleteSale(deleteTarget.id);
-          await load();
-          setDeleteTarget(null);
+          try {
+            await deleteSale(deleteTarget.id);
+            await load();
+            setDeleteTarget(null);
+          } catch (e: any) {
+            Alert.alert('Erreur', `Impossible de supprimer la vente. ${e?.message ?? ''}`.trim());
+          }
         }}
         title="Supprimer cette vente ?"
         message={deleteTarget ? `${deleteTarget.clientName} — ${formatGNF(deleteTarget.totalAmount)}` : ''}

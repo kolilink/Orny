@@ -332,9 +332,13 @@ export default function ClientsScreen() {
         onClose={() => setDeleteTarget(null)}
         onConfirm={async () => {
           if (!deleteTarget) return;
-          await deleteClient(deleteTarget.id);
-          await load();
-          setDeleteTarget(null);
+          try {
+            await deleteClient(deleteTarget.id);
+            await load();
+            setDeleteTarget(null);
+          } catch (e: any) {
+            Alert.alert('Erreur', `Impossible de supprimer le client. ${e?.message ?? ''}`.trim());
+          }
         }}
         title="Supprimer ce client ?"
         message={deleteTarget ? `Supprimer "${deleteTarget.name}" ?` : ''}
@@ -389,9 +393,13 @@ export default function ClientsScreen() {
         onClose={() => setMarkPaidTarget(null)}
         onConfirm={async () => {
           if (!markPaidTarget) return;
-          await updateSale(markPaidTarget.id, { amountPaid: markPaidTarget.totalAmount });
-          await load();
-          setMarkPaidTarget(null);
+          try {
+            await updateSale(markPaidTarget.id, { amountPaid: markPaidTarget.totalAmount });
+            await load();
+            setMarkPaidTarget(null);
+          } catch (e: any) {
+            Alert.alert('Erreur', `Impossible d'enregistrer le paiement. ${e?.message ?? ''}`.trim());
+          }
         }}
         title="Marquer comme payé ?"
         message={markPaidTarget ? `${markPaidTarget.clientName} — ${formatGNF(saleDebt(markPaidTarget))}` : ''}

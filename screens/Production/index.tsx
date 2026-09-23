@@ -286,6 +286,8 @@ export default function ProductionScreen() {
       await saveRecipeFor(actionsItem, recipe);
       setProductModalView('none');
       await load();
+    } catch (e: any) {
+      Alert.alert('Erreur', `Impossible d'enregistrer la recette. ${e?.message ?? ''}`.trim());
     } finally {
       setSavingFormula(false);
     }
@@ -393,6 +395,8 @@ export default function ProductionScreen() {
       backToList();
       hapticSuccess();
       showToast('✅ Lot enregistré');
+    } catch (e: any) {
+      Alert.alert('Erreur', `Impossible d'enregistrer le lot. ${e?.message ?? ''}`.trim());
     } finally {
       setSaving(false);
     }

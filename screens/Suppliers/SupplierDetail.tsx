@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useLayoutEffect } from 'react';
-import { View, StyleSheet, ScrollView, TouchableOpacity, TextInput, Linking } from 'react-native';
+import { View, StyleSheet, ScrollView, TouchableOpacity, TextInput, Linking, Alert } from 'react-native';
 import { useFocusEffect, useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -90,6 +90,8 @@ export default function SupplierDetailScreen() {
       });
       setEditModal(false);
       await load();
+    } catch (e: any) {
+      Alert.alert('Erreur', `Impossible de modifier le fournisseur. ${e?.message ?? ''}`.trim());
     } finally {
       setSaving(false);
     }
@@ -101,10 +103,14 @@ export default function SupplierDetailScreen() {
     if (!amount || amount <= 0) return;
     const alreadyPaid = partialTarget.amountPaid ?? 0;
     const newPaid = Math.min(alreadyPaid + amount, partialTarget.totalAmount);
-    await recordPurchasePayment(partialTarget.id, newPaid);
-    setPartialTarget(null);
-    setPartialAmount('');
-    await load();
+    try {
+      await recordPurchasePayment(partialTarget.id, newPaid);
+      setPartialTarget(null);
+      setPartialAmount('');
+      await load();
+    } catch (e: any) {
+      Alert.alert('Erreur', `Impossible d'enregistrer le paiement. ${e?.message ?? ''}`.trim());
+    }
   }
 
   const totalOwed = purchases.reduce((sum, p) => sum + purchaseDebt(p), 0);
@@ -199,9 +205,14 @@ export default function SupplierDetailScreen() {
         visible={deleteSupplierConfirm}
         onClose={() => setDeleteSupplierConfirm(false)}
         onConfirm={async () => {
-          await deleteSupplier(supplier.id);
-          setDeleteSupplierConfirm(false);
-          navigation.goBack();
+          try {
+            await deleteSupplier(supplier.id);
+            setDeleteSupplierConfirm(false);
+            navigation.goBack();
+          } catch (e: any) {
+            setDeleteSupplierConfirm(false);
+            Alert.alert('Erreur', `Impossible de supprimer le fournisseur. ${e?.message ?? ''}`.trim());
+          }
         }}
         title="Supprimer ce fournisseur ?"
         message={`Supprimer "${supplier.name}" ? Ses achats associés seront aussi supprimés.`}
@@ -224,9 +235,13 @@ export default function SupplierDetailScreen() {
         onClose={() => setMarkPaidTarget(null)}
         onConfirm={async () => {
           if (!markPaidTarget) return;
-          await recordPurchasePayment(markPaidTarget.id, markPaidTarget.totalAmount);
-          setMarkPaidTarget(null);
-          await load();
+          try {
+            await recordPurchasePayment(markPaidTarget.id, markPaidTarget.totalAmount);
+            setMarkPaidTarget(null);
+            await load();
+          } catch (e: any) {
+            Alert.alert('Erreur', `Impossible d'enregistrer le paiement. ${e?.message ?? ''}`.trim());
+          }
         }}
         title="Marquer comme payé ?"
         message={markPaidTarget ? `${markPaidTarget.product} — ${formatGNF(purchaseDebt(markPaidTarget))}` : ''}
@@ -257,9 +272,13 @@ export default function SupplierDetailScreen() {
         onClose={() => setDeletePurchaseTarget(null)}
         onConfirm={async () => {
           if (!deletePurchaseTarget) return;
-          await deletePurchase(deletePurchaseTarget.id);
-          setDeletePurchaseTarget(null);
-          await load();
+          try {
+            await deletePurchase(deletePurchaseTarget.id);
+            setDeletePurchaseTarget(null);
+            await load();
+          } catch (e: any) {
+            Alert.alert('Erreur', `Impossible de supprimer l'achat. ${e?.message ?? ''}`.trim());
+          }
         }}
         title="Supprimer cet achat ?"
         confirmLabel="Supprimer"
