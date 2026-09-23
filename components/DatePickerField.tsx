@@ -104,10 +104,19 @@ export default function DatePickerField({ label, value, onChange }: Props) {
       </TouchableOpacity>
       <AppModal visible={show} onClose={() => setShow(false)} title={label}>
         {DateTimePicker && (
+          // Explicit height/width — without it, iOS's "spinner" UIDatePicker
+          // has no intrinsic size of its own to report, and collapses inside
+          // AppModal's `body: { flexShrink: 1 }` wrapper to a plain empty
+          // gray capsule with none of the actual day/month/year wheel
+          // columns visible (reported live: "I don't even see the stuff").
+          // 216 matches Apple's own standard wheel-picker height so the
+          // three columns render at their normal, fully-legible size rather
+          // than being squeezed into whatever space happened to be left.
           <DateTimePicker
             value={date}
             mode="date"
             display="spinner"
+            style={styles.picker}
             onChange={(_: any, selected?: Date) => {
               if (selected) onChange(toYMD(selected));
             }}
@@ -133,4 +142,5 @@ const makeStyles = (palette: Palette) => StyleSheet.create({
     borderWidth: 1, borderColor: palette.line, borderRadius: radius.sm,
     padding: 14, backgroundColor: palette.paper,
   },
+  picker: { height: 216, width: '100%' },
 });
