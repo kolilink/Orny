@@ -29,7 +29,7 @@ function formatDisplay(ymd: string): string {
 }
 
 export default function DatePickerField({ label, value, onChange }: Props) {
-  const { palette } = useTheme();
+  const { palette, resolvedScheme } = useTheme();
   const styles = makeStyles(palette);
   const [show, setShow] = useState(false);
   const date = value ? new Date(value + 'T12:00:00') : new Date();
@@ -117,6 +117,22 @@ export default function DatePickerField({ label, value, onChange }: Props) {
             mode="date"
             display="spinner"
             style={styles.picker}
+            // The height/width fix above wasn't the real bug: reported
+            // still blank after that shipped. Without themeVariant, iOS's
+            // native picker follows the OS-level system appearance, not
+            // this app's own resolvedScheme — light/dark are two
+            // independent settings (this app supports its own light/dark/
+            // system preference, separate from the device's own). A
+            // device in system Dark Mode with this app's theme set to (or
+            // resolving to) light renders the picker's wheel digits in
+            // light-mode text — pale/white — on top of AppModal's actual
+            // light-theme white card background: invisible text on a
+            // near-identical background, not a missing/collapsed picker.
+            // What was actually visible (a plain gray capsule with nothing
+            // legible in it) is iOS's own selected-row highlight bar —
+            // real chrome, rendering correctly the whole time; only the
+            // number text sitting on top of it was ever actually missing.
+            themeVariant={resolvedScheme}
             onChange={(_: any, selected?: Date) => {
               if (selected) onChange(toYMD(selected));
             }}
