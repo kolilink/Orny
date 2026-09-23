@@ -2,11 +2,17 @@ export interface InvestmentEntry {
   id: string;
   factory_id: string;
   investorId: string;
-  amount: number;
+  amount: number; // always GNF — the business's own currency, unchanged regardless of what currency was actually typed
   date: string;
   notes?: string;
   createdAt?: string;
   createdBy?: string;
+  // Multi-currency record-keeping (db/update28.sql) — currency defaults
+  // 'GNF' for every pre-existing row and any insert that never sets these,
+  // meaning "no conversion happened," the correct honest default.
+  currency?: 'GNF' | 'USD';
+  originalAmount?: number; // the raw typed amount, in `currency` — only meaningful when currency === 'USD'
+  exchangeRate?: number; // USD->GNF rate used at save time — only set when currency === 'USD'
 }
 
 // One row per edit to a Sale or InvestmentEntry, written automatically by a

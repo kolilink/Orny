@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useLayoutEffect } from 'react';
+import React, { useState, useCallback, useEffect, useLayoutEffect } from 'react';
 import { View, StyleSheet, ScrollView, TouchableOpacity, TextInput } from 'react-native';
 import { useFocusEffect, useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -14,12 +14,13 @@ import {
 } from '../../store/investmentEntries';
 import { getDistributions, addDistribution, deleteDistribution } from '../../store/investorDistributions';
 import { Investor, InvestmentEntry, InvestorDistribution, EditHistoryEntry, RootStackParamList } from '../../types';
-import { formatGNF, formatDate } from '../../utils/format';
+import { formatGNF, formatNumber, formatDate } from '../../utils/format';
 import { toDateString } from '../../utils/dates';
 import DatePickerField from '../../components/DatePickerField';
 import { Palette } from '../../theme/tokens';
 import { useTheme } from '../../theme/ThemeContext';
 import { AppModal, Button, ConfirmDialog, MoneyInput, switchModal, toast, Text } from '../../components/ui';
+import { getUsdToGnfRate } from '../../lib/exchangeRate';
 
 // ── Edit rate-limiting: 3 edits per 24h rolling window from first edit ──────
 const MAX_EDITS = 3;
@@ -63,8 +64,11 @@ async function recordEdit(entryId: string): Promise<number> {
 // dense with modals.
 
 type InvestorForm = { name: string; share: string; notes: string };
-type EntryForm = { amount: string; date: string; notes: string };
-const EMPTY_ENTRY: EntryForm = { amount: '', date: toDateString(), notes: '' };
+// currency only ever matters on the "Ajouter un apport" (new entry) flow —
+// editing an existing entry and withdrawals both stay GNF-only, see the
+// comments at their own call sites for why.
+type EntryForm = { amount: string; date: string; notes: string; currency: 'GNF' | 'USD' };
+const EMPTY_ENTRY: EntryForm = { amount: '', date: toDateString(), notes: '', currency: 'GNF' };
 
 type DetailNav = NativeStackNavigationProp<RootStackParamList>;
 type DetailRoute = RouteProp<RootStackParamList, 'InvestorDetail'>;
@@ -103,6 +107,30 @@ export default function InvestorDetailScreen() {
   const [editingEntry, setEditingEntry] = useState<InvestmentEntry | null>(null);
   const [entryForm, setEntryForm] = useState<EntryForm>(EMPTY_ENTRY);
   const [editRemaining, setEditRemaining] = useState(MAX_EDITS);
+
+  // Live USD->GNF preview for the "Ajouter un apport" form — re-fetched
+  // whenever the chosen date changes (the rate depends only on the date,
+  // never on the typed amount, so amount keystrokes don't re-fetch). Shown
+  // before saving so the conversion is visible and checkable, not a black
+  // box the user has to trust blindly — see lib/exchangeRate.ts for the
+  // actual data source and fallback behavior.
+  const [entryRate, setEntryRate] = useState<{ rate: number; dateUsed: string } | null>(null);
+  const [entryRateLoading, setEntryRateLoading] = useState(false);
+  useEffect(() => {
+    if (!showEntryModal || editingEntry || entryForm.currency !== 'USD') {
+      setEntryRate(null);
+      return;
+    }
+    let cancelled = false;
+    setEntryRateLoading(true);
+    getUsdToGnfRate(entryForm.date).then((r) => {
+      if (!cancelled) setEntryRate(r);
+    }).finally(() => {
+      if (!cancelled) setEntryRateLoading(false);
+    });
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showEntryModal, editingEntry, entryForm.currency, entryForm.date]);
 
   const [showDistModal, setShowDistModal] = useState(false);
   const [distForm, setDistForm] = useState<EntryForm>(EMPTY_ENTRY);
@@ -191,18 +219,24 @@ export default function InvestorDetailScreen() {
     }
     setEditRemaining(remaining);
     setEditingEntry(entry);
-    setEntryForm({ amount: String(entry.amount), date: entry.date, notes: entry.notes ?? '' });
+    // Editing always operates in GNF terms regardless of the entry's
+    // original currency — the stored `amount` is already GNF, and
+    // re-deriving a historical FX rate for a correction (rate-limited to
+    // 3/24h, meant for typo fixes) is unnecessary complexity for what this
+    // is actually for. currency stays 'GNF' here on purpose; the picker
+    // below is hidden whenever editingEntry is set.
+    setEntryForm({ amount: String(entry.amount), date: entry.date, notes: entry.notes ?? '', currency: 'GNF' });
     setShowEntryModal(true);
   }
 
   async function handleSaveEntry() {
     if (!investor) return;
-    const amount = parseFloat(entryForm.amount) || 0;
-    if (amount <= 0) return;
+    const typed = parseFloat(entryForm.amount) || 0;
+    if (typed <= 0) return;
     setSaving(true);
     try {
       if (editingEntry) {
-        await updateInvestmentEntry(editingEntry.id, { amount, date: entryForm.date, notes: entryForm.notes.trim() || undefined });
+        await updateInvestmentEntry(editingEntry.id, { amount: typed, date: entryForm.date, notes: entryForm.notes.trim() || undefined });
         const remaining = await recordEdit(editingEntry.id);
         await load();
         setShowEntryModal(false);
@@ -212,8 +246,25 @@ export default function InvestorDetailScreen() {
         } else {
           toast.success(`Il vous reste ${remaining} modification${remaining > 1 ? 's' : ''} dans les 24h`);
         }
+      } else if (entryForm.currency === 'USD') {
+        // Reuse the already-fetched preview rate if it matches the date
+        // still selected (the common case — nothing changed between
+        // preview and tap); otherwise fetch fresh rather than trust a
+        // stale/mismatched preview.
+        const resolved = entryRate?.dateUsed === entryForm.date ? entryRate : await getUsdToGnfRate(entryForm.date);
+        if (!resolved) {
+          toast.warning("Impossible de récupérer le taux de change. Réessayez dans un instant.");
+          return;
+        }
+        const gnf = Math.round(typed * resolved.rate);
+        await addInvestmentEntry({
+          investorId: investor.id, amount: gnf, date: entryForm.date, notes: entryForm.notes.trim() || undefined,
+          currency: 'USD', originalAmount: typed, exchangeRate: resolved.rate,
+        });
+        await load();
+        setShowEntryModal(false);
       } else {
-        await addInvestmentEntry({ investorId: investor.id, amount, date: entryForm.date, notes: entryForm.notes.trim() || undefined });
+        await addInvestmentEntry({ investorId: investor.id, amount: typed, date: entryForm.date, notes: entryForm.notes.trim() || undefined, currency: 'GNF' });
         await load();
         setShowEntryModal(false);
       }
@@ -332,6 +383,16 @@ export default function InvestorDetailScreen() {
                     <Text style={[styles.movementAmount, m.kind === 'dist' && { color: palette.caution }]}>
                       {m.kind === 'dist' ? '−' : '+'}{formatGNF(m.amount)}
                     </Text>
+                    {/* The original USD figure stays visible on its own row,
+                        not folded into the GNF total — this is the actual
+                        record of what was sent, the GNF number is the
+                        converted value derived from it, not the other way
+                        around. */}
+                    {m.kind === 'entry' && (m.ref as InvestmentEntry)?.currency === 'USD' && (
+                      <Text style={styles.movementNote}>
+                        ${formatNumber((m.ref as InvestmentEntry).originalAmount ?? 0)} USD
+                      </Text>
+                    )}
                     {!!m.note && <Text style={styles.movementNote}>{m.note}</Text>}
                   </View>
                   <Text style={styles.movementDate}>{formatDate(m.date)}</Text>
@@ -405,8 +466,41 @@ export default function InvestorDetailScreen() {
               </Text>
             </View>
           )}
-          <Text style={styles.fieldLabel}>Montant (GNF) *</Text>
+          {/* Currency only on a genuinely new entry — see EntryForm's own
+              comment for why editing stays GNF-only. A US-based investor
+              sending USD shouldn't have to convert by hand first; someone
+              sending GNF directly should never see a currency picker get
+              in the way of the common case. */}
+          {!editingEntry && (
+            <>
+              <Text style={styles.fieldLabel}>Devise</Text>
+              <View style={styles.currencyRow}>
+                {(['GNF', 'USD'] as const).map((c) => (
+                  <TouchableOpacity
+                    key={c}
+                    style={[styles.currencyBtn, entryForm.currency === c && styles.currencyBtnActive]}
+                    onPress={() => setEntryForm((f) => ({ ...f, currency: c }))}
+                  >
+                    <Text style={[styles.currencyBtnText, entryForm.currency === c && styles.currencyBtnTextActive]}>{c}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </>
+          )}
+          <Text style={styles.fieldLabel}>Montant ({entryForm.currency}) *</Text>
           <MoneyInput style={styles.input} value={entryForm.amount} onChangeText={(v) => setEntryForm((f) => ({ ...f, amount: v }))} autoFocus />
+          {!editingEntry && entryForm.currency === 'USD' && (
+            // Shown before saving on purpose — the conversion should be
+            // visible and checkable, never a silent black-box calculation
+            // for a real money entry.
+            <Text style={styles.conversionHint}>
+              {entryRateLoading
+                ? 'Calcul du taux de change…'
+                : entryRate
+                ? `≈ ${formatGNF(Math.round((parseFloat(entryForm.amount) || 0) * entryRate.rate))} · 1 USD = ${formatNumber(Math.round(entryRate.rate))} GNF (taux du ${formatDate(entryRate.dateUsed)})`
+                : 'Taux de change indisponible pour le moment'}
+            </Text>
+          )}
           <DatePickerField label="Date" value={entryForm.date} onChange={(v) => setEntryForm((f) => ({ ...f, date: v }))} />
           <Text style={styles.fieldLabel}>Notes (optionnel)</Text>
           <TextInput style={[styles.input, { height: 70, textAlignVertical: 'top' }]} multiline value={entryForm.notes} onChangeText={(v) => setEntryForm((f) => ({ ...f, notes: v }))} />
@@ -551,6 +645,19 @@ const makeStyles = (palette: Palette) => StyleSheet.create({
   fieldLabel: { fontSize: 14, fontWeight: '600', color: palette.ink, marginTop: 12, marginBottom: 4 },
   hint: { fontSize: 13, color: palette.muted },
   input: { backgroundColor: palette.paper, borderRadius: 12, borderWidth: 1, borderColor: palette.line, padding: 14, fontSize: 16, color: palette.ink },
+  currencyRow: { flexDirection: 'row', gap: 8 },
+  currencyBtn: {
+    flex: 1, paddingVertical: 10, borderRadius: 10, alignItems: 'center',
+    borderWidth: 1, borderColor: palette.line, backgroundColor: palette.paper,
+  },
+  // mossSoft/mossDeep, not a solid moss fill with white text — that
+  // pairing measures ~2.5:1 (light) / ~1.9:1 (dark) contrast, both failing
+  // WCAG (see the Coach "Bilan du jour" chip fix elsewhere this session).
+  // Not repeating that bug in a brand-new element.
+  currencyBtnActive: { backgroundColor: palette.mossSoft, borderColor: palette.moss, borderWidth: 2 },
+  currencyBtnText: { fontSize: 14, fontWeight: '600', color: palette.ink },
+  currencyBtnTextActive: { color: palette.mossDeep },
+  conversionHint: { fontSize: 12, color: palette.muted, marginTop: 6, lineHeight: 17 },
   modalActions: { flexDirection: 'row', gap: 10, marginTop: 20 },
   editWindowBanner: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: palette.cautionSoft, borderRadius: 8, padding: 10, marginBottom: 8 },
   editWindowText: { fontSize: 12, color: palette.caution },

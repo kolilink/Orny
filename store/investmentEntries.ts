@@ -36,6 +36,9 @@ export const syncInvestmentEntriesFromSupabase = async (): Promise<void> => {
     date: r.date,
     notes: r.notes,
     createdAt: r.created_at ?? undefined,
+    currency: r.currency ?? 'GNF',
+    originalAmount: r.original_amount ?? undefined,
+    exchangeRate: r.exchange_rate ?? undefined,
   }));
   await setCache(entries);
 };
@@ -57,6 +60,9 @@ export const addInvestmentEntry = async (
     date: newEntry.date,
     notes: newEntry.notes ?? null,
     created_at: now,
+    currency: newEntry.currency ?? 'GNF',
+    original_amount: newEntry.originalAmount ?? null,
+    exchange_rate: newEntry.exchangeRate ?? null,
   };
   // Awaited — see the identical note in store/investors.ts's addInvestor:
   // a fire-and-forget insert here races the caller's immediate post-add
