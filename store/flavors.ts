@@ -2,7 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ProductFlavor } from '../types';
 import { getFactoryId, generateId } from './context';
 import { supabase } from '../lib/supabase';
-import { enqueueIfNetworkError } from '../lib/syncQueue';
+import { drainAfterSuccessfulWrite, enqueueIfNetworkError } from '../lib/syncQueue';
 import { withTimeout } from '../lib/withTimeout';
 import { ensureStockItem } from './stock';
 
@@ -63,6 +63,7 @@ export const addFlavor = async (
   // store/investors.ts's addInvestor).
   const { error } = await supabase.from('product_flavors').insert(row);
   if (error) await enqueueIfNetworkError(error, { table: 'product_flavors', op: 'insert', values: row, label: 'saveur' });
+  else drainAfterSuccessfulWrite();
 
   return newFlavor;
 };
@@ -83,6 +84,7 @@ export const updateFlavor = async (
   const factoryId = getFactoryId();
   const { error } = await supabase.from('product_flavors').update(row).eq('id', id).eq('factory_id', factoryId);
   if (error) await enqueueIfNetworkError(error, { table: 'product_flavors', op: 'update', values: row, match: { id, factory_id: factoryId }, label: 'saveur (modif.)' });
+  else drainAfterSuccessfulWrite();
 };
 
 export const deleteFlavor = async (id: string): Promise<void> => {
@@ -91,6 +93,7 @@ export const deleteFlavor = async (id: string): Promise<void> => {
   const factoryId = getFactoryId();
   const { error } = await supabase.from('product_flavors').delete().eq('id', id).eq('factory_id', factoryId);
   if (error) await enqueueIfNetworkError(error, { table: 'product_flavors', op: 'delete', match: { id, factory_id: factoryId }, label: 'saveur (suppr.)' });
+  else drainAfterSuccessfulWrite();
 };
 
 export const setFlavors = async (flavors: ProductFlavor[]): Promise<void> => {

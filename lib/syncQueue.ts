@@ -1,8 +1,16 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from './supabase';
 import { generateId } from '../store/context';
+import { withTimeout } from './withTimeout';
 
 const QUEUE_KEY = 'sync_queue_v1';
+// A write that keeps failing for a NON-network reason (RLS, validation,
+// bad data) must never just vanish after N tries — that is a factory
+// sale or stock move disappearing with only a console warning nobody
+// sees on a phone. Exhausted items move here, visibly, instead of being
+// dropped. Nothing in the app reads this list yet except getDeadCount();
+// surfacing it in the UI is the next step, not a reason to keep dropping.
+const DEAD_QUEUE_KEY = 'sync_queue_dead_v1';
 const MAX_ATTEMPTS = 5;
 
 export type QueueOp = 'insert' | 'update' | 'delete' | 'upsert';
@@ -43,6 +51,18 @@ async function setQueue(items: QueueItem[]): Promise<void> {
 
 export async function getPendingCount(): Promise<number> {
   return (await getQueue()).length;
+}
+
+export async function getDeadCount(): Promise<number> {
+  const raw = await AsyncStorage.getItem(DEAD_QUEUE_KEY);
+  return raw ? (JSON.parse(raw) as QueueItem[]).length : 0;
+}
+
+async function appendDead(items: QueueItem[]): Promise<void> {
+  if (items.length === 0) return;
+  const raw = await AsyncStorage.getItem(DEAD_QUEUE_KEY);
+  const dead = raw ? (JSON.parse(raw) as QueueItem[]) : [];
+  await AsyncStorage.setItem(DEAD_QUEUE_KEY, JSON.stringify([...dead, ...items]));
 }
 
 const listeners = new Set<(count: number) => void>();
@@ -106,6 +126,14 @@ let draining = false;
 // Drains in order. The moment a network error recurs, everything from that
 // point on is left in the queue untouched for next time — there's no point
 // burning through the rest one-by-one against a connection that's still down.
+//
+// Two hardening changes vs. the previous version:
+// 1. Each item is bounded by withTimeout (12s): a dead/captive wifi that
+//    hangs instead of rejecting can no longer stall the whole drain —
+//    the timeout reads as a network error, so the rest stays queued.
+// 2. A non-network failure that exhausts its attempts moves to the dead
+//    list instead of being dropped with a console warning. A factory
+//    write must never silently disappear.
 export async function drainSyncQueue(): Promise<{ synced: number; pending: number }> {
   if (draining) return { synced: 0, pending: await getPendingCount() };
   draining = true;
@@ -113,9 +141,15 @@ export async function drainSyncQueue(): Promise<{ synced: number; pending: numbe
     const queue = await getQueue();
     let synced = 0;
     const remaining: QueueItem[] = [];
+    const dead: QueueItem[] = [];
     for (let i = 0; i < queue.length; i++) {
       const item = queue[i];
-      const { error } = await runItem(item);
+      let error: any;
+      try {
+        ({ error } = await withTimeout(runItem(item), 12000));
+      } catch (e) {
+        error = e;
+      }
       if (!error) { synced++; continue; }
       if (isNetworkError(error)) {
         remaining.push(...queue.slice(i));
@@ -125,12 +159,23 @@ export async function drainSyncQueue(): Promise<{ synced: number; pending: numbe
       if (attempts < MAX_ATTEMPTS) {
         remaining.push({ ...item, attempts });
       } else {
-        console.warn(`Giving up on queued ${item.label} after ${MAX_ATTEMPTS} attempts`, error?.message);
+        dead.push({ ...item, attempts });
       }
     }
+    await appendDead(dead);
     await setQueue(remaining);
     return { synced, pending: remaining.length };
   } finally {
     draining = false;
   }
+}
+
+// Call this (without awaiting it) after any Supabase write SUCCEEDS.
+// A success proves the device is online right now — that is the cheapest
+// reliable "reconnect" signal we have without adding a NetInfo dependency,
+// and it flushes older queued writes that may be waiting from an earlier
+// offline stretch. drainSyncQueue's own `draining` guard makes concurrent
+// calls safe; a failed drain is harmless because the queue is untouched.
+export function drainAfterSuccessfulWrite(): void {
+  drainSyncQueue().catch(() => {});
 }

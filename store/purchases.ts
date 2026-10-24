@@ -2,7 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Purchase } from '../types';
 import { getFactoryId, generateId } from './context';
 import { supabase } from '../lib/supabase';
-import { enqueueIfNetworkError } from '../lib/syncQueue';
+import { drainAfterSuccessfulWrite, enqueueIfNetworkError } from '../lib/syncQueue';
 import { withTimeout } from '../lib/withTimeout';
 import { recordStockAddition } from './stock';
 
@@ -75,6 +75,7 @@ export const addPurchase = async (purchase: Omit<Purchase, 'id' | 'factory_id'>)
   // store/investors.ts's addInvestor).
   const { error } = await supabase.from('purchases').insert(row);
   if (error) await enqueueIfNetworkError(error, { table: 'purchases', op: 'insert', values: row, label: 'achat' });
+  else drainAfterSuccessfulWrite();
 
   // Buying raw material actually raises what's on hand — without this a
   // purchase only ever showed up as a cost, never as usable stock. It also
@@ -98,6 +99,7 @@ export const recordPurchasePayment = async (id: string, newAmountPaid: number): 
   await setCache(updated);
   const { error } = await supabase.from('purchases').update({ amount_paid: newAmountPaid, last_payment_at: paidAt }).eq('id', id).eq('factory_id', factoryId);
   if (error) await enqueueIfNetworkError(error, { table: 'purchases', op: 'update', values: { amount_paid: newAmountPaid, last_payment_at: paidAt }, match: { id, factory_id: factoryId }, label: 'achat (paiement)' });
+  else drainAfterSuccessfulWrite();
 };
 
 export const deletePurchase = async (id: string): Promise<void> => {
@@ -106,4 +108,5 @@ export const deletePurchase = async (id: string): Promise<void> => {
   await setCache(all.filter((p) => p.id !== id));
   const { error } = await supabase.from('purchases').delete().eq('id', id).eq('factory_id', factoryId);
   if (error) await enqueueIfNetworkError(error, { table: 'purchases', op: 'delete', match: { id, factory_id: factoryId }, label: 'achat (suppr.)' });
+  else drainAfterSuccessfulWrite();
 };

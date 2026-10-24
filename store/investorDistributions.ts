@@ -2,7 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { InvestorDistribution } from '../types';
 import { getFactoryId, generateId } from './context';
 import { supabase } from '../lib/supabase';
-import { enqueueIfNetworkError } from '../lib/syncQueue';
+import { drainAfterSuccessfulWrite, enqueueIfNetworkError } from '../lib/syncQueue';
 import { withTimeout } from '../lib/withTimeout';
 
 function cacheKey() { return `${getFactoryId()}_investor_distributions`; }
@@ -68,6 +68,7 @@ export const addDistribution = async (
   // lands fine in Postgres.
   const { error } = await supabase.from('investor_distributions').insert(row);
   if (error) await enqueueIfNetworkError(error, { table: 'investor_distributions', op: 'insert', values: row, label: 'distribution investisseur' });
+  else drainAfterSuccessfulWrite();
 
   return newDist;
 };
@@ -78,6 +79,7 @@ export const deleteDistribution = async (id: string): Promise<void> => {
   const factoryId = getFactoryId();
   const { error } = await supabase.from('investor_distributions').delete().eq('id', id).eq('factory_id', factoryId);
   if (error) await enqueueIfNetworkError(error, { table: 'investor_distributions', op: 'delete', match: { id, factory_id: factoryId }, label: 'distribution investisseur (suppr.)' });
+  else drainAfterSuccessfulWrite();
 };
 
 export const setDistributions = async (dists: InvestorDistribution[]): Promise<void> => {

@@ -348,6 +348,7 @@ export type RootStackParamList = {
 };
 
 export type TabParamList = {
+  AujourdHui: undefined;
   Ventes: undefined;
   Production: undefined;
   Stock: undefined;

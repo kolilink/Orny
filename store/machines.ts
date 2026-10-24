@@ -3,6 +3,7 @@ import { Machine, MachineStatus } from '../types';
 import { getFactoryId, generateId } from './context';
 import { supabase } from '../lib/supabase';
 import { withTimeout } from '../lib/withTimeout';
+import { drainAfterSuccessfulWrite, enqueueIfNetworkError } from '../lib/syncQueue';
 
 function cacheKey() { return `${getFactoryId()}_machines`; }
 
@@ -54,7 +55,7 @@ export const addMachine = async (
   // post-add reload/re-sync and can lose the new machine from view even
   // though it lands fine in Postgres (same bug reproduced and fixed for
   // store/investors.ts's addInvestor).
-  const { error } = await supabase.from('machines').insert({
+  const row = {
     id: newMachine.id,
     factory_id: factoryId,
     name: newMachine.name,
@@ -65,8 +66,10 @@ export const addMachine = async (
     commissioned_date: newMachine.commissionedDate ?? null,
     notes: newMachine.notes ?? null,
     created_at: now,
-  });
-  if (error) console.warn('machine insert sync error', error.message);
+  };
+  const { error } = await supabase.from('machines').insert(row);
+  if (error) await enqueueIfNetworkError(error, { table: 'machines', op: 'insert', values: row, label: 'machine' });
+  else drainAfterSuccessfulWrite();
 
   return newMachine;
 };
@@ -80,15 +83,17 @@ export const updateMachine = async (
   const updated = machines.map((m) => (m.id === id ? { ...m, ...updates } : m));
   await setCache(updated);
 
-  const { error } = await supabase.from('machines').update({
+  const row = {
     ...(updates.name !== undefined ? { name: updates.name } : {}),
     ...(updates.type !== undefined ? { type: updates.type } : {}),
     ...(updates.ratedCapacity !== undefined ? { rated_capacity: updates.ratedCapacity } : {}),
     ...(updates.capacityUnit !== undefined ? { capacity_unit: updates.capacityUnit } : {}),
     ...(updates.commissionedDate !== undefined ? { commissioned_date: updates.commissionedDate } : {}),
     ...(updates.notes !== undefined ? { notes: updates.notes } : {}),
-  }).eq('id', id).eq('factory_id', factoryId);
-  if (error) console.warn('machine update sync error', error.message);
+  };
+  const { error } = await supabase.from('machines').update(row).eq('id', id).eq('factory_id', factoryId);
+  if (error) await enqueueIfNetworkError(error, { table: 'machines', op: 'update', values: row, match: { id, factory_id: factoryId }, label: 'machine (modif.)' });
+  else drainAfterSuccessfulWrite();
 };
 
 // Updates the machine's current status AND appends to machine_status_log —
@@ -105,16 +110,19 @@ export const updateMachineStatus = async (
   await setCache(updated);
 
   const { error: statusError } = await supabase.from('machines').update({ status }).eq('id', id).eq('factory_id', factoryId);
-  if (statusError) console.warn('machine status update sync error', statusError.message);
+  if (statusError) await enqueueIfNetworkError(statusError, { table: 'machines', op: 'update', values: { status }, match: { id, factory_id: factoryId }, label: 'machine (statut)' });
+  else drainAfterSuccessfulWrite();
 
-  const { error: logError } = await supabase.from('machine_status_log').insert({
+  const logRow = {
     id: generateId(),
     factory_id: factoryId,
     machine_id: id,
     status,
     reason: reason ?? null,
-  });
-  if (logError) console.warn('machine status log sync error', logError.message);
+  };
+  const { error: logError } = await supabase.from('machine_status_log').insert(logRow);
+  if (logError) await enqueueIfNetworkError(logError, { table: 'machine_status_log', op: 'insert', values: logRow, label: 'machine (journal)' });
+  else drainAfterSuccessfulWrite();
 };
 
 export const deleteMachine = async (id: string): Promise<void> => {
@@ -122,5 +130,6 @@ export const deleteMachine = async (id: string): Promise<void> => {
   const machines = await getMachines();
   await setCache(machines.filter((m) => m.id !== id));
   const { error } = await supabase.from('machines').delete().eq('id', id).eq('factory_id', factoryId);
-  if (error) console.warn('machine delete sync error', error.message);
+  if (error) await enqueueIfNetworkError(error, { table: 'machines', op: 'delete', match: { id, factory_id: factoryId }, label: 'machine (suppr.)' });
+  else drainAfterSuccessfulWrite();
 };

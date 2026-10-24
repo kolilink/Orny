@@ -4,7 +4,7 @@ import { decode } from 'base64-arraybuffer';
 import { Expense } from '../types';
 import { getFactoryId, generateId } from './context';
 import { supabase } from '../lib/supabase';
-import { enqueueIfNetworkError } from '../lib/syncQueue';
+import { drainAfterSuccessfulWrite, enqueueIfNetworkError } from '../lib/syncQueue';
 import { withTimeout } from '../lib/withTimeout';
 
 function cacheKey() { return `${getFactoryId()}_expenses`; }
@@ -122,6 +122,7 @@ export const addExpense = async (expense: Omit<Expense, 'id' | 'factory_id'>): P
   // store/investors.ts's addInvestor).
   const { error } = await supabase.from('expenses').insert(row);
   if (error) await enqueueIfNetworkError(error, { table: 'expenses', op: 'insert', values: row, label: 'dépense' });
+  else drainAfterSuccessfulWrite();
   return item;
 };
 
@@ -163,6 +164,7 @@ export const updateExpense = async (id: string, updates: Partial<Omit<Expense, '
   if (resolvedUpdates.photoStoragePath !== undefined) row.photo_storage_path = resolvedUpdates.photoStoragePath;
   const { error } = await supabase.from('expenses').update(row).eq('id', id).eq('factory_id', factoryId);
   if (error) await enqueueIfNetworkError(error, { table: 'expenses', op: 'update', values: row, match: { id, factory_id: factoryId }, label: 'dépense (modif.)' });
+  else drainAfterSuccessfulWrite();
 };
 
 // Soft delete: moves to trash, hard-deletes from Supabase
@@ -177,6 +179,7 @@ export const deleteExpense = async (id: string): Promise<void> => {
   }
   const { error } = await supabase.from('expenses').delete().eq('id', id).eq('factory_id', factoryId);
   if (error) await enqueueIfNetworkError(error, { table: 'expenses', op: 'delete', match: { id, factory_id: factoryId }, label: 'dépense (suppr.)' });
+  else drainAfterSuccessfulWrite();
 };
 
 // Restore a soft-deleted expense
@@ -201,6 +204,7 @@ export const restoreExpense = async (id: string): Promise<void> => {
   };
   const { error } = await supabase.from('expenses').insert(row);
   if (error) await enqueueIfNetworkError(error, { table: 'expenses', op: 'insert', values: row, label: 'dépense (restaur.)' });
+  else drainAfterSuccessfulWrite();
 };
 
 // Permanently delete from trash

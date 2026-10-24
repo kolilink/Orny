@@ -2,7 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { InvestmentEntry, EditHistoryEntry } from '../types';
 import { getFactoryId, generateId } from './context';
 import { supabase } from '../lib/supabase';
-import { enqueueIfNetworkError } from '../lib/syncQueue';
+import { drainAfterSuccessfulWrite, enqueueIfNetworkError } from '../lib/syncQueue';
 import { withTimeout } from '../lib/withTimeout';
 
 function cacheKey() { return `${getFactoryId()}_investment_entries`; }
@@ -74,6 +74,7 @@ export const addInvestmentEntry = async (
   // in Postgres.
   const { error } = await supabase.from('investment_entries').insert(row);
   if (error) await enqueueIfNetworkError(error, { table: 'investment_entries', op: 'insert', values: row, label: 'versement investisseur' });
+  else drainAfterSuccessfulWrite();
 
   return newEntry;
 };
@@ -91,6 +92,7 @@ export const updateInvestmentEntry = async (
   const factoryId = getFactoryId();
   const { error } = await supabase.from('investment_entries').update(row).eq('id', id).eq('factory_id', factoryId);
   if (error) await enqueueIfNetworkError(error, { table: 'investment_entries', op: 'update', values: row, match: { id, factory_id: factoryId }, label: 'versement investisseur (modif.)' });
+  else drainAfterSuccessfulWrite();
 };
 
 export const deleteInvestmentEntry = async (id: string): Promise<void> => {
@@ -99,6 +101,7 @@ export const deleteInvestmentEntry = async (id: string): Promise<void> => {
   const factoryId = getFactoryId();
   const { error } = await supabase.from('investment_entries').delete().eq('id', id).eq('factory_id', factoryId);
   if (error) await enqueueIfNetworkError(error, { table: 'investment_entries', op: 'delete', match: { id, factory_id: factoryId }, label: 'versement investisseur (suppr.)' });
+  else drainAfterSuccessfulWrite();
 };
 
 export const setInvestmentEntries = async (entries: InvestmentEntry[]): Promise<void> => {

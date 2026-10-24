@@ -2,7 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Sale, EditHistoryEntry } from '../types';
 import { getFactoryId, generateId } from './context';
 import { supabase } from '../lib/supabase';
-import { enqueueIfNetworkError } from '../lib/syncQueue';
+import { drainAfterSuccessfulWrite, enqueueIfNetworkError } from '../lib/syncQueue';
 import { withTimeout } from '../lib/withTimeout';
 
 function cacheKey() { return `${getFactoryId()}_sales`; }
@@ -78,6 +78,7 @@ export const addSale = async (sale: Omit<Sale, 'id' | 'factory_id'>): Promise<Sa
   // store/investors.ts's addInvestor).
   const { error } = await supabase.from('sales').insert(row);
   if (error) await enqueueIfNetworkError(error, { table: 'sales', op: 'insert', values: row, label: 'vente' });
+  else drainAfterSuccessfulWrite();
 
   return newSale;
 };
@@ -101,6 +102,7 @@ export const updateSale = async (id: string, updates: Partial<Omit<Sale, 'id' | 
 
   const { error } = await supabase.from('sales').update(row).eq('id', id).eq('factory_id', factoryId);
   if (error) await enqueueIfNetworkError(error, { table: 'sales', op: 'update', values: row, match: { id, factory_id: factoryId }, label: 'vente (modif.)' });
+  else drainAfterSuccessfulWrite();
 };
 
 export const deleteSale = async (id: string): Promise<void> => {
@@ -109,6 +111,7 @@ export const deleteSale = async (id: string): Promise<void> => {
   const factoryId = getFactoryId();
   const { error } = await supabase.from('sales').delete().eq('id', id).eq('factory_id', factoryId);
   if (error) await enqueueIfNetworkError(error, { table: 'sales', op: 'delete', match: { id, factory_id: factoryId }, label: 'vente (suppr.)' });
+  else drainAfterSuccessfulWrite();
 };
 
 export const setSales = async (sales: Sale[]): Promise<void> => {
