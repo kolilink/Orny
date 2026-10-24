@@ -2,7 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Batch } from '../types';
 import { getFactoryId, generateId } from './context';
 import { supabase } from '../lib/supabase';
-import { enqueueIfNetworkError } from '../lib/syncQueue';
+import { drainAfterSuccessfulWrite, enqueueIfNetworkError } from '../lib/syncQueue';
 import { withTimeout } from '../lib/withTimeout';
 import { toDateString } from '../utils/dates';
 
@@ -45,6 +45,7 @@ export const addBatch = async (
   // store/investors.ts's addInvestor).
   const { error } = await supabase.from('production_batches_v2').insert(row);
   if (error) await enqueueIfNetworkError(error, { table: 'production_batches_v2', op: 'insert', values: row, label: 'lot de production' });
+  else drainAfterSuccessfulWrite();
 
   return newBatch;
 };

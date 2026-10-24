@@ -2,7 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Product } from '../types';
 import { getFactoryId, generateId } from './context';
 import { supabase } from '../lib/supabase';
-import { enqueueIfNetworkError } from '../lib/syncQueue';
+import { drainAfterSuccessfulWrite, enqueueIfNetworkError } from '../lib/syncQueue';
 import { withTimeout } from '../lib/withTimeout';
 import { addStockItem } from './stock';
 
@@ -35,6 +35,7 @@ export const addProduct = async (name: string, unit: string): Promise<Product> =
   // store/investors.ts's addInvestor).
   const { error } = await supabase.from('production_products').insert(row);
   if (error) await enqueueIfNetworkError(error, { table: 'production_products', op: 'insert', values: row, label: 'produit' });
+  else drainAfterSuccessfulWrite();
 
   return product;
 };
@@ -55,6 +56,7 @@ export const updateProduct = async (
   };
   const { error } = await supabase.from('production_products').update(row).eq('id', id).eq('factory_id', factoryId);
   if (error) await enqueueIfNetworkError(error, { table: 'production_products', op: 'update', values: row, match: { id, factory_id: factoryId }, label: 'produit (modif.)' });
+  else drainAfterSuccessfulWrite();
 };
 
 export const deleteProduct = async (id: string): Promise<void> => {
@@ -63,6 +65,7 @@ export const deleteProduct = async (id: string): Promise<void> => {
   await setCache(products.filter((p) => p.id !== id));
   const { error } = await supabase.from('production_products').delete().eq('id', id).eq('factory_id', factoryId);
   if (error) await enqueueIfNetworkError(error, { table: 'production_products', op: 'delete', match: { id, factory_id: factoryId }, label: 'produit (suppr.)' });
+  else drainAfterSuccessfulWrite();
 };
 
 export const syncProductsFromSupabase = async (): Promise<void> => {

@@ -2,7 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Supplier } from '../types';
 import { getFactoryId, generateId } from './context';
 import { supabase } from '../lib/supabase';
-import { enqueueIfNetworkError } from '../lib/syncQueue';
+import { drainAfterSuccessfulWrite, enqueueIfNetworkError } from '../lib/syncQueue';
 import { withTimeout } from '../lib/withTimeout';
 
 function cacheKey() { return `${getFactoryId()}_suppliers`; }
@@ -57,6 +57,7 @@ export const addSupplier = async (supplier: Omit<Supplier, 'id' | 'factory_id'>)
   // store/investors.ts's addInvestor).
   const { error } = await supabase.from('suppliers').insert(row);
   if (error) await enqueueIfNetworkError(error, { table: 'suppliers', op: 'insert', values: row, label: 'fournisseur' });
+  else drainAfterSuccessfulWrite();
   return item;
 };
 
@@ -71,6 +72,7 @@ export const updateSupplier = async (id: string, updates: Partial<Omit<Supplier,
   const factoryId = getFactoryId();
   const { error } = await supabase.from('suppliers').update(row).eq('id', id).eq('factory_id', factoryId);
   if (error) await enqueueIfNetworkError(error, { table: 'suppliers', op: 'update', values: row, match: { id, factory_id: factoryId }, label: 'fournisseur (modif.)' });
+  else drainAfterSuccessfulWrite();
 };
 
 export const deleteSupplier = async (id: string): Promise<void> => {
@@ -79,4 +81,5 @@ export const deleteSupplier = async (id: string): Promise<void> => {
   await setCache(all.filter((s) => s.id !== id));
   const { error } = await supabase.from('suppliers').delete().eq('id', id).eq('factory_id', factoryId);
   if (error) await enqueueIfNetworkError(error, { table: 'suppliers', op: 'delete', match: { id, factory_id: factoryId }, label: 'fournisseur (suppr.)' });
+  else drainAfterSuccessfulWrite();
 };

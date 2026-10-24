@@ -2,7 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Client } from '../types';
 import { getFactoryId, generateId } from './context';
 import { supabase } from '../lib/supabase';
-import { enqueueIfNetworkError } from '../lib/syncQueue';
+import { drainAfterSuccessfulWrite, enqueueIfNetworkError } from '../lib/syncQueue';
 import { withTimeout } from '../lib/withTimeout';
 
 function cacheKey() { return `${getFactoryId()}_clients`; }
@@ -76,6 +76,7 @@ export const upsertClient = async (
   // store/investors.ts's addInvestor).
   const { error } = await supabase.from('clients').insert(row);
   if (error) await enqueueIfNetworkError(error, { table: 'clients', op: 'insert', values: row, label: 'client' });
+  else drainAfterSuccessfulWrite();
 
   return newClient;
 };
@@ -89,6 +90,7 @@ export const updateClient = async (
   const factoryId = getFactoryId();
   const { error } = await supabase.from('clients').update(updates).eq('id', id).eq('factory_id', factoryId);
   if (error) await enqueueIfNetworkError(error, { table: 'clients', op: 'update', values: updates as Record<string, unknown>, match: { id, factory_id: factoryId }, label: 'client (modif.)' });
+  else drainAfterSuccessfulWrite();
 };
 
 export const deleteClient = async (id: string): Promise<void> => {
@@ -97,6 +99,7 @@ export const deleteClient = async (id: string): Promise<void> => {
   const factoryId = getFactoryId();
   const { error } = await supabase.from('clients').delete().eq('id', id).eq('factory_id', factoryId);
   if (error) await enqueueIfNetworkError(error, { table: 'clients', op: 'delete', match: { id, factory_id: factoryId }, label: 'client (suppr.)' });
+  else drainAfterSuccessfulWrite();
 };
 
 export const setClients = async (clients: Client[]): Promise<void> => {

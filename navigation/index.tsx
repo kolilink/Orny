@@ -15,6 +15,7 @@ import LoginScreen from '../screens/Auth/LoginScreen';
 import RegisterScreen from '../screens/Auth/RegisterScreen';
 import FactorySetupScreen from '../screens/Auth/FactorySetupScreen';
 
+import TodayScreen from '../screens/Today';
 import VentesScreen from '../screens/Ventes';
 import SalesHistoryScreen from '../screens/Ventes/History';
 import ProductionScreen from '../screens/Production';
@@ -67,6 +68,12 @@ function FullTabNavigator() {
   const { palette } = useTheme();
   return (
     <Tab.Navigator screenOptions={makeTabOptions(palette)}>
+      {/* First tab, admin/manager only: "Aujourd'hui" answers "how is the
+          factory going?" in four numbers, from cache only, before any
+          selling/production screen. Vendeur and investor roles keep their
+          own first tabs (selling / numbers) unchanged. */}
+      <Tab.Screen name="AujourdHui" component={TodayScreen}
+        options={{ tabBarIcon: ({ color, size }) => <Ionicons name="home" size={size} color={color} /> }} />
       <Tab.Screen name="Ventes" component={VentesScreen}
         options={{ tabBarIcon: ({ color, size }) => <Ionicons name="cart" size={size} color={color} /> }} />
       <Tab.Screen name="Production" component={ProductionScreen}

@@ -2,7 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { CustomerOrder } from '../types';
 import { getFactoryId, generateId } from './context';
 import { supabase } from '../lib/supabase';
-import { enqueueIfNetworkError } from '../lib/syncQueue';
+import { drainAfterSuccessfulWrite, enqueueIfNetworkError } from '../lib/syncQueue';
 import { withTimeout } from '../lib/withTimeout';
 
 function cacheKey() { return `${getFactoryId()}_customer_orders`; }
@@ -97,6 +97,7 @@ export const addCustomerOrderGroup = async (
   // store/investors.ts's addInvestor).
   const { error } = await supabase.from('customer_orders').insert(rows);
   if (error) await enqueueIfNetworkError(error, { table: 'customer_orders', op: 'insert', values: rows, label: 'commande client' });
+  else drainAfterSuccessfulWrite();
   return items;
 };
 
@@ -110,6 +111,7 @@ export const updateCustomerOrderGroupStatus = async (
   await setCache(updated);
   const { error } = await supabase.from('customer_orders').update({ status }).eq('order_group_id', groupId).eq('factory_id', factoryId);
   if (error) await enqueueIfNetworkError(error, { table: 'customer_orders', op: 'update', values: { status }, match: { order_group_id: groupId, factory_id: factoryId }, label: 'commande client (modif.)' });
+  else drainAfterSuccessfulWrite();
 };
 
 export const deleteCustomerOrderGroup = async (groupId: string): Promise<void> => {
@@ -118,4 +120,5 @@ export const deleteCustomerOrderGroup = async (groupId: string): Promise<void> =
   await setCache(all.filter((o) => o.orderGroupId !== groupId));
   const { error } = await supabase.from('customer_orders').delete().eq('order_group_id', groupId).eq('factory_id', factoryId);
   if (error) await enqueueIfNetworkError(error, { table: 'customer_orders', op: 'delete', match: { order_group_id: groupId, factory_id: factoryId }, label: 'commande client (suppr.)' });
+  else drainAfterSuccessfulWrite();
 };

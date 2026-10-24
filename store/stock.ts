@@ -3,7 +3,7 @@ import { StockItem } from '../types';
 import { getFactoryId, generateId } from './context';
 import { FACTORY_CONFIG } from '../config/factory';
 import { supabase } from '../lib/supabase';
-import { enqueueIfNetworkError } from '../lib/syncQueue';
+import { drainAfterSuccessfulWrite, enqueueIfNetworkError } from '../lib/syncQueue';
 import { withTimeout } from '../lib/withTimeout';
 
 function cacheKey() { return `${getFactoryId()}_stock`; }
@@ -75,6 +75,7 @@ export const initStock = async (levels: Record<string, number>): Promise<StockIt
   // store/investors.ts's addInvestor).
   const { error } = await supabase.from('stock_items').upsert(rows);
   if (error) await enqueueIfNetworkError(error, { table: 'stock_items', op: 'upsert', values: rows, label: 'stock (init)' });
+  else drainAfterSuccessfulWrite();
 
   return items;
 };
@@ -103,6 +104,7 @@ export const updateStock = async (updates: Record<string, number>): Promise<Stoc
     }));
     const { error } = await supabase.from('stock_items').upsert(rows);
     if (error) await enqueueIfNetworkError(error, { table: 'stock_items', op: 'upsert', values: rows, label: 'stock (mise à jour)' });
+    else drainAfterSuccessfulWrite();
   }
 
   return updated;
@@ -127,6 +129,7 @@ export const addStockItem = async (
   };
   const { error } = await supabase.from('stock_items').insert(row);
   if (error) await enqueueIfNetworkError(error, { table: 'stock_items', op: 'insert', values: row, label: 'stock (ajout)' });
+  else drainAfterSuccessfulWrite();
 
   return newItem;
 };
@@ -137,6 +140,7 @@ export const deleteStockItem = async (id: string): Promise<void> => {
   await setCache(stock.filter((i) => i.id !== id));
   const { error } = await supabase.from('stock_items').delete().eq('id', id).eq('factory_id', factoryId);
   if (error) await enqueueIfNetworkError(error, { table: 'stock_items', op: 'delete', match: { id, factory_id: factoryId }, label: 'stock (suppr.)' });
+  else drainAfterSuccessfulWrite();
 };
 
 export type StockShortfall = { id: string; name: string; unit: string; available: number; needed: number };
@@ -198,6 +202,7 @@ export const deductStock = async (deductions: Record<string, number>): Promise<v
     }));
     const { error } = await supabase.from('stock_items').upsert(rows);
     if (error) await enqueueIfNetworkError(error, { table: 'stock_items', op: 'upsert', values: rows, label: 'stock (déduction)' });
+    else drainAfterSuccessfulWrite();
   }
 };
 
@@ -236,4 +241,5 @@ export const recordStockAddition = async (id: string, qtyAdded: number, unitCost
   };
   const { error } = await supabase.from('stock_items').upsert(row);
   if (error) await enqueueIfNetworkError(error, { table: 'stock_items', op: 'upsert', values: row, label: 'stock (coût)' });
+  else drainAfterSuccessfulWrite();
 };

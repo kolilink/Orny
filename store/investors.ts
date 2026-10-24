@@ -2,7 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Investor } from '../types';
 import { getFactoryId, generateId } from './context';
 import { supabase } from '../lib/supabase';
-import { enqueueIfNetworkError } from '../lib/syncQueue';
+import { drainAfterSuccessfulWrite, enqueueIfNetworkError } from '../lib/syncQueue';
 import { withTimeout } from '../lib/withTimeout';
 
 function cacheKey() { return `${getFactoryId()}_investors`; }
@@ -73,6 +73,7 @@ export const addInvestor = async (
   // can start that re-sync.
   const { error } = await supabase.from('investors').insert(row);
   if (error) await enqueueIfNetworkError(error, { table: 'investors', op: 'insert', values: row, label: 'investisseur' });
+  else drainAfterSuccessfulWrite();
 
   return newInvestor;
 };
@@ -94,6 +95,7 @@ export const updateInvestor = async (
   const factoryId = getFactoryId();
   const { error } = await supabase.from('investors').update(row).eq('id', id).eq('factory_id', factoryId);
   if (error) await enqueueIfNetworkError(error, { table: 'investors', op: 'update', values: row, match: { id, factory_id: factoryId }, label: 'investisseur (modif.)' });
+  else drainAfterSuccessfulWrite();
 };
 
 export const deleteInvestor = async (id: string): Promise<void> => {
@@ -102,6 +104,7 @@ export const deleteInvestor = async (id: string): Promise<void> => {
   const factoryId = getFactoryId();
   const { error } = await supabase.from('investors').delete().eq('id', id).eq('factory_id', factoryId);
   if (error) await enqueueIfNetworkError(error, { table: 'investors', op: 'delete', match: { id, factory_id: factoryId }, label: 'investisseur (suppr.)' });
+  else drainAfterSuccessfulWrite();
 };
 
 export const setInvestors = async (investors: Investor[]): Promise<void> => {
