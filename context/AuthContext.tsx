@@ -26,6 +26,18 @@ WebBrowser.maybeCompleteAuthSession();
 // settings/deletion — those stay admin-only, on purpose, so a team's real
 // owner can never be outvoted or displaced by a manager. Multiple managers
 // (and multiple admins) can coexist — no cap on either, same as before.
+// Real-people account model, 2026-10-24 (labels only — DB values unchanged):
+//   admin    = Sebastiao: approves people, holds settings, sees everything
+//   manager  = Alpha: sees everything, edits/help data, CANNOT approve people
+//              or touch factory settings (that is exactly the old manager
+//              definition — it already fit Alpha, no DB change needed)
+//   vendeur  = Dad: on the ground, records sales + production batches only
+//              (his navigator is stripped to Today/Ventes/Production;
+//              db/update29.sql grants him the batch + stock writes)
+//   investor = Mexico friend: view-only, no editing
+//   inspecteur = NO real person. Kept in the type so old rows still read,
+//              but it is NO LONGER OFFERED when approving or changing a role
+//              (see screens/FactorySettings) — a role with no person is clutter.
 export type UserRole = 'admin' | 'manager' | 'investor' | 'vendeur' | 'inspecteur';
 
 // Was copy-pasted verbatim in both screens/Plus/index.tsx and
@@ -34,9 +46,9 @@ export type UserRole = 'admin' | 'manager' | 'investor' | 'vendeur' | 'inspecteu
 // a pure design-system file with no knowledge of app-specific domain types).
 export const ROLE_LABELS: Record<UserRole, string> = {
   admin: 'Administrateur',
-  manager: 'Gérant',
+  manager: 'Assistant',
   investor: 'Investisseur',
-  vendeur: 'Vendeur',
+  vendeur: 'Usine',
   inspecteur: 'Inspecteur',
 };
 

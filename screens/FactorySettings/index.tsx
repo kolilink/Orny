@@ -411,24 +411,24 @@ export default function FactorySettingsScreen() {
         <Button label="Fermer" variant="secondary" onPress={() => setCheckModal(false)} style={{ marginTop: 12 }} />
       </AppModal>
 
-      {/* Approve role picker */}
+      {/* Approve role picker — no 'inspecteur': no real person holds it (2026-10-24) */}
       <AppModal visible={approveModal} onClose={() => setApproveModal(false)} title="Approuver le membre">
         <Text style={styles.modalSub}>{selectedRequest?.userEmail}</Text>
         <Text style={[styles.modalSub, { marginBottom: 16 }]}>Choisissez un rôle :</Text>
-        {(['vendeur', 'manager', 'investor', 'inspecteur', 'admin'] as UserRole[]).map((role) => (
+        {(['vendeur', 'manager', 'investor', 'admin'] as UserRole[]).map((role) => (
           <TouchableOpacity key={role} style={[styles.roleBtn, { borderColor: ROLE_COLORS[role] }]} onPress={() => confirmApprove(role)}>
             <Text style={[styles.roleBtnText, { color: ROLE_COLORS[role] }]}>{ROLE_LABELS[role]}</Text>
           </TouchableOpacity>
         ))}
       </AppModal>
 
-      {/* Member options — role change + remove */}
+      {/* Member options — role change + remove; same real-people list, no 'inspecteur' */}
       <AppModal visible={memberModal} onClose={() => setMemberModal(false)} title={selectedMember?.email}>
         <Text style={[styles.modalSub, { marginBottom: 4 }]}>
           Rôle actuel : {selectedMember ? ROLE_LABELS[selectedMember.role] : ''}
         </Text>
         <Text style={[styles.modalSub, { marginBottom: 12 }]}>Choisissez un nouveau rôle :</Text>
-        {(['vendeur', 'manager', 'investor', 'inspecteur', 'admin'] as UserRole[]).map((role) => (
+        {(['vendeur', 'manager', 'investor', 'admin'] as UserRole[]).map((role) => (
           <TouchableOpacity
             key={role}
             style={[styles.roleBtn, { borderColor: ROLE_COLORS[role] }]}

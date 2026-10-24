@@ -103,17 +103,34 @@ function RestrictedTabNavigator() {
   );
 }
 
-// Vendeur (seller-only): can sell and manage clients, but has no access to
-// Production or Stock — a market-stall seller shouldn't be logging batches
-// or overriding raw-material/finished-goods counts.
+// Dad's navigator ('vendeur' in the DB — see db/update29.sql).
+//
+// Real-people account model, 2026-10-24: dad is the ONLY person on the
+// ground, he did not go to school, and his job in this app is exactly two
+// things — record a sale, record a production batch. Approving people,
+// settings, members, investors, stock management: all of that is remote
+// admin work and belongs to Sebastiao (admin) + Alpha (manager), NOT dad.
+// So dad gets NO Plus tab — the old Ventes + Plus pair handed him Clients
+// and, through Plus, a 13-item menu he never asked for. He gets Today
+// (glance only, no handling), Ventes, Production. Nothing else to tap,
+// nothing else to get wrong.
+//
+// DB note, read before calling this done: 'vendeur' could already record
+// sales, but production-batch + stock writes were admin/manager-only
+// (db/update27.sql). db/update29.sql adds vendeur to those insert/update
+// policies (delete stays admin/manager, so dad can never delete a batch
+// by accident). Until update29 is run in Supabase, dad's batches cache
+// locally but will NOT sync — they will dead-letter on RLS errors.
 function VendeurTabNavigator() {
   const { palette } = useTheme();
   return (
     <Tab.Navigator screenOptions={makeTabOptions(palette)}>
+      <Tab.Screen name="AujourdHui" component={TodayScreen}
+        options={{ tabBarIcon: ({ color, size }) => <Ionicons name="home" size={size} color={color} /> }} />
       <Tab.Screen name="Ventes" component={VentesScreen}
         options={{ tabBarIcon: ({ color, size }) => <Ionicons name="cart" size={size} color={color} /> }} />
-      <Tab.Screen name="Plus" component={PlusScreen}
-        options={{ tabBarIcon: ({ color, size }) => <Ionicons name="menu" size={size} color={color} /> }} />
+      <Tab.Screen name="Production" component={ProductionScreen}
+        options={{ tabBarIcon: ({ color, size }) => <Ionicons name="construct" size={size} color={color} /> }} />
     </Tab.Navigator>
   );
 }
